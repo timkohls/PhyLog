@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="Software/PhyLog/src/pic/icon.png" alt="PhyLog Logo" width="150">
+<img src="Software/PhyLog/src/assets/icon.png" alt="PhyLog Logo" width="150">
 
 </div>
 
