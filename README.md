@@ -1,15 +1,17 @@
-````md
+```
 <div align="center">
 
-<img src="Software/PhyLog/src/pic/icon.png" alt="PhyLog Logo" width="170">
+<img src="Software/PhyLog/src/pic/icon.png" alt="PhyLog Logo" width="150">
 
 # PhyLog
 
-**Open-Source Messwerterfassung für den naturwissenschaftlichen Unterricht**
+**Open-Source digitale Messwerterfassung für den naturwissenschaftlichen Unterricht**
 
-*Modular · Kostengünstig · Erweiterbar*
+Modular · Kostengünstig · Erweiterbar
 
 </div>
+
+```
 
 ---
 
