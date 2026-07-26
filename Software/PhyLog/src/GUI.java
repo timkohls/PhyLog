@@ -98,7 +98,7 @@ public class GUI extends JFrame {
 
     private void loadWindowIcon() {
         try {
-            URL classpathIcon = getClass().getResource("/pic/icon.png");
+            URL classpathIcon = getClass().getResource("/assets/icon.png");
             if (classpathIcon != null) {
                 setIconImage(Toolkit.getDefaultToolkit().getImage(classpathIcon));
                 return;

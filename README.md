@@ -1,7 +1,10 @@
-```
 <div align="center">
 
 <img src="Software/PhyLog/src/pic/icon.png" alt="PhyLog Logo" width="150">
+
+</div>
+
+---
 
 # PhyLog
 
@@ -9,12 +12,7 @@
 
 Modular · Kostengünstig · Erweiterbar
 
-</div>
-
-```
-
 ---
-
 ## 💡 Motivation
 
 > **„Nicht das bessere Messgerät entwickeln, sondern mehr Experimentieren ermöglichen.“**
@@ -68,44 +66,9 @@ PhyLog besteht aus drei modularen Komponenten, die nahtlos zusammenarbeiten.
     
 - Einfache Erweiterbarkeit durch modulare Sensoren
     
-- Intuitive Desktop-Software zur Datenerfassung
-    
 - Echtzeit-Diagramme und Tabellen
     
 - Export als CSV und PNG
     
-- Plattformunabhängige Software
-    
 - Dokumentierte Hard- und Software
     
-
----
-
-## 🚧 Projektstatus
-
-> **Aktive Entwicklung**
-
-Derzeit befinden sich sowohl die Hardware als auch die Desktop-Software in der Entwicklung.
-
-Geplante Funktionen:
-
-- ✅ Live-Diagramme
-    
-- ✅ Tabellenansicht
-    
-- ✅ CSV-Export
-    
-- ✅ Diagrammexport als PNG
-    
-- 🔄 Bluetooth-Unterstützung
-    
-- 🔄 Modulare Sensorbibliothek
-    
-- 🔄 Automatische Geräteerkennung
-    
-
----
-
-## 📄 Lizenz
-
-Dieses Projekt wird als Open-Source-Projekt entwickelt.
