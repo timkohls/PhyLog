@@ -20,6 +20,14 @@ public class SensorConfigDialog extends JDialog {
         Double poll();
     }
 
+    /** Wird sofort bei jeder Sensor-Auswahl im Dialog aufgerufen (nicht erst bei "Übernehmen"),
+     *  damit die Firmware rechtzeitig weiß, welchen Sensor sie abtasten soll - sonst kämen für
+     *  einen frisch gewählten, noch nicht angewendeten Sensor niemals Live-Daten an. */
+    @FunctionalInterface
+    public interface SensorSelectionListener {
+        void onSensorSelected(char channel, Sensor sensor);
+    }
+
     private static final String[] RANGES = {"Automatisch", "± 10", "± 50", "± 100", "± 500"};
     private static final String[] SAMPLE_RATES = {"10 Hz", "50 Hz", "100 Hz", "250 Hz", "500 Hz", "1000 Hz"};
     private static final int LIVE_REFRESH_MS = 200;
@@ -33,6 +41,7 @@ public class SensorConfigDialog extends JDialog {
 
     private final LiveSource live1;
     private final LiveSource live2;
+    private final SensorSelectionListener selectionListener;
     private Timer liveUpdateTimer;
 
     /** Bündelt alle UI-Komponenten eines Kanals (A oder B). */
@@ -48,15 +57,17 @@ public class SensorConfigDialog extends JDialog {
 
     /** Bequemer Konstruktor ohne Live-Anbindung (Live-Anzeige und Tara bleiben deaktiviert). */
     public SensorConfigDialog(Frame owner, Sensor current1, Sensor current2) {
-        this(owner, current1, current2, null, null);
+        this(owner, current1, current2, null, null, null);
     }
 
-    /** Voller Konstruktor mit optionaler Live-Quelle je Kanal (siehe Klassenkommentar). */
+    /** Voller Konstruktor mit optionaler Live-Quelle und Auswahl-Rückmeldung je Kanal (siehe Klassenkommentar). */
     public SensorConfigDialog(Frame owner, Sensor current1, Sensor current2,
-                               LiveSource live1, LiveSource live2) {
+                               LiveSource live1, LiveSource live2,
+                               SensorSelectionListener selectionListener) {
         super(owner, "Sensoren konfigurieren", true);
         this.live1 = live1;
         this.live2 = live2;
+        this.selectionListener = selectionListener;
 
         setSize(760, 320);
         setLocationRelativeTo(owner);
@@ -66,8 +77,8 @@ public class SensorConfigDialog extends JDialog {
 
         JPanel mainPanel = new JPanel(new GridLayout(1, 2, 15, 0));
         mainPanel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
-        mainPanel.add(buildChannelPanel(channelA, "Kanal A", availableSensors, current1));
-        mainPanel.add(buildChannelPanel(channelB, "Kanal B", availableSensors, current2));
+        mainPanel.add(buildChannelPanel(channelA, 'A', "Kanal A", availableSensors, current1));
+        mainPanel.add(buildChannelPanel(channelB, 'B', "Kanal B", availableSensors, current2));
         add(mainPanel, BorderLayout.CENTER);
 
         add(buildButtonPanel(), BorderLayout.SOUTH);
@@ -83,14 +94,19 @@ public class SensorConfigDialog extends JDialog {
         });
     }
 
-    private JPanel buildChannelPanel(Channel ch, String title, Sensor[] availableSensors, Sensor current) {
+    private JPanel buildChannelPanel(Channel ch, char channelId, String title, Sensor[] availableSensors, Sensor current) {
         JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createTitledBorder(title));
         GridBagConstraints gbc = createGbc();
 
         ch.comboSensor = new JComboBox<>(availableSensors);
         ch.comboSensor.setSelectedItem(current != null ? current : SensorRegistry.NO_SENSOR);
-        ch.comboSensor.addActionListener(e -> updateChannelStates());
+        ch.comboSensor.addActionListener(e -> {
+            updateChannelStates();
+            if (selectionListener != null) {
+                selectionListener.onSensorSelected(channelId, (Sensor) ch.comboSensor.getSelectedItem());
+            }
+        });
 
         ch.lblUnit = new JLabel();
         ch.txtOffset = new JTextField("0.0", 5);

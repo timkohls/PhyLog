@@ -6,7 +6,7 @@ import java.awt.event.WindowEvent;
 import java.util.function.Consumer;
 
 /**
- * Einfaches serielles Terminal-Fenster für die ESP32-Firmware (librephysics_firmware.ino,
+ * Einfaches serielles Terminal-Fenster für die ESP32-Firmware (phylog_firmware.ino,
  * Digital-only Version): PING, START, STOP, RATE,&lt;hz&gt;.
  *
  * <p>Nutzt die geteilte {@link DeviceConnection}, damit dieselbe Verbindung auch vom

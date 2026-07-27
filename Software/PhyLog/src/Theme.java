@@ -4,7 +4,7 @@ import javax.swing.*;
 import java.awt.*;
 
 /**
- * Zentrale Farbpalette und Look-and-Feel-Konfiguration für LibrePhysics.
+ * Zentrale Farbpalette und Look-and-Feel-Konfiguration für PhyLog.
  *
  * <p>Alle Farbwerte, die anderswo im Programm verwendet werden (z. B. in {@link ChartPanel}
  * oder {@link ChiSquareInfoDialog}), sollten von hier bezogen werden, statt neue Farbwerte an

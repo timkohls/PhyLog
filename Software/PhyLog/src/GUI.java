@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Hauptfenster von LibrePhysics: Menüleiste, Werkzeugleiste, Messwerttabellen für Kanal A/B
+ * Hauptfenster von PhyLog: Menüleiste, Werkzeugleiste, Messwerttabellen für Kanal A/B
  * mit automatischem Scrollen, das {@link ChartPanel} sowie die Entgegennahme und Filterung
  * der Live-Messdaten vom ESP32 (siehe {@link #handleIncomingLine}).
  */
@@ -57,7 +57,7 @@ public class GUI extends JFrame {
      *  hängt an dieser Flagge, damit Live-Werte (siehe unten) auch ohne Aufzeichnung ankommen. */
     private boolean recording = false;
 
-    /** Letzter gültiger (nicht-phantomer) Messwert je Kanal, für die Live-Anzeige im
+    /** Letzter gültiger Messwert je Kanal (des aktiven Sensors), für die Live-Anzeige im
      *  Sensor-Konfigurationsdialog. {@code null} solange kein gültiger Wert vorliegt. */
     private volatile Double latestValueA = null;
     private volatile Double latestValueB = null;
@@ -81,7 +81,7 @@ public class GUI extends JFrame {
         initToolBar();
         initMainArea();
 
-        // Läuft dauerhaft, nicht nur während einer Aufzeichnung - siehe processSample().
+        // Läuft dauerhaft, nicht nur während einer Aufzeichnung - siehe ingestSample().
         DeviceConnection.getInstance().addLineListener(this::handleIncomingLine);
 
         setSize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
@@ -98,20 +98,14 @@ public class GUI extends JFrame {
 
     private void loadWindowIcon() {
         try {
-            URL classpathIcon = getClass().getResource("/assets/icon.png");
-            if (classpathIcon != null) {
-                setIconImage(Toolkit.getDefaultToolkit().getImage(classpathIcon));
-                return;
-            }
-
-            File fallbackFile = new File("src/pic/icon.png");
+            File fallbackFile = new File("src/assets/icon.png");
             if (fallbackFile.exists()) {
                 setIconImage(Toolkit.getDefaultToolkit().getImage(fallbackFile.getAbsolutePath()));
                 return;
             }
 
-            System.err.println("Hinweis: Fenster-Icon 'pic/icon.png' wurde weder im Klassenpfad " +
-                    "noch unter 'src/pic/icon.png' gefunden. Es wird kein Icon gesetzt.");
+            System.err.println("Hinweis: Fenster-Icon 'assets/icon.png' wurde weder im Klassenpfad " +
+                    "noch unter 'src/assets/icon.png' gefunden. Es wird kein Icon gesetzt.");
         } catch (Exception e) {
             System.err.println("Warnung: Fenster-Icon konnte nicht geladen werden: " + e.getMessage());
         }
@@ -309,6 +303,7 @@ public class GUI extends JFrame {
         tableB = new JTable(tableModelB);
         tableB.setFillsViewportHeight(true);
         tableModelB.addTableModelListener(e -> {
+            updateChartData();
             if (e.getType() == TableModelEvent.INSERT) {
                 SwingUtilities.invokeLater(() -> {
                     int lastRow = tableB.getRowCount() - 1;
@@ -379,10 +374,15 @@ public class GUI extends JFrame {
                     }
 
                     if (parts.length >= 2) {
+                        int columnCount = tableModelA.getColumnCount();
+                        if (parts.length < columnCount) continue;
+
                         try {
-                            double time = Double.parseDouble(parts[0].replace(",", ".").trim());
-                            double value = Double.parseDouble(parts[1].replace(",", ".").trim());
-                            addMeasurement(time, value);
+                            Object[] row = new Object[columnCount];
+                            for (int c = 0; c < columnCount; c++) {
+                                row[c] = Double.parseDouble(parts[c].replace(",", ".").trim());
+                            }
+                            tableModelA.addRow(row);
                         } catch (NumberFormatException ignored) {
                         }
                     }
@@ -437,10 +437,14 @@ public class GUI extends JFrame {
     }
 
     private void openSensorConfigDialog() {
+        Sensor previousA = activeSensorA;
+        Sensor previousB = activeSensorB;
+
         boolean liveMonitoringStartedByDialog = ensureLiveDataFlowing();
 
         SensorConfigDialog dialog = new SensorConfigDialog(this, activeSensorA, activeSensorB,
-                () -> latestValueA, () -> latestValueB);
+                () -> latestValueA, () -> latestValueB,
+                this::pushSensorSelectionToFirmware);
         dialog.setVisible(true);
 
         if (liveMonitoringStartedByDialog) {
@@ -451,8 +455,13 @@ public class GUI extends JFrame {
             activeSensorA = dialog.getSelectedSensorA();
             activeSensorB = dialog.getSelectedSensorB();
             updateTableLayout();
-            applySensorSelectionToFirmware();
             applySampleRateToFirmware(dialog);
+            // Die Sensorauswahl selbst wurde schon während der Bedienung live an die Firmware
+            // gesendet (siehe pushSensorSelectionToFirmware), kein erneutes SET nötig.
+        } else {
+            // Abgebrochen: eine im Dialog probeweise gewählte Sensorauswahl wieder rückgängig machen.
+            pushSensorSelectionToFirmware('A', previousA);
+            pushSensorSelectionToFirmware('B', previousB);
         }
     }
 
@@ -472,13 +481,14 @@ public class GUI extends JFrame {
         return true;
     }
 
-    /** Teilt der Firmware mit, welcher Sensortyp aktuell auf Kanal A bzw. B ausgewertet werden soll. */
-    private void applySensorSelectionToFirmware() {
+    /** Teilt der Firmware sofort mit, welchen Sensortyp ein Kanal abtasten soll - wird bereits
+     *  bei jeder Auswahl im Dialog aufgerufen, nicht erst nach "Übernehmen" (siehe
+     *  {@link SensorConfigDialog.SensorSelectionListener}). */
+    private void pushSensorSelectionToFirmware(char channel, Sensor sensor) {
         if (!DeviceConnection.getInstance().isConnected()) {
             return;
         }
-        DeviceConnection.getInstance().sendLine("SET,A," + activeSensorA.getFirmwareTypeName());
-        DeviceConnection.getInstance().sendLine("SET,B," + activeSensorB.getFirmwareTypeName());
+        DeviceConnection.getInstance().sendLine("SET," + channel + "," + sensor.getFirmwareTypeName());
     }
 
     private void openTerminal() {
@@ -535,9 +545,9 @@ public class GUI extends JFrame {
             }
 
             if (channel == 'A') {
-                processSample(activeSensorA, slot, rawValue, timeSeconds, true);
+                ingestSample(activeSensorA, slot, rawValue, timeSeconds, true);
             } else if (channel == 'B') {
-                processSample(activeSensorB, slot, rawValue, timeSeconds, false);
+                ingestSample(activeSensorB, slot, rawValue, timeSeconds, false);
             }
         } catch (NumberFormatException e) {
             // Defekte/unvollständige Zeilen stumm verwerfen
@@ -545,26 +555,37 @@ public class GUI extends JFrame {
     }
 
     /**
-     * Dekodiert einen Rohwert für einen Kanal und verwirft bekannte Phantom-Messwerte (siehe
-     * {@link Sensor#isPhantomReading}). Die Live-Anzeige wird immer aktualisiert; in Tabelle
-     * und Diagramm landet der Wert nur, wenn {@link #recording} aktiv ist.
+     * Dekodiert einen Slot-Wert eines Kanals. Ein bekannter Phantom-Messwert (siehe
+     * {@link Sensor#isPhantomReading}, z. B. eine schwebende Leitung ohne echten Anschluss) wird
+     * NICHT verworfen, sondern als 0 eingetragen: so bleibt in Tabelle und Diagramm sichtbar,
+     * dass gerade aktiv (aber ohne echtes Signal) gemessen wird, statt einer Lücke in der
+     * Zeitreihe, die wie "nichts läuft" aussieht.
      */
-    private void processSample(Sensor sensor, int slot, long rawValue, double timeSeconds, boolean isChannelA) {
+    private void ingestSample(Sensor sensor, int slot, long rawValue, double timeSeconds, boolean isChannelA) {
         if (sensor == null || sensor == SensorRegistry.NO_SENSOR) {
             return;
         }
 
-        double value = sensor.decode(slot, rawValue);
-        if (Double.isNaN(value) || Double.isInfinite(value) || sensor.isPhantomReading(slot, value)) {
-            return;
+        List<Sensor.Quantity> quantities = sensor.getQuantities();
+        if (quantities.isEmpty() || quantities.get(0).slot != slot) {
+            return; // Slot gehört nicht zur Messgröße dieses Profils
         }
 
+        double value = sensor.decode(slot, rawValue);
+        if (Double.isNaN(value) || Double.isInfinite(value)) {
+            return;
+        }
+        if (sensor.isPhantomReading(slot, value)) {
+            value = 0.0;
+        }
+
+        Object[] row = {timeSeconds, value};
         if (isChannelA) {
             latestValueA = value;
-            if (recording) addMeasurement(timeSeconds, value);
+            if (recording) tableModelA.addRow(row);
         } else {
             latestValueB = value;
-            if (recording) tableModelB.addRow(new Object[]{timeSeconds, value});
+            if (recording) tableModelB.addRow(row);
         }
     }
 
@@ -591,18 +612,9 @@ public class GUI extends JFrame {
     private void updateTableLayout() {
         tableContainerPanel.removeAll();
 
-        String unit1 = activeSensorA.getUnit();
-        String unit2 = activeSensorB.getUnit();
-
-        if (chartPanel != null) {
-            chartPanel.setUnits("s", unit1);
-        }
-
-        String header1 = unit1.isEmpty() ? "Messwert" : "Messwert (" + unit1 + ")";
-        String header2 = unit2.isEmpty() ? "Messwert" : "Messwert (" + unit2 + ")";
-
-        tableModelA.setColumnIdentifiers(new Object[]{"Zeit (s)", header1});
-        tableModelB.setColumnIdentifiers(new Object[]{"Zeit (s)", header2});
+        configureTableModel(tableModelA, activeSensorA.getQuantities());
+        configureTableModel(tableModelB, activeSensorB.getQuantities());
+        updateChartUnits();
 
         scrollPaneA.setBorder(BorderFactory.createTitledBorder(
                 BorderFactory.createLineBorder(Theme.BORDER),
@@ -628,6 +640,23 @@ public class GUI extends JFrame {
         tableContainerPanel.repaint();
     }
 
+    /** Setzt den Spaltenkopf für die Messgröße eines Sensorprofils und leert dabei die Tabelle,
+     *  da alte Zeilen unter einer neuen Spaltenbedeutung keinen Sinn mehr ergeben würden. */
+    private void configureTableModel(DefaultTableModel model, List<Sensor.Quantity> quantities) {
+        model.setRowCount(0);
+        String header = quantities.isEmpty() ? "Messwert" : quantities.get(0).getColumnHeader();
+        model.setColumnIdentifiers(new Object[]{"Zeit (s)", header});
+    }
+
+    /** Übernimmt die Einheit der Messgröße von Kanal A als Diagramm-/Achsenbeschriftung. */
+    private void updateChartUnits() {
+        if (chartPanel == null) return;
+
+        List<Sensor.Quantity> quantities = activeSensorA.getQuantities();
+        String label = quantities.isEmpty() ? "Kanal A" : "Kanal A: " + quantities.get(0).getColumnHeader();
+        chartPanel.setUnits("s", label);
+    }
+
     private DefaultTableModel createTableModel() {
         return new DefaultTableModel(new Object[]{"Zeit (s)", "Messwert"}, 0) {
             @Override
@@ -637,11 +666,22 @@ public class GUI extends JFrame {
         };
     }
 
+    /** Zeigt Kanal A immer, Kanal B (falls ein Sensor gewählt ist) zusätzlich in eigener Farbe
+     *  im selben Diagramm - damit auch der zweite Kanal wie gewünscht sichtbar ist. */
     private void updateChartData() {
-        if (chartPanel != null) {
-            chartPanel.setData(extractDataFromTable(tableModelA));
-            chartPanel.repaint();
+        if (chartPanel == null) return;
+
+        chartPanel.setData(extractDataFromTable(tableModelA, 1));
+
+        List<ChartPanel.Series> extras = new ArrayList<>();
+        if (activeSensorB != null && activeSensorB != SensorRegistry.NO_SENSOR) {
+            List<Sensor.Quantity> quantitiesB = activeSensorB.getQuantities();
+            String labelB = "Kanal B: " + (quantitiesB.isEmpty() ? activeSensorB.getName() : quantitiesB.get(0).getColumnHeader());
+            extras.add(new ChartPanel.Series(labelB, new Color(46, 204, 113), extractDataFromTable(tableModelB, 1)));
         }
+        chartPanel.setExtraSeries(extras);
+
+        chartPanel.repaint();
     }
 
     private void exportCsv() {
@@ -656,14 +696,22 @@ public class GUI extends JFrame {
             }
 
             try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
-                String unit1 = activeSensorA.getUnit();
-                String header = unit1.isEmpty() ? "Messwert" : "Messwert (" + unit1 + ")";
-                writer.println("Zeit (s);" + header);
+                int columnCount = tableModelA.getColumnCount();
+
+                StringBuilder header = new StringBuilder();
+                for (int c = 0; c < columnCount; c++) {
+                    if (c > 0) header.append(";");
+                    header.append(tableModelA.getColumnName(c));
+                }
+                writer.println(header);
 
                 for (int i = 0; i < tableModelA.getRowCount(); i++) {
-                    Object time = tableModelA.getValueAt(i, 0);
-                    Object val = tableModelA.getValueAt(i, 1);
-                    writer.println(time + ";" + val);
+                    StringBuilder row = new StringBuilder();
+                    for (int c = 0; c < columnCount; c++) {
+                        if (c > 0) row.append(";");
+                        row.append(tableModelA.getValueAt(i, c));
+                    }
+                    writer.println(row);
                 }
                 JOptionPane.showMessageDialog(this, "CSV erfolgreich gespeichert!", "Erfolg", JOptionPane.INFORMATION_MESSAGE);
             } catch (IOException e) {
@@ -706,20 +754,19 @@ public class GUI extends JFrame {
         }
     }
 
-    public void addMeasurement(double time, double value) {
-        tableModelA.addRow(new Object[]{time, value});
-    }
-
     public void clearData() {
         tableModelA.setRowCount(0);
         tableModelB.setRowCount(0);
     }
 
-    private List<double[]> extractDataFromTable(DefaultTableModel model) {
+    private List<double[]> extractDataFromTable(DefaultTableModel model, int valueColumnIndex) {
         List<double[]> data = new ArrayList<>();
+        if (valueColumnIndex <= 0 || valueColumnIndex >= model.getColumnCount()) {
+            return data;
+        }
         for (int i = 0; i < model.getRowCount(); i++) {
             Object timeObj = model.getValueAt(i, 0);
-            Object valObj = model.getValueAt(i, 1);
+            Object valObj = model.getValueAt(i, valueColumnIndex);
             if (timeObj instanceof Number && valObj instanceof Number) {
                 data.add(new double[]{
                         ((Number) timeObj).doubleValue(),
