@@ -52,13 +52,8 @@ abstract class AbstractINA219Sensor extends Sensor {
     }
 }
 
-/**
- * INA219-Profil: nur Spannung (Slot 0). Strom wird von der Firmware zwar mitgeschickt, hier aber
- * ignoriert, damit keine Stromwerte versehentlich in die Spannungs-Spalte geraten.
- *
- * <p>Ein echter Messwert von 0.0 V gilt als gültig (zeigt, dass tatsächlich gemessen wird);
- * gefiltert wird nur der bekannte ~1,016 V-Störwert einer schwebenden Leitung.</p>
- */
+/** INA219-Profil: nur Spannung (Slot 0). Strom wird von der Firmware zwar mitgeschickt, hier aber
+ *  ignoriert, damit keine Stromwerte versehentlich in die Spannungs-Spalte geraten. */
 class INA219VoltageSensor extends AbstractINA219Sensor {
     public INA219VoltageSensor() {
         super("INA219 (Spannung)", "V", List.of("V", "VOLT"));

@@ -1,14 +1,17 @@
 import javax.swing.*;
 import java.awt.*;
+import java.util.List;
 
 public class ChiSquareInfoDialog extends JDialog {
 
-    public ChiSquareInfoDialog(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom) {
+    public ChiSquareInfoDialog(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom,
+                               ChartPanel.FitDescription fitDescription) {
         super(ownerWindow, "Reduzierte Chi²-Fehler Details", ModalityType.APPLICATION_MODAL);
-        initUI(ownerWindow, reducedChiSquare, degreesOfFreedom);
+        initUI(ownerWindow, reducedChiSquare, degreesOfFreedom, fitDescription);
     }
 
-    private void initUI(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom) {
+    private void initUI(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom,
+                        ChartPanel.FitDescription fitDescription) {
         setLayout(new BorderLayout());
         setResizable(false);
 
@@ -146,6 +149,11 @@ public class ChiSquareInfoDialog extends JDialog {
         mainPanel.add(barPanel);
         mainPanel.add(labelPanel);
 
+        if (fitDescription != null) {
+            mainPanel.add(Box.createVerticalStrut(15));
+            mainPanel.add(buildFitDescriptionPanel(fitDescription));
+        }
+
         JButton btnClose = new JButton("Schließen");
         btnClose.addActionListener(e -> dispose());
 
@@ -158,5 +166,50 @@ public class ChiSquareInfoDialog extends JDialog {
 
         pack();
         setLocationRelativeTo(ownerWindow);
+    }
+
+    /** Baut den Abschnitt "Gefittete Funktion": Gleichung plus physikalisch interpretierbare
+     *  Kenngrößen (Steigung, Amplitude, Periodendauer, ...), siehe {@link ChartPanel.FitDescription}. */
+    private JPanel buildFitDescriptionPanel(ChartPanel.FitDescription fitDescription) {
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBackground(new Color(53, 53, 53));
+        panel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(Theme.BORDER),
+                BorderFactory.createEmptyBorder(10, 12, 10, 12)));
+        panel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        panel.setMaximumSize(new Dimension(380, Integer.MAX_VALUE));
+
+        JLabel title = new JLabel("Gefittete Funktion");
+        title.setFont(new Font("SansSerif", Font.BOLD, 12));
+        title.setForeground(Theme.TEXT);
+        title.setAlignmentX(Component.LEFT_ALIGNMENT);
+        panel.add(title);
+        panel.add(Box.createVerticalStrut(6));
+
+        JLabel equationLabel = new JLabel(fitDescription.equation);
+        equationLabel.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        equationLabel.setForeground(Theme.ACCENT);
+        equationLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        panel.add(equationLabel);
+
+        List<String> lines = fitDescription.parameterLines;
+        if (!lines.isEmpty()) {
+            panel.add(Box.createVerticalStrut(8));
+            StringBuilder html = new StringBuilder("<html>");
+            for (int i = 0; i < lines.size(); i++) {
+                if (i > 0) html.append("<br>");
+                html.append(lines.get(i));
+            }
+            html.append("</html>");
+
+            JLabel paramsLabel = new JLabel(html.toString());
+            paramsLabel.setFont(new Font("SansSerif", Font.PLAIN, 12));
+            paramsLabel.setForeground(Theme.TEXT);
+            paramsLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+            panel.add(paramsLabel);
+        }
+
+        return panel;
     }
 }

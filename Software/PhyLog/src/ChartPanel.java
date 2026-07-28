@@ -101,10 +101,22 @@ public class ChartPanel extends JPanel {
     }
 
     /** Unveränderte, zuletzt über {@link #setData(List)} gesetzte Messdaten (Hauptgröße - einzige,
-     *  die Zoom, Freihand-Auswahl, Fit und Chi² einbezieht). */
+     *  die Zoom, Freihand-Auswahl, Fit und Chi² einbezieht). Wird von Zoom/Freihand-Auswahl NIE
+     *  verändert - siehe {@link #viewMinX} für den eigentlichen Zoom-Zustand. */
     private List<double[]> originalData = new ArrayList<>();
-    /** Aktuell angezeigte (ggf. per Rubber-Band-Auswahl zugeschnittene) Teilmenge der Messdaten. */
+    /** Auf das aktuelle Zoom-/Auswahlfenster eingeschränkte Teilmenge von {@link #originalData}
+     *  (siehe {@link #recomputeDisplayData()}) - diese, nicht {@link #originalData}, geht in
+     *  Achsenbereich, Fit und Chi² ein, damit "näher heranzoomen" auch die Anpassung auf den
+     *  sichtbaren Bereich eingrenzt (siehe Hinweistext in {@link ChiSquareInfoDialog}). */
     private List<double[]> displayData = new ArrayList<>();
+
+    /** Aktuelles Zoom-/Auswahlfenster (Rubber-Band- oder Freihand-Auswahl), {@code null} = kein
+     *  Fenster gesetzt, es wird der volle Datenbereich verwendet. Anders als früher wird dabei
+     *  nie ein Datenpunkt aus {@link #originalData} gelöscht: {@link #recomputeDisplayData()}
+     *  leitet {@link #displayData} bei jeder Änderung (neue Messwerte, neues Fenster, Reset)
+     *  frisch aus {@link #originalData} ab, das Fenster bleibt bis zum expliziten Zurücksetzen
+     *  erhalten und übersteht so auch eintreffende Live-Messwerte. */
+    private Double viewMinX = null, viewMaxX = null, viewMinY = null, viewMaxY = null;
 
     /** Eine zusätzlich eingezeichnete Messgröße (z. B. Kanal B neben der Hauptgröße Kanal A),
      *  rein zur gleichzeitigen visuellen Darstellung - siehe {@link #setExtraSeries}. */
@@ -163,15 +175,135 @@ public class ChartPanel extends JPanel {
     private FitMode cachedFitModeUsed = null;
     private int cachedDegreeUsed = -1;
 
-    /** Ergebnis einer Regression: die angepasste Funktion plus Anzahl ihrer freien Parameter. */
+    /** Ergebnis einer Regression: die angepasste Funktion, Anzahl freier Parameter, sowie eine
+     *  für Menschen lesbare Beschreibung der Funktion und ihrer physikalisch interpretierbaren
+     *  Parameter (siehe {@link FitDescription}). */
     private static class FitResult {
         final FunctionEvaluator func;
         final int paramCount;
+        final FitDescription description;
 
-        FitResult(FunctionEvaluator func, int paramCount) {
+        FitResult(FunctionEvaluator func, int paramCount, FitDescription description) {
             this.func = func;
             this.paramCount = paramCount;
+            this.description = description;
         }
+    }
+
+    /** Textuelle Beschreibung einer gefitteten Funktion: die Gleichung mit den konkret
+     *  ermittelten Koeffizienten sowie eine Liste physikalisch interpretierbarer Kenngrößen
+     *  (z. B. Steigung, Amplitude, Periodendauer), zur Anzeige in {@link ChiSquareInfoDialog}. */
+    static final class FitDescription {
+        final String equation;
+        final List<String> parameterLines;
+
+        FitDescription(String equation, List<String> parameterLines) {
+            this.equation = equation;
+            this.parameterLines = parameterLines;
+        }
+    }
+
+    /** Beschreibung des zuletzt gezeichneten Fits (siehe {@link #drawCachedFitIfPresent}),
+     *  {@code null} solange kein Fit aktiv/berechenbar ist. */
+    private FitDescription currentFitDescription = null;
+
+    private static final char[] SUPERSCRIPT_DIGITS =
+            {'\u2070', '\u00b9', '\u00b2', '\u00b3', '\u2074', '\u2075', '\u2076', '\u2077', '\u2078', '\u2079'};
+
+    /** Formatiert eine Zahl mit 4 Nachkommastellen für die Fit-Parameter-Anzeige. */
+    private static String fmt(double v) {
+        return String.format("%.4f", v);
+    }
+
+    /** Wandelt eine Zehnerpotenz in Unicode-Hochstellungsziffern um (z. B. 12 -&gt; "¹²"). */
+    private static String superscript(int n) {
+        StringBuilder sb = new StringBuilder();
+        for (char c : String.valueOf(n).toCharArray()) {
+            sb.append(SUPERSCRIPT_DIGITS[c - '0']);
+        }
+        return sb.toString();
+    }
+
+    /** Binomialkoeffizient "n über k" (für kleine, hier vorkommende n ausreichend genau als double). */
+    private static double binomial(int n, int k) {
+        double result = 1;
+        for (int i = 0; i < k; i++) {
+            result = result * (n - i) / (i + 1);
+        }
+        return result;
+    }
+
+    /**
+     * Wandelt die um {@code meanX} zentrierten Fit-Koeffizienten (Basis (x-meanX)^i, wie sie
+     * {@link #computePolynomialFit} zur besseren Kondition verwendet) per Binomialentwicklung in
+     * Standard-Koeffizienten der Basis x^j um. So lässt sich die gefittete Funktion als
+     * gewöhnliches Polynom in x anzeigen, statt in der internen, für den Nutzer bedeutungslosen
+     * (x-meanX)-Basis.
+     */
+    private static double[] toStandardCoefficients(double[] centered, double meanX) {
+        int n = centered.length - 1;
+        double[] standard = new double[n + 1];
+        for (int j = 0; j <= n; j++) {
+            double sum = 0;
+            double negMeanXPow = 1.0; // (-meanX)^(i-j), startet bei i=j mit Exponent 0
+            for (int i = j; i <= n; i++) {
+                sum += centered[i] * binomial(i, j) * negMeanXPow;
+                negMeanXPow *= -meanX;
+            }
+            standard[j] = sum;
+        }
+        return standard;
+    }
+
+    /** Baut die Gleichung eines Polynoms als String, {@code a[j]} = Koeffizient von x^j. */
+    private static String buildPolynomialEquation(double[] a) {
+        int degree = a.length - 1;
+        StringBuilder sb = new StringBuilder("f(x) = ");
+        for (int power = degree; power >= 0; power--) {
+            double coeff = a[power];
+            String varPart = (power == 0) ? "" : (power == 1) ? "\u00b7x" : "\u00b7x" + superscript(power);
+            if (power == degree) {
+                sb.append(coeff < 0 ? "-" : "").append(fmt(Math.abs(coeff))).append(varPart);
+            } else {
+                sb.append(coeff < 0 ? " - " : " + ").append(fmt(Math.abs(coeff))).append(varPart);
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Baut die für den Chi²-Dialog angezeigte Beschreibung eines Polynom-/linearen Fits: die
+     * Gleichung in Standardform, plus physikalisch interpretierbare Kenngrößen (Steigung,
+     * y-Achsenabschnitt bzw. bei Grad 2 zusätzlich Krümmung und Scheitelpunkt).
+     */
+    private FitDescription buildPolynomialDescription(double[] standardCoeffs) {
+        int degree = standardCoeffs.length - 1;
+        String equation = buildPolynomialEquation(standardCoeffs);
+        List<String> params = new ArrayList<>();
+
+        if (degree == 1) {
+            params.add("Steigung m = " + fmt(standardCoeffs[1]) + " " + yUnit + "/" + xUnit);
+            params.add("y-Achsenabschnitt b = " + fmt(standardCoeffs[0]) + " " + yUnit);
+        } else if (degree == 2) {
+            double a2 = standardCoeffs[2], a1 = standardCoeffs[1], a0 = standardCoeffs[0];
+            params.add("Krümmung a = " + fmt(a2) + " " + yUnit + "/" + xUnit + "\u00b2");
+            params.add("Steigung bei x=0 (b) = " + fmt(a1) + " " + yUnit + "/" + xUnit);
+            params.add("y-Achsenabschnitt c = " + fmt(a0) + " " + yUnit);
+            if (Math.abs(a2) > 1e-12) {
+                double xVertex = -a1 / (2 * a2);
+                double yVertex = a0 - (a1 * a1) / (4 * a2);
+                params.add("Scheitelpunkt: x = " + fmt(xVertex) + " " + xUnit + ", f(x) = " + fmt(yVertex) + " " + yUnit);
+            }
+        } else {
+            for (int power = degree; power >= 0; power--) {
+                String label = (power == 0) ? "Konstantes Glied a0"
+                        : (power == 1) ? "Koeffizient von x (a1)"
+                        : "Koeffizient von x" + superscript(power) + " (a" + power + ")";
+                params.add(label + " = " + fmt(standardCoeffs[power]));
+            }
+        }
+
+        return new FitDescription(equation, params);
     }
 
     /**
@@ -281,17 +413,38 @@ public class ChartPanel extends JPanel {
     }
 
     /**
-     * Setzt die anzuzeigenden Messdaten komplett neu (z. B. nach einem CSV-Import oder -
-     * perspektivisch - nach dem Empfang neuer Live-Messwerte). Setzt Zoom-Auswahl und
-     * Fit-Cache zurück.
+     * Setzt die anzuzeigenden Messdaten komplett neu (z. B. nach einem CSV-Import oder nach dem
+     * Empfang neuer Live-Messwerte). Ein aktives Zoom-/Auswahlfenster (siehe {@link #viewMinX})
+     * bleibt dabei bewusst erhalten - sonst würde jeder neu eintreffende Live-Messwert den
+     * gerade gesetzten Zoom sofort wieder aufheben. Zum Zurücksetzen dient {@link #resetZoom()}.
      *
      * @param data Liste von (Zeit, Messwert)-Paaren, {@code null} wird als leere Liste behandelt
      */
     public void setData(List<double[]> data) {
         this.originalData = (data != null) ? new ArrayList<>(data) : new ArrayList<>();
-        this.displayData = new ArrayList<>(this.originalData);
+        recomputeDisplayData();
         fitDirty = true;
         repaint();
+    }
+
+    /** Leitet {@link #displayData} aus {@link #originalData} ab: unverändert ohne aktives
+     *  Zoom-/Auswahlfenster, sonst auf {@link #viewMinX}/{@link #viewMaxX}/{@link #viewMinY}/
+     *  {@link #viewMaxY} eingeschränkt. {@link #originalData} selbst wird dabei nie verändert -
+     *  ein Zoom kann also jederzeit über {@link #resetZoom()} rückgängig gemacht werden, ohne
+     *  dass zwischenzeitlich Messwerte verloren gegangen wären. */
+    private void recomputeDisplayData() {
+        if (viewMinX == null) {
+            displayData = new ArrayList<>(originalData);
+            return;
+        }
+
+        List<double[]> filtered = new ArrayList<>();
+        for (double[] pt : originalData) {
+            if (pt[0] >= viewMinX && pt[0] <= viewMaxX && pt[1] >= viewMinY && pt[1] <= viewMaxY) {
+                filtered.add(pt);
+            }
+        }
+        displayData = filtered;
     }
 
     /**
@@ -379,7 +532,6 @@ public class ChartPanel extends JPanel {
     }
 
     public double getStandardDeviation() { return standardDeviation; }
-
     public int getPolynomialDegree() { return polynomialDegree; }
 
     public void zoomIn() {
@@ -394,15 +546,20 @@ public class ChartPanel extends JPanel {
         repaint();
     }
 
-    /** Setzt Zoom und Rubber-Band-Auswahl zurück auf die vollständigen Messdaten. */
+    /** Setzt Zoom-Faktor und Zoom-/Auswahlfenster zurück auf die vollständigen Messdaten. */
     public void resetZoom() {
         zoomFactor = 1.0;
-        displayData = new ArrayList<>(originalData);
+        viewMinX = null;
+        viewMaxX = null;
+        viewMinY = null;
+        viewMaxY = null;
+        recomputeDisplayData();
         fitDirty = true;
         repaint();
     }
 
-    /** Wertet eine per linker Maustaste gezogene Rubber-Band-Auswahl aus. */
+    /** Wertet eine per linker Maustaste gezogene Rubber-Band-Auswahl als neues Zoom-Fenster aus.
+     *  {@link #originalData} bleibt dabei unangetastet - siehe {@link #recomputeDisplayData()}. */
     private void applySelectionZoom(Point p1, Point p2) {
         int padding = 65;
         int width = getWidth();
@@ -450,21 +607,29 @@ public class ChartPanel extends JPanel {
         double selMaxY = minY + ((double) ((height - padding) - rectY) / plotHeight) * rangeY;
         double selMinY = minY + ((double) ((height - padding) - (rectY + rectH)) / plotHeight) * rangeY;
 
-        List<double[]> filtered = new ArrayList<>();
-        for (double[] pt : displayData) {
+        int pointsInWindow = 0;
+        for (double[] pt : originalData) {
             if (pt[0] >= selMinX && pt[0] <= selMaxX && pt[1] >= selMinY && pt[1] <= selMaxY) {
-                filtered.add(pt);
+                pointsInWindow++;
             }
         }
 
-        if (filtered.size() >= 2) {
-            displayData = filtered;
+        if (pointsInWindow >= 2) {
+            viewMinX = selMinX;
+            viewMaxX = selMaxX;
+            viewMinY = selMinY;
+            viewMaxY = selMaxY;
             zoomFactor = 1.0;
+            recomputeDisplayData();
             fitDirty = true;
         }
     }
 
-    /** Wertet eine per rechter Maustaste gezogene Freihand-Linie aus und filtert die Punkte. */
+    /** Wertet eine per rechter Maustaste gezogene Freihand-Linie aus: die Bounding-Box der davon
+     *  eingeschlossenen Messpunkte wird zum neuen Zoom-Fenster (siehe {@link #applySelectionZoom}
+     *  und {@link #recomputeDisplayData()}) - {@link #originalData} bleibt unverändert, die
+     *  Freihandform dient nur der (ggf. nicht-rechteckigen) Auswahl des Zoom-Bereichs, nicht dem
+     *  dauerhaften Verwerfen der übrigen Punkte. */
     private void applyFreehandSelection(List<Point> strokePoints) {
         if (originalData == null || originalData.isEmpty() || strokePoints.size() < 3) return;
 
@@ -478,18 +643,32 @@ public class ChartPanel extends JPanel {
         }
         polygonPath.closePath();
 
-        List<double[]> filtered = new ArrayList<>();
+        double selMinX = Double.MAX_VALUE, selMaxX = -Double.MAX_VALUE;
+        double selMinY = Double.MAX_VALUE, selMaxY = -Double.MAX_VALUE;
+        int enclosedCount = 0;
+
         for (double[] point : originalData) {
             double px = geo.padding + ((point[0] - geo.minX) / geo.rangeX) * geo.plotWidth;
             double py = (geo.height - geo.padding) - ((point[1] - geo.minY) / geo.rangeY) * geo.plotHeight;
             if (polygonPath.contains(px, py)) {
-                filtered.add(point);
+                enclosedCount++;
+                if (point[0] < selMinX) selMinX = point[0];
+                if (point[0] > selMaxX) selMaxX = point[0];
+                if (point[1] < selMinY) selMinY = point[1];
+                if (point[1] > selMaxY) selMaxY = point[1];
             }
         }
 
-        if (filtered.size() >= 2) {
-            displayData = filtered;
+        if (enclosedCount >= 2) {
+            if (selMinX == selMaxX) selMaxX = selMinX + 1.0;
+            if (selMinY == selMaxY) { selMinY -= 1.0; selMaxY += 1.0; }
+
+            viewMinX = selMinX;
+            viewMaxX = selMaxX;
+            viewMinY = selMinY;
+            viewMaxY = selMaxY;
             zoomFactor = 1.0;
+            recomputeDisplayData();
             fitDirty = true;
         }
     }
@@ -544,7 +723,13 @@ public class ChartPanel extends JPanel {
             drawChiSquareOverlay(g2, geo.width, geo.padding);
         }
 
-        drawLegend(g2, geo);
+        // Legende startet unterhalb der Chi²-Anzeige (falls sichtbar), statt an derselben Stelle
+        // in der oberen rechten Ecke zu überlappen und sie zu verdecken.
+        int legendTopY = geo.padding + 6;
+        if (fitMode != FitMode.NONE) {
+            legendTopY += CHI_OVERLAY_HEIGHT + 6;
+        }
+        drawLegend(g2, geo, legendTopY);
 
         drawSelectionRectangle(g2);
         drawFreehandStroke(g2);
@@ -594,8 +779,12 @@ public class ChartPanel extends JPanel {
     /**
      * Zeichnet eine kleine Legende (Farbe → Messgröße) oben rechts im Plot, sofern mehr als
      * eine Größe gleichzeitig dargestellt wird (Hauptgröße + mind. eine Extra-Kurve).
+     *
+     * @param topY Obere Kante der Legende in Bildschirmkoordinaten - liegt unterhalb der Chi²-
+     *             Anzeige, falls diese sichtbar ist (siehe {@link #paintComponent}), damit sich
+     *             beide Overlays nicht gegenseitig verdecken.
      */
-    private void drawLegend(Graphics2D g2, PlotGeometry geo) {
+    private void drawLegend(Graphics2D g2, PlotGeometry geo, int topY) {
         if (extraSeries.isEmpty()) return;
 
         g2.setFont(new Font("SansSerif", Font.PLAIN, 11));
@@ -620,7 +809,7 @@ public class ChartPanel extends JPanel {
         int boxWidth = swatch + 6 + maxTextWidth + 10;
         int boxHeight = labels.size() * rowHeight + 8;
         int boxX = geo.width - geo.padding - boxWidth - 6;
-        int boxY = geo.padding + 6;
+        int boxY = topY;
 
         g2.setColor(Theme.PANEL);
         g2.fillRoundRect(boxX, boxY, boxWidth, boxHeight, 8, 8);
@@ -810,6 +999,7 @@ public class ChartPanel extends JPanel {
      * @param geo aktuelle Plot-Geometrie
      */
     private void drawFitOverlayClipped(Graphics2D g2, PlotGeometry geo) {
+        currentFitDescription = null;
         Shape originalClip = g2.getClip();
         g2.clipRect(geo.padding, geo.padding, geo.plotWidth, geo.plotHeight);
 
@@ -841,6 +1031,7 @@ public class ChartPanel extends JPanel {
     private void drawCachedFitIfPresent(Graphics2D g2, PlotGeometry geo) {
         if (cachedFit == null) return;
         calculateChiSquare(cachedFit.func, cachedFit.paramCount);
+        currentFitDescription = cachedFit.description;
         drawFunctionPathWithTolerance(g2, cachedFit.func, geo.minX, geo.visibleMaxX, geo.minY,
                 geo.rangeX, geo.rangeY, geo.padding, geo.height, geo.plotWidth, geo.plotHeight, Theme.ACCENT);
     }
@@ -931,6 +1122,10 @@ public class ChartPanel extends JPanel {
      * @param width   Panelbreite
      * @param padding Innenabstand des Plots
      */
+    /** Höhe der Chi²-Anzeige-Box (siehe {@link #drawChiSquareOverlay}) - als Konstante geteilt,
+     *  damit {@link #paintComponent} die Legende zuverlässig darunter platzieren kann. */
+    private static final int CHI_OVERLAY_HEIGHT = 26;
+
     private void drawChiSquareOverlay(Graphics2D g2, int width, int padding) {
         String chiText = String.format("χ²_red = %.4f", currentReducedChiSquare);
         g2.setFont(new Font("SansSerif", Font.BOLD, 12));
@@ -939,7 +1134,7 @@ public class ChartPanel extends JPanel {
         int textWidth = fm.stringWidth(chiText);
         int iconSize = 16;
         int totalWidth = textWidth + iconSize + 16;
-        int boxHeight = 26;
+        int boxHeight = CHI_OVERLAY_HEIGHT;
 
         int boxX = width - padding - totalWidth - 5;
         int boxY = padding + 5;
@@ -969,7 +1164,7 @@ public class ChartPanel extends JPanel {
     /** Öffnet den Detail-Dialog mit einer Erklärung des aktuellen Chi²-Gütewerts. */
     private void showChiSquareInfoDialog() {
         Window parentWindow = SwingUtilities.getWindowAncestor(this);
-        ChiSquareInfoDialog dialog = new ChiSquareInfoDialog(parentWindow, currentReducedChiSquare, currentDegreesOfFreedom);
+        ChiSquareInfoDialog dialog = new ChiSquareInfoDialog(parentWindow, currentReducedChiSquare, currentDegreesOfFreedom, currentFitDescription);
         dialog.setVisible(true);
     }
 
@@ -1054,7 +1249,8 @@ public class ChartPanel extends JPanel {
             return val;
         };
 
-        return new FitResult(func, m);
+        double[] standardCoeffs = toStandardCoefficients(coeffCentered, meanX);
+        return new FitResult(func, m, buildPolynomialDescription(standardCoeffs));
     }
 
     /**
@@ -1103,7 +1299,18 @@ public class ChartPanel extends JPanel {
         final double finalMeanX = meanX;
         FunctionEvaluator func = x -> a * Math.exp(b * (x - finalMeanX));
 
-        return new FitResult(func, 2);
+        double y0 = a * Math.exp(-b * meanX); // Wert bei x=0 - "a" selbst bezieht sich wegen der
+        // Zentrierung auf x=meanX, nicht auf x=0
+        String equation = "f(x) = " + fmt(y0) + " \u00b7 e^(" + fmt(b) + "\u00b7x)";
+        List<String> params = new ArrayList<>();
+        params.add("Wert bei x=0: f(0) = " + fmt(y0) + " " + yUnit);
+        params.add("Wachstumsrate b = " + fmt(b) + " 1/" + xUnit + (b < 0 ? " (Zerfall)" : " (Wachstum)"));
+        if (Math.abs(b) > 1e-12) {
+            double halfOrDoubleTime = Math.log(2) / Math.abs(b);
+            params.add((b < 0 ? "Halbwertszeit" : "Verdopplungszeit") + " = " + fmt(halfOrDoubleTime) + " " + xUnit);
+        }
+
+        return new FitResult(func, 2, new FitDescription(equation, params));
     }
 
     /**
@@ -1177,7 +1384,18 @@ public class ChartPanel extends JPanel {
 
         FunctionEvaluator func = x -> finalA * Math.sin(finalW * x + finalPhi) + finalC;
 
-        return new FitResult(func, 4);
+        String equation = "f(x) = " + fmt(finalA) + " \u00b7 sin(" + fmt(finalW) + "\u00b7x + " + fmt(finalPhi) + ") + " + fmt(finalC);
+        List<String> paramLines = new ArrayList<>();
+        paramLines.add("Amplitude A = " + fmt(Math.abs(finalA)) + " " + yUnit);
+        paramLines.add("Kreisfrequenz \u03c9 = " + fmt(finalW) + " rad/" + xUnit);
+        paramLines.add("Frequenz f = " + fmt(Math.abs(finalW) / (2 * Math.PI)) + " Hz");
+        if (Math.abs(finalW) > 1e-12) {
+            paramLines.add("Periodendauer T = " + fmt(2 * Math.PI / Math.abs(finalW)) + " " + xUnit);
+        }
+        paramLines.add("Phase \u03c6 = " + fmt(finalPhi) + " rad");
+        paramLines.add("Offset (Mittelwert) = " + fmt(finalC) + " " + yUnit);
+
+        return new FitResult(func, 4, new FitDescription(equation, paramLines));
     }
 
     /**
