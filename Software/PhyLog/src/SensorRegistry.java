@@ -13,6 +13,7 @@ public class SensorRegistry {
         REGISTERED_SENSORS.add(new INA219VoltageSensor());
         REGISTERED_SENSORS.add(new INA219CurrentSensor());
         REGISTERED_SENSORS.add(new VEML7700Sensor());
+        REGISTERED_SENSORS.add(new HX711Sensor());
     }
 
     /** @return unveränderliche Liste aller verfügbaren Sensoren. */

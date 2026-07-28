@@ -121,3 +121,31 @@ class VEML7700Sensor extends Sensor {
         return "VEML7700";
     }
 }
+
+/**
+ * HX711: dekodiert die Messwerte einer Wägezelle/Kraftsensors (Slot 0).
+ */
+class HX711Sensor extends Sensor {
+    public HX711Sensor() {
+        // Einheit "N" (Newton) oder "g" (Gramm) je nach physikalischem Anwendungsfall
+        super("HX711 (Kraft / Gewicht)", "N", List.of("N", "G", "KG"));
+    }
+
+    @Override
+    public double decode(int slot, long rawValue) {
+        // HINWEIS: Hier musst du später den spezifischen Kalibrierungsfaktor
+        // deiner Wägezelle eintragen (z.B. rawValue / 2280.f).
+        // Vorerst geben wir den Rohwert skaliert zurück, damit der Graph nicht explodiert.
+        return rawValue / 1000.0;
+    }
+
+    @Override
+    public List<Quantity> getQuantities() {
+        return List.of(new Quantity("Kraft", "N", 0));
+    }
+
+    @Override
+    public String getFirmwareTypeName() {
+        return "HX711";
+    }
+}

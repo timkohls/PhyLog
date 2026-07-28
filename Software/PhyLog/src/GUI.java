@@ -98,9 +98,6 @@ public class GUI extends JFrame {
     private void loadWindowIcon() {
         try {
             setIconImage(new ImageIcon("src/assets/icon.png").getImage());
-
-            System.err.println("Hinweis: Fenster-Icon 'assets/icon.png' wurde weder im Klassenpfad " +
-                    "noch unter 'src/assets/icon.png' gefunden. Es wird kein Icon gesetzt.");
         } catch (Exception e) {
             System.err.println("Warnung: Fenster-Icon konnte nicht geladen werden: " + e.getMessage());
         }
