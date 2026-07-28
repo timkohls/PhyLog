@@ -100,10 +100,29 @@ public class ChartPanel extends JPanel {
         }
     }
 
-    /** Unveränderte, zuletzt über {@link #setData(List)} gesetzte Messdaten. */
+    /** Unveränderte, zuletzt über {@link #setData(List)} gesetzte Messdaten (Hauptgröße - einzige,
+     *  die Zoom, Freihand-Auswahl, Fit und Chi² einbezieht). */
     private List<double[]> originalData = new ArrayList<>();
     /** Aktuell angezeigte (ggf. per Rubber-Band-Auswahl zugeschnittene) Teilmenge der Messdaten. */
     private List<double[]> displayData = new ArrayList<>();
+
+    /** Eine zusätzlich eingezeichnete Messgröße (z. B. Kanal B neben der Hauptgröße Kanal A),
+     *  rein zur gleichzeitigen visuellen Darstellung - siehe {@link #setExtraSeries}. */
+    public static final class Series {
+        public final String label;
+        public final Color color;
+        public final List<double[]> data;
+
+        public Series(String label, Color color, List<double[]> data) {
+            this.label = label;
+            this.color = color;
+            this.data = (data != null) ? data : new ArrayList<>();
+        }
+    }
+
+    /** Zusätzliche, gleichzeitig dargestellte Kurven (siehe {@link Series}). Nehmen nicht an
+     *  Zoom, Freihand-Auswahl, Fit oder Chi² teil - das bleibt der Hauptgröße vorbehalten. */
+    private List<Series> extraSeries = new ArrayList<>();
 
     private String xUnit = "s";
     private String yUnit = "Messwert";
@@ -273,6 +292,19 @@ public class ChartPanel extends JPanel {
     }
 
     /**
+     * Setzt zusätzliche, gleichzeitig darzustellende Kurven (z. B. Kanal B neben der über
+     * {@link #setData(List)} gesetzten Hauptgröße von Kanal A). Diese Kurven sind rein visuell:
+     * sie beeinflussen weder Zoom noch Freihand-Auswahl, Fit oder Chi² - das bleibt exklusiv der
+     * Hauptgröße vorbehalten, damit die Ausgleichsrechnung eindeutig bleibt.
+     *
+     * @param series Liste zusätzlicher Kurven, {@code null} wird als leere Liste behandelt
+     */
+    public void setExtraSeries(List<Series> series) {
+        this.extraSeries = (series != null) ? new ArrayList<>(series) : new ArrayList<>();
+        repaint();
+    }
+
+    /**
      * Legt die Achsenbeschriftungen fest.
      *
      * @param xUnit Einheit der X-Achse (z. B. "s"), {@code null} fällt auf "s" zurück
@@ -391,6 +423,14 @@ public class ChartPanel extends JPanel {
             if (point[1] < minY) minY = point[1];
             if (point[1] > maxY) maxY = point[1];
         }
+        for (Series series : extraSeries) {
+            for (double[] point : series.data) {
+                if (point[0] < minX) minX = point[0];
+                if (point[0] > maxX) maxX = point[0];
+                if (point[1] < minY) minY = point[1];
+                if (point[1] > maxY) maxY = point[1];
+            }
+        }
 
         if (minX == maxX) maxX = minX + 1.0;
         if (minY == maxY) { minY -= 1.0; maxY += 1.0; }
@@ -462,7 +502,18 @@ public class ChartPanel extends JPanel {
 
         drawGridAndAxes(g2, geo);
 
-        if (displayData == null || displayData.isEmpty()) {
+        // Prüfen, ob IRGENDWELCHE Daten vorliegen (Hauptdaten oder Extra-Serien)
+        boolean hasAnyData = (displayData != null && !displayData.isEmpty());
+        if (!hasAnyData && extraSeries != null) {
+            for (Series s : extraSeries) {
+                if (s.data != null && !s.data.isEmpty()) {
+                    hasAnyData = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasAnyData) {
             drawEmptyDataMessage(g2, geo);
             drawCrosshair(g2, geo.padding, geo.height, geo.plotWidth, geo.plotHeight, geo.minX, geo.rangeX, geo.minY, geo.rangeY);
             g2.dispose();
@@ -481,15 +532,102 @@ public class ChartPanel extends JPanel {
             drawDataPoints(g2, geo, screenPoints);
         }
 
+        drawExtraSeries(g2, geo);
+
         if (fitMode != FitMode.NONE) {
             drawChiSquareOverlay(g2, geo.width, geo.padding);
         }
+
+        drawLegend(g2, geo);
 
         drawSelectionRectangle(g2);
         drawFreehandStroke(g2);
 
         drawCrosshair(g2, geo.padding, geo.height, geo.plotWidth, geo.plotHeight, geo.minX, geo.rangeX, geo.minY, geo.rangeY);
         g2.dispose();
+    }
+
+    /**
+     * Zeichnet zusätzliche, gleichzeitig dargestellte Kurven (siehe {@link #setExtraSeries}) in
+     * ihrer jeweils eigenen Farbe - als Punkte und (falls aktiviert) Verbindungslinie, auf
+     * derselben (die Extra-Kurven bereits einschließenden) Achsenskalierung wie die Hauptgröße.
+     */
+    private void drawExtraSeries(Graphics2D g2, PlotGeometry geo) {
+        double pointSize = 6;
+        for (Series series : extraSeries) {
+            List<Point2DDouble> points = new ArrayList<>();
+            for (double[] point : series.data) {
+                double px = geo.padding + ((point[0] - geo.minX) / geo.rangeX) * geo.plotWidth;
+                double py = (geo.height - geo.padding) - ((point[1] - geo.minY) / geo.rangeY) * geo.plotHeight;
+                points.add(new Point2DDouble(px, py));
+            }
+
+            if (showLine && points.size() > 1) {
+                g2.setColor(series.color);
+                g2.setStroke(new BasicStroke(1.5f));
+                Path2D path = new Path2D.Double();
+                path.moveTo(points.get(0).x, points.get(0).y);
+                for (int i = 1; i < points.size(); i++) {
+                    path.lineTo(points.get(i).x, points.get(i).y);
+                }
+                g2.draw(path);
+            }
+
+            if (showPoints) {
+                g2.setColor(series.color);
+                for (Point2DDouble pt : points) {
+                    if (pt.x >= geo.padding && pt.x <= geo.width - geo.padding
+                            && pt.y >= geo.padding && pt.y <= geo.height - geo.padding) {
+                        g2.fill(new Ellipse2D.Double(pt.x - pointSize / 2, pt.y - pointSize / 2, pointSize, pointSize));
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Zeichnet eine kleine Legende (Farbe → Messgröße) oben rechts im Plot, sofern mehr als
+     * eine Größe gleichzeitig dargestellt wird (Hauptgröße + mind. eine Extra-Kurve).
+     */
+    private void drawLegend(Graphics2D g2, PlotGeometry geo) {
+        if (extraSeries.isEmpty()) return;
+
+        g2.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        FontMetrics fm = g2.getFontMetrics();
+
+        List<String> labels = new ArrayList<>();
+        List<Color> colors = new ArrayList<>();
+        labels.add(yUnit);
+        colors.add(Theme.POINT);
+        for (Series series : extraSeries) {
+            labels.add(series.label);
+            colors.add(series.color);
+        }
+
+        int swatch = 10;
+        int rowHeight = 16;
+        int maxTextWidth = 0;
+        for (String label : labels) {
+            maxTextWidth = Math.max(maxTextWidth, fm.stringWidth(label));
+        }
+
+        int boxWidth = swatch + 6 + maxTextWidth + 10;
+        int boxHeight = labels.size() * rowHeight + 8;
+        int boxX = geo.width - geo.padding - boxWidth - 6;
+        int boxY = geo.padding + 6;
+
+        g2.setColor(Theme.PANEL);
+        g2.fillRoundRect(boxX, boxY, boxWidth, boxHeight, 8, 8);
+        g2.setColor(Theme.BORDER);
+        g2.drawRoundRect(boxX, boxY, boxWidth, boxHeight, 8, 8);
+
+        for (int i = 0; i < labels.size(); i++) {
+            int rowY = boxY + 6 + i * rowHeight;
+            g2.setColor(colors.get(i));
+            g2.fillRect(boxX + 6, rowY, swatch, swatch);
+            g2.setColor(Theme.TEXT);
+            g2.drawString(labels.get(i), boxX + 6 + swatch + 6, rowY + swatch);
+        }
     }
 
     /**
@@ -512,16 +650,44 @@ public class ChartPanel extends JPanel {
         double minX = 0, maxX = 10;
         double minY = 0, maxY = 10;
 
-        if (displayData != null && !displayData.isEmpty()) {
+        boolean hasMainData = (displayData != null && !displayData.isEmpty());
+        boolean hasExtraData = false;
+        if (extraSeries != null) {
+            for (Series s : extraSeries) {
+                if (s.data != null && !s.data.isEmpty()) {
+                    hasExtraData = true;
+                    break;
+                }
+            }
+        }
+
+        if (hasMainData || hasExtraData) {
             minX = Double.MAX_VALUE; maxX = -Double.MAX_VALUE;
             minY = Double.MAX_VALUE; maxY = -Double.MAX_VALUE;
 
-            for (double[] point : displayData) {
-                if (point[0] < minX) minX = point[0];
-                if (point[0] > maxX) maxX = point[0];
-                if (point[1] < minY) minY = point[1];
-                if (point[1] > maxY) maxY = point[1];
+            if (hasMainData) {
+                for (double[] point : displayData) {
+                    if (point[0] < minX) minX = point[0];
+                    if (point[0] > maxX) maxX = point[0];
+                    if (point[1] < minY) minY = point[1];
+                    if (point[1] > maxY) maxY = point[1];
+                }
             }
+
+            if (extraSeries != null) {
+                for (Series series : extraSeries) {
+                    if (series.data != null) {
+                        for (double[] point : series.data) {
+                            if (point[0] < minX) minX = point[0];
+                            if (point[0] > maxX) maxX = point[0];
+                            if (point[1] < minY) minY = point[1];
+                            if (point[1] > maxY) maxY = point[1];
+                        }
+                    }
+                }
+            }
+
+            if (minX == Double.MAX_VALUE) minX = 0; // Fallback falls doch etwas schiefgeht
             if (minX == maxX) maxX = minX + 1.0;
             if (minY == maxY) { minY -= 1.0; maxY += 1.0; }
         }

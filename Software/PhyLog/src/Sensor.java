@@ -1,8 +1,8 @@
 import java.util.List;
 
 /**
- * Basisklasse aller Sensoren. Kennt Namen, Einheit und Einheiten-Aliase und entscheidet,
- * wie ein roher Firmware-Wert (Slot + Rohwert) in eine physikalische Größe umgerechnet wird.
+ * Basisklasse aller Sensoren. Kennt Namen, Einheit(en) und entscheidet, wie ein roher
+ * Firmware-Wert (Slot + Rohwert) in physikalische Größen umgerechnet wird.
  */
 public abstract class Sensor {
     private final String name;
@@ -37,15 +37,34 @@ public abstract class Sensor {
     /** Bezeichner, den die Firmware für diesen Sensor beim {@code SET}-Kommando erwartet. */
     public abstract String getFirmwareTypeName();
 
+
     /**
-     * Erkennt bekannte Störmuster (z. B. schwebende/nicht angeschlossene Leitungen), die zwar
-     * als plausibler Zahlenwert dekodiert werden, aber keine echte Messung sind. Sensoren mit
-     * solchen bekannten Artefakten überschreiben diese Methode; Standardverhalten: alles gilt
-     * als echte Messung.
+     * Eine benannte Messgröße eines Sensorprofils, z. B. "Spannung (V)". Wird als Spaltenkopf in
+     * der Tabelle verwendet.
      */
-    public boolean isPhantomReading(int slot, double decodedValue) {
-        return false;
+    public static final class Quantity {
+        public final String label;
+        public final String unit;
+        /** Firmware-Slot, aus dem dieser Wert dekodiert wird. */
+        public final int slot;
+
+        public Quantity(String label, String unit, int slot) {
+            this.label = label;
+            this.unit = unit;
+            this.slot = slot;
+        }
+
+        public String getColumnHeader() {
+            return unit.isEmpty() ? label : label + " (" + unit + ")";
+        }
     }
+
+    /**
+     * Messgröße(n) dieses Sensorprofils - aktuell liefert jeder Sensor genau eine (oder keine,
+     * siehe {@code NoSensor}). Als Liste modelliert, damit Tabellen-Spaltenaufbau einheitlich
+     * bleibt, falls künftig doch wieder mehrere Größen gleichzeitig sinnvoll werden.
+     */
+    public abstract List<Quantity> getQuantities();
 
     @Override
     public String toString() {

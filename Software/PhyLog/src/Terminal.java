@@ -6,7 +6,7 @@ import java.awt.event.WindowEvent;
 import java.util.function.Consumer;
 
 /**
- * Einfaches serielles Terminal-Fenster für die ESP32-Firmware (librephysics_firmware.ino,
+ * Einfaches serielles Terminal-Fenster für die ESP32-Firmware (phylog_firmware.ino,
  * Digital-only Version): PING, START, STOP, RATE,&lt;hz&gt;.
  *
  * <p>Nutzt die geteilte {@link DeviceConnection}, damit dieselbe Verbindung auch vom
@@ -103,7 +103,6 @@ public class Terminal extends JFrame {
         quickButtons.add(quickButton("PING"));
         quickButtons.add(quickButton("START"));
         quickButtons.add(quickButton("STOP"));
-        quickButtons.add(quickButton("RATE,50"));
 
         JPanel inputRow = new JPanel(new BorderLayout(8, 0));
         inputRow.setBackground(Theme.BG);

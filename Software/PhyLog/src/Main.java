@@ -2,7 +2,7 @@ import javax.swing.*;
 import com.formdev.flatlaf.FlatDarkLaf;
 
 /**
- * Einstiegspunkt der LibrePhysics-Anwendung.
+ * Einstiegspunkt der PhyLog-Anwendung.
  */
 public class Main {
 

@@ -1,18 +1,18 @@
-````md
-<div align="center">
-
-<img src="Software/PhyLog/src/pic/icon.png" alt="PhyLog Logo" width="170">
-
 # PhyLog
 
-**Open-Source Messwerterfassung für den naturwissenschaftlichen Unterricht**
+**Open-Source digitale Messwerterfassung für den naturwissenschaftlichen Unterricht**
 
-*Modular · Kostengünstig · Erweiterbar*
+Modular · Kostengünstig · Erweiterbar
+
+---
+
+<div align="center">
+
+<img src="Software/PhyLog/src/assets/icon.png" alt="PhyLog Logo" width="150">
 
 </div>
 
 ---
-
 ## 💡 Motivation
 
 > **„Nicht das bessere Messgerät entwickeln, sondern mehr Experimentieren ermöglichen.“**
@@ -66,44 +66,9 @@ PhyLog besteht aus drei modularen Komponenten, die nahtlos zusammenarbeiten.
     
 - Einfache Erweiterbarkeit durch modulare Sensoren
     
-- Intuitive Desktop-Software zur Datenerfassung
-    
 - Echtzeit-Diagramme und Tabellen
     
 - Export als CSV und PNG
     
-- Plattformunabhängige Software
-    
 - Dokumentierte Hard- und Software
     
-
----
-
-## 🚧 Projektstatus
-
-> **Aktive Entwicklung**
-
-Derzeit befinden sich sowohl die Hardware als auch die Desktop-Software in der Entwicklung.
-
-Geplante Funktionen:
-
-- ✅ Live-Diagramme
-    
-- ✅ Tabellenansicht
-    
-- ✅ CSV-Export
-    
-- ✅ Diagrammexport als PNG
-    
-- 🔄 Bluetooth-Unterstützung
-    
-- 🔄 Modulare Sensorbibliothek
-    
-- 🔄 Automatische Geräteerkennung
-    
-
----
-
-## 📄 Lizenz
-
-Dieses Projekt wird als Open-Source-Projekt entwickelt.
