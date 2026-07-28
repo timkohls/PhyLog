@@ -209,6 +209,62 @@ public class GUI extends JFrame {
         JMenuItem itemStdDev = new JMenuItem("Standardabweichung...");
         itemStdDev.addActionListener(e -> openStandardDeviationDialog());
 
+        JLabel portLabel = new JLabel(" COM-Port: ");
+
+        // ComboBox erstellen und direkt mit den echten Ports füllen
+        JComboBox<String> portSelector = new JComboBox<>();
+        portSelector.setEditable(true);
+        portSelector.setMaximumSize(new Dimension(140, 25));
+
+        // Initiale Ports laden
+        for (String name : DeviceConnection.getInstance().listPortNames()) {
+            portSelector.addItem(name);
+        }
+
+        // Kleiner Refresh-Button, falls das Gerät erst später eingesteckt wird
+        JButton btnRefreshPorts = new JButton("↻");
+        btnRefreshPorts.setToolTipText("Ports aktualisieren");
+        btnRefreshPorts.setFocusPainted(false);
+        btnRefreshPorts.setMargin(new Insets(2, 4, 2, 4));
+        btnRefreshPorts.addActionListener(e -> {
+            portSelector.removeAllItems();
+            for (String name : DeviceConnection.getInstance().listPortNames()) {
+                portSelector.addItem(name);
+            }
+        });
+
+        // Verbinden/Trennen Button
+        JButton connectButton = new JButton(DeviceConnection.getInstance().isConnected() ? "Trennen" : "Verbinden");
+        connectButton.setFocusPainted(false);
+        connectButton.setMargin(new Insets(2, 8, 2, 8));
+
+        connectButton.addActionListener(e -> {
+            if (DeviceConnection.getInstance().isConnected()) {
+                // Trennen
+                DeviceConnection.getInstance().disconnect();
+                connectButton.setText("Verbinden");
+            } else {
+                // Verbinden
+                Object selectedItem = portSelector.getSelectedItem();
+                if (selectedItem != null) {
+                    String portName = selectedItem.toString().trim();
+                    if (!portName.isEmpty()) {
+                        // Wir nutzen fix 115200 Baud, genau wie das Terminal als Standardwert hat
+                        boolean success = DeviceConnection.getInstance().connect(portName, 115200);
+                        if (success) {
+                            connectButton.setText("Trennen");
+                        } else {
+                            JOptionPane.showMessageDialog(null,
+                                    "Verbindung zu " + portName + " fehlgeschlagen.",
+                                    "Verbindungsfehler",
+                                    JOptionPane.ERROR_MESSAGE);
+                        }
+                    }
+                }
+            }
+        });
+
+
         menuFit.add(itemNone);
         menuFit.add(menuPoly);
         menuFit.add(itemSinus);
@@ -221,6 +277,16 @@ public class GUI extends JFrame {
         menuBar.add(menuTerminal);
         menuBar.add(menuView);
         menuBar.add(menuFit);
+
+        menuBar.add(Box.createHorizontalGlue());
+        menuBar.add(portLabel);
+        menuBar.add(portSelector);
+        menuBar.add(Box.createRigidArea(new Dimension(5, 0))); // Abstand
+        menuBar.add(btnRefreshPorts);
+        menuBar.add(Box.createRigidArea(new Dimension(5, 0))); // Abstand
+        menuBar.add(connectButton);
+        menuBar.add(Box.createRigidArea(new Dimension(15, 0))); // Abstand zum rechten Rand
+
 
         setJMenuBar(menuBar);
     }
@@ -502,8 +568,7 @@ public class GUI extends JFrame {
     private void startMeasurement() {
         if (!DeviceConnection.getInstance().isConnected()) {
             JOptionPane.showMessageDialog(this,
-                    "Keine serielle Verbindung. Bitte zuerst über Terminal > Terminal öffnen... " +
-                            "mit dem ESP32 verbinden.",
+                    "Keine serielle Verbindung. Bitte zuerst mit dem ESP32 verbinden. COM Port auswählen und Verbinden.",
                     "Nicht verbunden", JOptionPane.WARNING_MESSAGE);
             return;
         }

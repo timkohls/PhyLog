@@ -31,10 +31,6 @@ class NoSensor extends Sensor {
 abstract class AbstractINA219Sensor extends Sensor {
     private static final double CURRENT_LSB = 0.0001; // 0.1 mA pro Bit
 
-    /** Bekannter Störwert einer schwebenden Bus-Spannungsleitung. Bei Bedarf anpassen. */
-    private static final double VOLTAGE_PHANTOM_BIAS = 1.016;
-    private static final double PHANTOM_TOLERANCE = 0.02;
-
     AbstractINA219Sensor(String name, String unit, List<String> unitAliases) {
         super(name, unit, unitAliases);
     }
@@ -49,10 +45,6 @@ abstract class AbstractINA219Sensor extends Sensor {
         return signedRaw * CURRENT_LSB;
     }
 
-    /** Echte 0-Messwerte gelten NICHT als Störung (siehe Klassenkommentar in INA219VoltageSensor). */
-    static boolean isVoltagePhantom(double decodedVoltage) {
-        return Math.abs(decodedVoltage - VOLTAGE_PHANTOM_BIAS) < PHANTOM_TOLERANCE;
-    }
 
     @Override
     public String getFirmwareTypeName() {
@@ -82,10 +74,6 @@ class INA219VoltageSensor extends AbstractINA219Sensor {
         return List.of(new Quantity("Spannung", "V", 0));
     }
 
-    @Override
-    public boolean isPhantomReading(int slot, double decodedValue) {
-        return isVoltagePhantom(decodedValue);
-    }
 }
 
 /** INA219-Profil: nur Strom (Slot 1). Spannung wird ignoriert (siehe {@link INA219VoltageSensor}). */

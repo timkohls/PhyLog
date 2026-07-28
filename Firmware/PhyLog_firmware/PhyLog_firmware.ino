@@ -24,7 +24,7 @@ SensorType configChannelA = TYPE_NONE;
 SensorType configChannelB = TYPE_NONE;
 
 const int PINS_CHANNEL_A[2] = {13, 12}; // GPIO13 (SDA), GPIO12 (SCL) - Bus "Wire"
-const int PINS_CHANNEL_B[2] = {15, 2};  // GPIO15 (SDA), GPIO2 (SCL)  - Bus "Wire1"
+const int PINS_CHANNEL_B[2] = {14, 27};  // GPIO15 (SDA), GPIO2 (SCL)  - Bus "Wire1"
 
 const uint8_t ADDR_INA219   = 0x40;
 const uint8_t ADDR_VEML7700 = 0x10;

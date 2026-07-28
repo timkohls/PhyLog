@@ -502,7 +502,18 @@ public class ChartPanel extends JPanel {
 
         drawGridAndAxes(g2, geo);
 
-        if (displayData == null || displayData.isEmpty()) {
+        // Prüfen, ob IRGENDWELCHE Daten vorliegen (Hauptdaten oder Extra-Serien)
+        boolean hasAnyData = (displayData != null && !displayData.isEmpty());
+        if (!hasAnyData && extraSeries != null) {
+            for (Series s : extraSeries) {
+                if (s.data != null && !s.data.isEmpty()) {
+                    hasAnyData = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasAnyData) {
             drawEmptyDataMessage(g2, geo);
             drawCrosshair(g2, geo.padding, geo.height, geo.plotWidth, geo.plotHeight, geo.minX, geo.rangeX, geo.minY, geo.rangeY);
             g2.dispose();
@@ -639,24 +650,44 @@ public class ChartPanel extends JPanel {
         double minX = 0, maxX = 10;
         double minY = 0, maxY = 10;
 
-        if (displayData != null && !displayData.isEmpty()) {
+        boolean hasMainData = (displayData != null && !displayData.isEmpty());
+        boolean hasExtraData = false;
+        if (extraSeries != null) {
+            for (Series s : extraSeries) {
+                if (s.data != null && !s.data.isEmpty()) {
+                    hasExtraData = true;
+                    break;
+                }
+            }
+        }
+
+        if (hasMainData || hasExtraData) {
             minX = Double.MAX_VALUE; maxX = -Double.MAX_VALUE;
             minY = Double.MAX_VALUE; maxY = -Double.MAX_VALUE;
 
-            for (double[] point : displayData) {
-                if (point[0] < minX) minX = point[0];
-                if (point[0] > maxX) maxX = point[0];
-                if (point[1] < minY) minY = point[1];
-                if (point[1] > maxY) maxY = point[1];
-            }
-            for (Series series : extraSeries) {
-                for (double[] point : series.data) {
+            if (hasMainData) {
+                for (double[] point : displayData) {
                     if (point[0] < minX) minX = point[0];
                     if (point[0] > maxX) maxX = point[0];
                     if (point[1] < minY) minY = point[1];
                     if (point[1] > maxY) maxY = point[1];
                 }
             }
+
+            if (extraSeries != null) {
+                for (Series series : extraSeries) {
+                    if (series.data != null) {
+                        for (double[] point : series.data) {
+                            if (point[0] < minX) minX = point[0];
+                            if (point[0] > maxX) maxX = point[0];
+                            if (point[1] < minY) minY = point[1];
+                            if (point[1] > maxY) maxY = point[1];
+                        }
+                    }
+                }
+            }
+
+            if (minX == Double.MAX_VALUE) minX = 0; // Fallback falls doch etwas schiefgeht
             if (minX == maxX) maxX = minX + 1.0;
             if (minY == maxY) { minY -= 1.0; maxY += 1.0; }
         }

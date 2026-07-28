@@ -103,7 +103,6 @@ public class Terminal extends JFrame {
         quickButtons.add(quickButton("PING"));
         quickButtons.add(quickButton("START"));
         quickButtons.add(quickButton("STOP"));
-        quickButtons.add(quickButton("RATE,50"));
 
         JPanel inputRow = new JPanel(new BorderLayout(8, 0));
         inputRow.setBackground(Theme.BG);
