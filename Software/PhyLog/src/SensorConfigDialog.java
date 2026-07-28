@@ -8,9 +8,11 @@ import java.awt.event.WindowEvent;
  * wählbar, auch mit demselben Sensortyp auf beiden Kanälen gleichzeitig.
  *
  * <p>Ist eine {@link LiveSource} für einen Kanal angegeben, zeigt die Zeile "Offset / Tara"
- * fortlaufend den aktuellen Live-Messwert an und die "Nullen"-Schaltfläche übernimmt ihn als
- * neuen Offset. Ohne verfügbaren Live-Wert bleiben Anzeige und Schaltfläche deaktiviert, statt
- * einen falschen Platzhalterwert vorzutäuschen.</p>
+ * fortlaufend den aktuellen Live-Messwert an. Die "Nullen"-Schaltfläche übernimmt ihn nicht nur
+ * zur Anzeige, sondern meldet den Tara-Wunsch über {@link TareRequestListener} zurück, damit der
+ * aufrufende Code (siehe {@code GUI}) den Live-Wert ab sofort tatsächlich als 0 behandelt. Ohne
+ * verfügbaren Live-Wert bleiben Anzeige und Schaltfläche deaktiviert, statt einen falschen
+ * Platzhalterwert vorzutäuschen.</p>
  */
 public class SensorConfigDialog extends JDialog {
 
@@ -28,12 +30,21 @@ public class SensorConfigDialog extends JDialog {
         void onSensorSelected(char channel, Sensor sensor);
     }
 
-    private static final String[] RANGES = {"Automatisch", "± 10", "± 50", "± 100", "± 500"};
-    private static final String[] SAMPLE_RATES = {"10 Hz", "50 Hz", "100 Hz", "250 Hz", "500 Hz", "1000 Hz"};
+    /** Wird beim Klick auf "Nullen" aufgerufen, damit der aufrufende Code den aktuellen
+     *  Live-Wert des Kanals tatsächlich als neuen Tara-Offset übernimmt - der Dialog selbst
+     *  kennt keine dekodierten Rohwerte, nur was ihm über {@link LiveSource} gemeldet wird. */
+    @FunctionalInterface
+    public interface TareRequestListener {
+        void onTareRequested(char channel);
+    }
+
+    private static final String[] SAMPLE_RATES = {"10 Hz", "20 Hz", "50 Hz", "100 Hz", "200 Hz"};
     private static final int LIVE_REFRESH_MS = 200;
 
     private final Channel channelA = new Channel();
     private final Channel channelB = new Channel();
+
+    private JComboBox<String> comboSampleRate;
 
     private Sensor selectedSensor1;
     private Sensor selectedSensor2;
@@ -42,6 +53,7 @@ public class SensorConfigDialog extends JDialog {
     private final LiveSource live1;
     private final LiveSource live2;
     private final SensorSelectionListener selectionListener;
+    private final TareRequestListener tareListener;
     private Timer liveUpdateTimer;
 
     /** Bündelt alle UI-Komponenten eines Kanals (A oder B). */
@@ -51,25 +63,29 @@ public class SensorConfigDialog extends JDialog {
         JTextField txtOffset;
         JLabel lblLive;
         JButton btnTara;
-        JComboBox<String> comboRange;
-        JComboBox<String> comboRate;
     }
 
-    /** Bequemer Konstruktor ohne Live-Anbindung (Live-Anzeige und Tara bleiben deaktiviert). */
-    public SensorConfigDialog(Frame owner, Sensor current1, Sensor current2) {
-        this(owner, current1, current2, null, null, null);
-    }
-
-    /** Voller Konstruktor mit optionaler Live-Quelle und Auswahl-Rückmeldung je Kanal (siehe Klassenkommentar). */
-    public SensorConfigDialog(Frame owner, Sensor current1, Sensor current2,
-                               LiveSource live1, LiveSource live2,
-                               SensorSelectionListener selectionListener) {
+    /**
+     * @param owner               Eigentümerfenster (für Modalität und Positionierung)
+     * @param current1            aktuell aktiver Sensor auf Kanal A (oder {@link SensorRegistry#NO_SENSOR})
+     * @param current2            aktuell aktiver Sensor auf Kanal B
+     * @param currentSampleRateHz aktuell geltende, für beide Kanäle gemeinsame Abtastrate in Hz
+     * @param live1               liefert den Live-Messwert von Kanal A, oder {@code null} ohne Live-Anbindung
+     * @param live2               liefert den Live-Messwert von Kanal B, oder {@code null} ohne Live-Anbindung
+     * @param selectionListener   wird bei jeder Sensor-Auswahl sofort benachrichtigt (siehe Klassenkommentar)
+     * @param tareListener        wird beim Klick auf "Nullen" benachrichtigt, damit der Tara-Offset
+     *                            tatsächlich angewendet wird (siehe Klassenkommentar)
+     */
+    public SensorConfigDialog(Frame owner, Sensor current1, Sensor current2, int currentSampleRateHz,
+                              LiveSource live1, LiveSource live2,
+                              SensorSelectionListener selectionListener, TareRequestListener tareListener) {
         super(owner, "Sensoren konfigurieren", true);
         this.live1 = live1;
         this.live2 = live2;
         this.selectionListener = selectionListener;
+        this.tareListener = tareListener;
 
-        setSize(760, 320);
+        setSize(760, 300);
         setLocationRelativeTo(owner);
         setLayout(new BorderLayout(10, 10));
 
@@ -81,7 +97,11 @@ public class SensorConfigDialog extends JDialog {
         mainPanel.add(buildChannelPanel(channelB, 'B', "Kanal B", availableSensors, current2));
         add(mainPanel, BorderLayout.CENTER);
 
-        add(buildButtonPanel(), BorderLayout.SOUTH);
+        JPanel southWrapper = new JPanel();
+        southWrapper.setLayout(new BoxLayout(southWrapper, BoxLayout.Y_AXIS));
+        southWrapper.add(buildSharedRatePanel(currentSampleRateHz));
+        southWrapper.add(buildButtonPanel());
+        add(southWrapper, BorderLayout.SOUTH);
 
         updateChannelStates();
         startLiveUpdates();
@@ -113,8 +133,6 @@ public class SensorConfigDialog extends JDialog {
         ch.lblLive = new JLabel("–");
         ch.lblLive.setForeground(Theme.ACCENT);
         ch.btnTara = new JButton("Nullen");
-        ch.comboRange = new JComboBox<>(RANGES);
-        ch.comboRate = new JComboBox<>(SAMPLE_RATES);
 
         ch.btnTara.addActionListener(e -> {
             LiveSource source = (ch == channelA) ? live1 : live2;
@@ -122,15 +140,40 @@ public class SensorConfigDialog extends JDialog {
             if (value != null) {
                 ch.txtOffset.setText(String.format("%.3f", value));
             }
+            if (tareListener != null) {
+                tareListener.onTareRequested(channelId);
+            }
         });
 
         addFormRow(panel, gbc, 0, "Sensor:", ch.comboSensor);
         addFormRow(panel, gbc, 1, "Einheit:", ch.lblUnit);
         addTaraRow(panel, gbc, 2, "Offset / Tara:", ch.txtOffset, ch.lblLive, ch.btnTara);
-        addFormRow(panel, gbc, 3, "Messbereich:", ch.comboRange);
-        addFormRow(panel, gbc, 4, "Abtastrate:", ch.comboRate);
 
         return panel;
+    }
+
+    /** Baut die Zeile mit der für beide Kanäle gemeinsam geltenden Abtastrate. */
+    private JPanel buildSharedRatePanel(int currentSampleRateHz) {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        panel.setBorder(BorderFactory.createEmptyBorder(0, 15, 0, 15));
+        panel.add(new JLabel("Abtastrate (beide Kanäle):"));
+
+        comboSampleRate = new JComboBox<>(SAMPLE_RATES);
+        selectSampleRate(currentSampleRateHz);
+        panel.add(comboSampleRate);
+
+        return panel;
+    }
+
+    /** Wählt in {@link #comboSampleRate} den zu {@code hz} passenden Eintrag, oder belässt es
+     *  beim Standardwert, falls {@code hz} keinem Listeneintrag entspricht. */
+    private void selectSampleRate(int hz) {
+        for (String rate : SAMPLE_RATES) {
+            if (parseRate(rate) == hz) {
+                comboSampleRate.setSelectedItem(rate);
+                return;
+            }
+        }
     }
 
     private JPanel buildButtonPanel() {
@@ -174,8 +217,6 @@ public class SensorConfigDialog extends JDialog {
 
         ch.lblUnit.setText(active ? sensor.getUnit() : "-");
         ch.txtOffset.setEnabled(active);
-        ch.comboRange.setEnabled(active);
-        ch.comboRate.setEnabled(active);
 
         Double liveValue = (active && source != null) ? source.poll() : null;
         ch.lblLive.setText(liveValue != null ? String.format("Live: %.3f %s", liveValue, sensor.getUnit()) : "–");
@@ -201,7 +242,7 @@ public class SensorConfigDialog extends JDialog {
     }
 
     private void addTaraRow(JPanel panel, GridBagConstraints gbc, int row, String label,
-                             JTextField textField, JLabel liveLabel, JButton button) {
+                            JTextField textField, JLabel liveLabel, JButton button) {
         gbc.gridx = 0;
         gbc.gridy = row;
         gbc.weightx = 0.35;
@@ -229,14 +270,9 @@ public class SensorConfigDialog extends JDialog {
         return selectedSensor2;
     }
 
-    /** @return für Kanal A gewählte Abtastrate in Hz (z. B. 50 aus "50 Hz"). */
-    public int getSampleRateA() {
-        return parseRate((String) channelA.comboRate.getSelectedItem());
-    }
-
-    /** @return für Kanal B gewählte Abtastrate in Hz (z. B. 50 aus "50 Hz"). */
-    public int getSampleRateB() {
-        return parseRate((String) channelB.comboRate.getSelectedItem());
+    /** @return die für beide Kanäle gemeinsam gewählte Abtastrate in Hz (z. B. 50 aus "50 Hz"). */
+    public int getSampleRate() {
+        return parseRate((String) comboSampleRate.getSelectedItem());
     }
 
     private int parseRate(String rateText) {

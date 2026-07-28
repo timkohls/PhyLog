@@ -61,6 +61,14 @@ public class GUI extends JFrame {
     private volatile Double latestValueA = null;
     private volatile Double latestValueB = null;
 
+    /** Tara-Offset je Kanal, wird von jedem dekodierten Wert abgezogen (siehe {@link #ingestSample}
+     *  und {@link #onTareRequested}). 0.0 = kein Tara aktiv, unverändertes Verhalten. */
+    private double tareOffsetA = 0.0;
+    private double tareOffsetB = 0.0;
+
+    /** Für beide Kanäle gemeinsam geltende Abtastrate in Hz (siehe {@link SensorConfigDialog}). */
+    private int sampleRateHz = 20;
+
     public GUI() {
         super("PhyLog");
 
@@ -500,9 +508,9 @@ public class GUI extends JFrame {
 
         boolean liveMonitoringStartedByDialog = ensureLiveDataFlowing();
 
-        SensorConfigDialog dialog = new SensorConfigDialog(this, activeSensorA, activeSensorB,
+        SensorConfigDialog dialog = new SensorConfigDialog(this, activeSensorA, activeSensorB, sampleRateHz,
                 () -> latestValueA, () -> latestValueB,
-                this::pushSensorSelectionToFirmware);
+                this::pushSensorSelectionToFirmware, this::onTareRequested);
         dialog.setVisible(true);
 
         if (liveMonitoringStartedByDialog) {
@@ -512,8 +520,9 @@ public class GUI extends JFrame {
         if (dialog.isApplied()) {
             activeSensorA = dialog.getSelectedSensorA();
             activeSensorB = dialog.getSelectedSensorB();
+            sampleRateHz = dialog.getSampleRate();
             updateTableLayout();
-            applySampleRateToFirmware(dialog);
+            applySampleRateToFirmware();
             // Die Sensorauswahl selbst wurde schon während der Bedienung live an die Firmware
             // gesendet (siehe pushSensorSelectionToFirmware), kein erneutes SET nötig.
         } else {
@@ -539,14 +548,37 @@ public class GUI extends JFrame {
         return true;
     }
 
-    /** Teilt der Firmware sofort mit, welchen Sensortyp ein Kanal abtasten soll - wird bereits
-     *  bei jeder Auswahl im Dialog aufgerufen, nicht erst nach "Übernehmen" (siehe
-     *  {@link SensorConfigDialog.SensorSelectionListener}). */
+    /** Teilt der Firmware sofort mit, welchen Sensortyp ein Kanal abtasten soll, und übernimmt
+     *  die Auswahl zugleich lokal als aktiven Sensor - wird bereits bei jeder Auswahl im Dialog
+     *  aufgerufen, nicht erst nach "Übernehmen" (siehe {@link SensorConfigDialog.SensorSelectionListener}).
+     *  Ohne diese sofortige lokale Übernahme würde {@link #ingestSample} ankommende Live-Werte
+     *  noch mit dem alten Sensorprofil dekodieren, wodurch die Live-Anzeige im Dialog erst nach
+     *  "Übernehmen" und erneutem Öffnen funktionieren würde. Bricht der Nutzer ab, macht
+     *  {@link #openSensorConfigDialog()} dies über denselben Weg wieder rückgängig. */
     private void pushSensorSelectionToFirmware(char channel, Sensor sensor) {
+        if (channel == 'A') {
+            if (activeSensorA != sensor) tareOffsetA = 0.0;
+            activeSensorA = sensor;
+        } else {
+            if (activeSensorB != sensor) tareOffsetB = 0.0;
+            activeSensorB = sensor;
+        }
+
         if (!DeviceConnection.getInstance().isConnected()) {
             return;
         }
         DeviceConnection.getInstance().sendLine("SET," + channel + "," + sensor.getFirmwareTypeName());
+    }
+
+    /** Übernimmt den aktuell angezeigten Live-Wert eines Kanals als neuen Tara-Offset - kumulativ,
+     *  damit mehrfaches Nullen unproblematisch bleibt (siehe {@link #ingestSample}). Ohne einen
+     *  bereits vorliegenden Live-Wert passiert nichts. */
+    private void onTareRequested(char channel) {
+        if (channel == 'A') {
+            if (latestValueA != null) tareOffsetA += latestValueA;
+        } else {
+            if (latestValueB != null) tareOffsetB += latestValueB;
+        }
     }
 
     private void openTerminal() {
@@ -627,10 +659,13 @@ public class GUI extends JFrame {
             return; // Slot gehört nicht zur Messgröße dieses Profils
         }
 
-        double value = sensor.decode(slot, rawValue);
-        if (Double.isNaN(value) || Double.isInfinite(value)) {
+        double rawDecoded = sensor.decode(slot, rawValue);
+        if (Double.isNaN(rawDecoded) || Double.isInfinite(rawDecoded)) {
             return;
         }
+
+        double tareOffset = isChannelA ? tareOffsetA : tareOffsetB;
+        double value = rawDecoded - tareOffset;
 
         Object[] row = {timeSeconds, value};
         if (isChannelA) {
@@ -642,19 +677,13 @@ public class GUI extends JFrame {
         }
     }
 
-    private void applySampleRateToFirmware(SensorConfigDialog dialog) {
-        if (!DeviceConnection.getInstance().isConnected()) {
+    /** Sendet die für beide Kanäle gemeinsam geltende Abtastrate ({@link #sampleRateHz}) an die
+     *  Firmware (Obergrenze 200 Hz, siehe {@code phylog_firmware.ino}). */
+    private void applySampleRateToFirmware() {
+        if (!DeviceConnection.getInstance().isConnected() || sampleRateHz <= 0) {
             return;
         }
-
-        int rateA = (activeSensorA != SensorRegistry.NO_SENSOR) ? dialog.getSampleRateA() : 0;
-        int rateB = (activeSensorB != SensorRegistry.NO_SENSOR) ? dialog.getSampleRateB() : 0;
-
-        int effectiveRate = Math.max(rateA, rateB);
-        if (effectiveRate <= 0) return;
-
-        effectiveRate = Math.min(effectiveRate, 200);
-        DeviceConnection.getInstance().sendLine("RATE," + effectiveRate);
+        DeviceConnection.getInstance().sendLine("RATE," + Math.min(sampleRateHz, 200));
     }
 
     private void openTriggerDialog() {
@@ -701,13 +730,24 @@ public class GUI extends JFrame {
         model.setColumnIdentifiers(new Object[]{"Zeit (s)", header});
     }
 
-    /** Übernimmt die Einheit der Messgröße von Kanal A als Diagramm-/Achsenbeschriftung. */
+    /** Setzt die Achsenbeschriftung: bei nur einem aktiven Kanal zeigt die Y-Achse dessen
+     *  Messgröße, bei zwei aktiven Kanälen bleibt sie bewusst generisch ("Messwerte"), da eine
+     *  einzelne Achse nicht zwei unterschiedlichen Einheiten gerecht werden kann. Welche Einheit
+     *  zu welchem Kanal gehört, zeigt stattdessen die Legende im Diagramm (siehe
+     *  {@link ChartPanel#setMainLabel} und {@link #updateChartData}). */
     private void updateChartUnits() {
         if (chartPanel == null) return;
 
-        List<Sensor.Quantity> quantities = activeSensorA.getQuantities();
-        String label = quantities.isEmpty() ? "Kanal A" : "Kanal A: " + quantities.get(0).getColumnHeader();
-        chartPanel.setUnits("s", label);
+        List<Sensor.Quantity> quantitiesA = activeSensorA.getQuantities();
+        boolean hasSecondSensor = activeSensorB != null && activeSensorB != SensorRegistry.NO_SENSOR;
+
+        String axisLabel = hasSecondSensor
+                ? "Messwerte"
+                : (quantitiesA.isEmpty() ? "Messwert" : quantitiesA.get(0).getColumnHeader());
+        chartPanel.setUnits("s", axisLabel);
+
+        String labelA = quantitiesA.isEmpty() ? "Kanal A" : "Kanal A: " + quantitiesA.get(0).getColumnHeader();
+        chartPanel.setMainLabel(labelA);
     }
 
     private DefaultTableModel createTableModel() {
@@ -737,38 +777,82 @@ public class GUI extends JFrame {
         chartPanel.repaint();
     }
 
+    /** Exportiert Kanal A und/oder Kanal B als CSV - je nachdem, welche(r) Kanal/Kanäle
+     *  Messwerte enthält. Haben beide Daten, entstehen zwei separate Dateien (Suffix "_KanalA"
+     *  bzw. "_KanalB" vor der Endung), da eine gemeinsame Datei bei unterschiedlichen Sensoren
+     *  und potenziell unterschiedlicher Zeilenzahl je Kanal keine sinnvolle gemeinsame
+     *  Tabellenstruktur hätte. */
     private void exportCsv() {
+        boolean hasDataA = tableModelA.getRowCount() > 0;
+        boolean hasDataB = tableModelB.getRowCount() > 0;
+
+        if (!hasDataA && !hasDataB) {
+            JOptionPane.showMessageDialog(this, "Keine Daten zum Exportieren vorhanden.", "Hinweis", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
         JFileChooser chooser = new JFileChooser();
         chooser.setDialogTitle("CSV Exportieren");
         chooser.setFileFilter(new FileNameExtensionFilter("CSV-Dateien (*.csv)", "csv"));
 
-        if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-            File file = chooser.getSelectedFile();
-            if (!file.getName().toLowerCase().endsWith(".csv")) {
-                file = new File(file.getAbsolutePath() + ".csv");
+        if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+
+        File selectedFile = chooser.getSelectedFile();
+        if (!selectedFile.getName().toLowerCase().endsWith(".csv")) {
+            selectedFile = new File(selectedFile.getAbsolutePath() + ".csv");
+        }
+
+        boolean bothActive = hasDataA && hasDataB;
+        List<String> writtenFileNames = new ArrayList<>();
+
+        try {
+            if (hasDataA) {
+                File fileA = bothActive ? withSuffix(selectedFile, "KanalA") : selectedFile;
+                writeCsv(fileA, tableModelA);
+                writtenFileNames.add(fileA.getName());
             }
+            if (hasDataB) {
+                File fileB = bothActive ? withSuffix(selectedFile, "KanalB") : selectedFile;
+                writeCsv(fileB, tableModelB);
+                writtenFileNames.add(fileB.getName());
+            }
+            JOptionPane.showMessageDialog(this, "CSV erfolgreich gespeichert: " + String.join(", ", writtenFileNames),
+                    "Erfolg", JOptionPane.INFORMATION_MESSAGE);
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(this, "Fehler beim Speichern der CSV: " + e.getMessage(), "Fehler", JOptionPane.ERROR_MESSAGE);
+        }
+    }
 
-            try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
-                int columnCount = tableModelA.getColumnCount();
+    /** Hängt {@code suffix} vor die Dateiendung an (z. B. "messung.csv" -> "messung_KanalA.csv"). */
+    private File withSuffix(File base, String suffix) {
+        String path = base.getAbsolutePath();
+        int dot = path.lastIndexOf('.');
+        String withoutExt = (dot >= 0) ? path.substring(0, dot) : path;
+        String ext = (dot >= 0) ? path.substring(dot) : "";
+        return new File(withoutExt + "_" + suffix + ext);
+    }
 
-                StringBuilder header = new StringBuilder();
+    /** Schreibt ein einzelnes Tabellenmodell Semikolon-getrennt in {@code file}. */
+    private void writeCsv(File file, DefaultTableModel model) throws IOException {
+        try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
+            int columnCount = model.getColumnCount();
+
+            StringBuilder header = new StringBuilder();
+            for (int c = 0; c < columnCount; c++) {
+                if (c > 0) header.append(";");
+                header.append(model.getColumnName(c));
+            }
+            writer.println(header);
+
+            for (int i = 0; i < model.getRowCount(); i++) {
+                StringBuilder row = new StringBuilder();
                 for (int c = 0; c < columnCount; c++) {
-                    if (c > 0) header.append(";");
-                    header.append(tableModelA.getColumnName(c));
+                    if (c > 0) row.append(";");
+                    row.append(model.getValueAt(i, c));
                 }
-                writer.println(header);
-
-                for (int i = 0; i < tableModelA.getRowCount(); i++) {
-                    StringBuilder row = new StringBuilder();
-                    for (int c = 0; c < columnCount; c++) {
-                        if (c > 0) row.append(";");
-                        row.append(tableModelA.getValueAt(i, c));
-                    }
-                    writer.println(row);
-                }
-                JOptionPane.showMessageDialog(this, "CSV erfolgreich gespeichert!", "Erfolg", JOptionPane.INFORMATION_MESSAGE);
-            } catch (IOException e) {
-                JOptionPane.showMessageDialog(this, "Fehler beim Speichern der CSV: " + e.getMessage(), "Fehler", JOptionPane.ERROR_MESSAGE);
+                writer.println(row);
             }
         }
     }

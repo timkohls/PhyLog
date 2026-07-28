@@ -126,6 +126,9 @@ public class ChartPanel extends JPanel {
 
     private String xUnit = "s";
     private String yUnit = "Messwert";
+    /** Bezeichnung der Hauptmessgröße (Kanal A) für die Legende - unabhängig vom Achsentitel,
+     *  damit dieser bei zwei Kanälen generisch bleiben kann (siehe {@link #setUnits}). */
+    private String mainLabel = "Kanal A";
 
     private boolean showPoints = true;
     private boolean showLine = false;
@@ -305,22 +308,24 @@ public class ChartPanel extends JPanel {
     }
 
     /**
-     * Legt die Achsenbeschriftungen fest.
+     * Legt die Achsenbeschriftungen fest. Der Aufrufer entscheidet über den Text der Y-Achse -
+     * bei mehreren gleichzeitig dargestellten Größen (siehe {@link #setExtraSeries}) sollte er
+     * bewusst generisch bleiben ("Messwerte"), da die Achse nicht mehreren Einheiten zugleich
+     * gerecht werden kann. Welche Einheit zu welcher Kurve gehört, zeigt stattdessen die Legende
+     * (siehe {@link #setMainLabel} und {@link #drawLegend}).
      *
-     * @param xUnit Einheit der X-Achse (z. B. "s"), {@code null} fällt auf "s" zurück
-     * @param yUnit Einheit/Bezeichnung der Y-Achse; wird automatisch in "Messwert (Einheit)"
-     *              eingebettet, sofern noch nicht in dieser Form vorliegt
+     * @param xUnit  Einheit der X-Achse (z. B. "s"), {@code null} fällt auf "s" zurück
+     * @param yLabel Beschriftung der Y-Achse, {@code null}/leer fällt auf "Messwert" zurück
      */
-    public void setUnits(String xUnit, String yUnit) {
+    public void setUnits(String xUnit, String yLabel) {
         this.xUnit = (xUnit != null) ? xUnit : "s";
+        this.yUnit = (yLabel != null && !yLabel.isBlank()) ? yLabel.trim() : "Messwert";
+        repaint();
+    }
 
-        if (yUnit == null || yUnit.trim().isEmpty()) {
-            this.yUnit = "Messwert";
-        } else if (!yUnit.contains("Messwert") && !yUnit.contains("(")) {
-            this.yUnit = "Messwert (" + yUnit.trim() + ")";
-        } else {
-            this.yUnit = yUnit.trim();
-        }
+    /** Setzt die Bezeichnung der Hauptmessgröße (Kanal A) für die Legende. */
+    public void setMainLabel(String label) {
+        this.mainLabel = (label != null && !label.isBlank()) ? label.trim() : "Kanal A";
         repaint();
     }
 
@@ -374,6 +379,7 @@ public class ChartPanel extends JPanel {
     }
 
     public double getStandardDeviation() { return standardDeviation; }
+
     public int getPolynomialDegree() { return polynomialDegree; }
 
     public void zoomIn() {
@@ -597,7 +603,7 @@ public class ChartPanel extends JPanel {
 
         List<String> labels = new ArrayList<>();
         List<Color> colors = new ArrayList<>();
-        labels.add(yUnit);
+        labels.add(mainLabel);
         colors.add(Theme.POINT);
         for (Series series : extraSeries) {
             labels.add(series.label);
