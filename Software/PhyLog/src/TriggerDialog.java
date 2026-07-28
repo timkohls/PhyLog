@@ -5,25 +5,21 @@ import java.awt.*;
  * Dialog zur Konfiguration eines schwellenwertbasierten Mess-Triggers (Modus, Flanke,
  * Schwellenwert, Vorlaufzeit).
  *
- * <p><b>Hinweis / Platzhalter:</b> Dieser Dialog sammelt die gewünschte Trigger-Konfiguration
- * und stellt sie über {@link #getTriggerMode()}, {@link #getEdge()}, {@link #getThreshold()}
- * und {@link #getPreTriggerMs()} bereit. Aktuell wertet {@code GUI} dieses Ergebnis nach dem
- * Schließen des Dialogs jedoch noch nicht aus - es gibt noch keine echte Messhardware, die
- * getriggert werden könnte. Das ist bewusst so belassen (kein Bug, sondern ein offener Punkt
- * für die künftige Sensor-Anbindung): sobald ein echter Live-Datenstrom existiert, kann der
- * Aufrufer von {@code TriggerDialog} nach {@link #isApplied()} diese Getter auslesen und die
- * Aufnahme entsprechend steuern.</p>
+ * <p>Hinweis: Sammelt nur die gewünschte Konfiguration über {@link #getTriggerMode()},
+ * {@link #getEdge()}, {@link #getThreshold()} und {@link #getPreTriggerMs()} - {@code GUI}
+ * wertet das Ergebnis aktuell noch nicht aus, da noch keine echte Trigger-Hardware angebunden
+ * ist. Sobald ein Live-Datenstrom existiert, kann der Aufrufer nach {@link #isApplied()} diese
+ * Getter auslesen und die Aufnahme entsprechend steuern.</p>
  */
 public class TriggerDialog extends JDialog {
 
-    private JComboBox<String> cbTriggerMode;
-    private JComboBox<String> cbEdge;
-    private JTextField txtThreshold;
-    private JSpinner spPreTrigger;
+    private final JComboBox<String> cbTriggerMode;
+    private final JComboBox<String> cbEdge;
+    private final JTextField txtThreshold;
+    private final JSpinner spPreTrigger;
 
     private boolean applied = false;
 
-    /** @param parent Eigentümerfenster (für Modalität und Positionierung) */
     public TriggerDialog(JFrame parent) {
         super(parent, "Trigger konfigurieren", true);
         setSize(400, 260);
@@ -37,44 +33,35 @@ public class TriggerDialog extends JDialog {
         gbc.insets = new Insets(8, 8, 8, 8);
         gbc.weightx = 1.0;
 
-        // 1. Trigger-Modus (Nur Manuell & Schwellenwert)
         gbc.gridx = 0; gbc.gridy = 0;
         formPanel.add(new JLabel("Trigger-Modus:"), gbc);
-        cbTriggerMode = new JComboBox<>(new String[]{
-                "Manuell (Start-Button)",
-                "Schwellenwert (Analog)"
-        });
+        cbTriggerMode = new JComboBox<>(new String[]{"Manuell (Start-Button)", "Schwellenwert (Analog)"});
         gbc.gridx = 1;
         formPanel.add(cbTriggerMode, gbc);
 
-        // 2. Flanke (Steigend/Fallend)
         gbc.gridx = 0; gbc.gridy = 1;
         formPanel.add(new JLabel("Flanke:"), gbc);
         cbEdge = new JComboBox<>(new String[]{"Steigend (▲)", "Fallend (▼)"});
         gbc.gridx = 1;
         formPanel.add(cbEdge, gbc);
 
-        // 3. Schwellenwert
         gbc.gridx = 0; gbc.gridy = 2;
         formPanel.add(new JLabel("Schwellenwert:"), gbc);
         txtThreshold = new JTextField("2.50");
         gbc.gridx = 1;
         formPanel.add(txtThreshold, gbc);
 
-        // 4. Pre-Trigger (Vorlaufzeit in ms)
         gbc.gridx = 0; gbc.gridy = 3;
         formPanel.add(new JLabel("Vorlaufzeit (ms):"), gbc);
         spPreTrigger = new JSpinner(new SpinnerNumberModel(100, 0, 5000, 50));
         gbc.gridx = 1;
         formPanel.add(spPreTrigger, gbc);
 
-        // Felder aktivieren/deaktivieren je nach Modus
         cbTriggerMode.addActionListener(e -> updateFieldStates());
         updateFieldStates();
 
         add(formPanel, BorderLayout.CENTER);
 
-        // Button-Leiste
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         JButton btnCancel = new JButton("Abbrechen");
         JButton btnApply = new JButton("Übernehmen");
@@ -90,7 +77,7 @@ public class TriggerDialog extends JDialog {
         add(buttonPanel, BorderLayout.SOUTH);
     }
 
-    /** Aktiviert Flanke/Schwellenwert/Vorlaufzeit nur, wenn der Schwellenwert-Modus gewählt ist. */
+    /** Aktiviert Flanke/Schwellenwert/Vorlaufzeit nur im Schwellenwert-Modus. */
     private void updateFieldStates() {
         boolean isThreshold = cbTriggerMode.getSelectedIndex() == 1;
         cbEdge.setEnabled(isThreshold);
@@ -104,10 +91,10 @@ public class TriggerDialog extends JDialog {
     /** @return der gewählte Trigger-Modus als Anzeigetext */
     public String getTriggerMode() { return (String) cbTriggerMode.getSelectedItem(); }
 
-    /** @return die gewählte Flanke als Anzeigetext (nur relevant im Schwellenwert-Modus) */
+    /** @return die gewählte Flanke (nur relevant im Schwellenwert-Modus) */
     public String getEdge() { return (String) cbEdge.getSelectedItem(); }
 
-    /** @return der eingestellte Schwellenwert, oder 0.0 falls das Feld keine gültige Zahl enthält */
+    /** @return der eingestellte Schwellenwert, oder 0.0 bei ungültiger Eingabe */
     public double getThreshold() {
         try {
             return Double.parseDouble(txtThreshold.getText().replace(",", "."));

@@ -10,24 +10,19 @@ import java.util.List;
 import java.util.function.Consumer;
 
 /**
- * Zentrale, geteilte serielle Verbindung zum ESP32.
+ * Zentrale, geteilte serielle Verbindung zum ESP32. {@link Terminal} und {@link GUI} sprechen
+ * beide über diese eine Instanz mit der Hardware, statt je einen eigenen {@link SerialPort} zu
+ * öffnen - zwei gleichzeitig geöffnete Verbindungen zum selben COM-Port würden sich gegenseitig
+ * blockieren.
  *
- * <p>Sowohl {@link Terminal} als auch {@link GUI} sprechen über diese eine Instanz mit der
- * Hardware, statt jeweils einen eigenen {@link SerialPort} zu öffnen - zwei gleichzeitig
- * geöffnete Verbindungen zum selben COM-Port würden sich gegenseitig blockieren bzw.
- * fehlschlagen.</p>
- *
- * <p>Übernimmt außerdem das korrekte Zeilen-Buffering: eingehende USB-Daten kommen in beliebig
- * geschnittenen Chunks an, nicht garantiert zeilenweise. Listener werden deshalb erst
- * benachrichtigt, sobald tatsächlich eine vollständige, mit '\n' abgeschlossene Zeile
- * zusammengesetzt wurde - das vermeidet die mitten in der Zeile zerrissene Ausgabe, die das
- * frühere, rein Terminal-interne Vorgehen zeigen konnte.</p>
+ * <p>Übernimmt außerdem das Zeilen-Buffering: eingehende Daten kommen in beliebig geschnittenen
+ * Chunks an, Listener werden erst benachrichtigt, sobald eine vollständige, mit '\n'
+ * abgeschlossene Zeile zusammengesetzt wurde.</p>
  */
 public class DeviceConnection {
 
     private static final DeviceConnection INSTANCE = new DeviceConnection();
 
-    /** @return die einzige, geteilte Instanz dieser Verbindung. */
     public static DeviceConnection getInstance() {
         return INSTANCE;
     }
@@ -48,17 +43,12 @@ public class DeviceConnection {
         return names;
     }
 
-    /** @return {@code true}, wenn aktuell ein Port geöffnet ist. */
     public boolean isConnected() {
         return activePort != null && activePort.isOpen();
     }
 
-    /**
-     * Öffnet den angegebenen Port. Ist bereits ein anderer Port offen, wird dieser zuerst
-     * sauber getrennt.
-     *
-     * @return {@code true}, wenn das Öffnen erfolgreich war
-     */
+    /** Öffnet den angegebenen Port (schließt zuvor einen ggf. offenen anderen Port).
+     *  @return {@code true}, wenn das Öffnen erfolgreich war */
     public boolean connect(String portName, int baud) {
         if (isConnected()) {
             disconnect();
@@ -89,9 +79,8 @@ public class DeviceConnection {
                 int read = activePort.readBytes(chunk, chunk.length);
                 if (read > 0) {
                     String text = new String(chunk, 0, read, StandardCharsets.UTF_8);
-                    // Empfang läuft in einem Hintergrund-Thread von jSerialComm - Swing-
-                    // Komponenten (und die Listener, die meist Swing anfassen) dürfen nur vom
-                    // Event-Dispatch-Thread aus benachrichtigt werden.
+                    // Empfang läuft im Hintergrund-Thread von jSerialComm - Swing darf nur
+                    // vom Event-Dispatch-Thread aus angefasst werden.
                     SwingUtilities.invokeLater(() -> feed(text));
                 }
             }
@@ -108,15 +97,12 @@ public class DeviceConnection {
         }
     }
 
-    /**
-     * Registriert einen Listener, der für jede vollständige empfangene Zeile aufgerufen wird
-     * (ohne das abschließende Zeilenumbruch-Zeichen).
-     */
+    /** Registriert einen Listener, der für jede vollständige empfangene Zeile aufgerufen wird
+     *  (ohne abschließenden Zeilenumbruch). */
     public void addLineListener(Consumer<String> listener) {
         lineListeners.add(listener);
     }
 
-    /** Entfernt einen zuvor registrierten Zeilen-Listener wieder. */
     public void removeLineListener(Consumer<String> listener) {
         lineListeners.remove(listener);
     }
@@ -129,8 +115,7 @@ public class DeviceConnection {
             out.write((command + "\n").getBytes(StandardCharsets.UTF_8));
             out.flush();
         } catch (Exception ignored) {
-            // Sendefehler werden hier bewusst verschluckt - Aufrufer können isConnected()
-            // vorher prüfen; ein hart fehlschlagendes Senden soll die UI nicht abstürzen lassen.
+            // Sendefehler bewusst verschluckt - Aufrufer prüfen ggf. vorher isConnected().
         }
     }
 
@@ -140,10 +125,9 @@ public class DeviceConnection {
 
         int newlineIndex;
         while ((newlineIndex = receiveBuffer.indexOf("\n")) >= 0) {
-            String line = receiveBuffer.substring(0, newlineIndex);
+            String line = receiveBuffer.substring(0, newlineIndex).replace("\r", "");
             receiveBuffer.delete(0, newlineIndex + 1);
 
-            line = line.replace("\r", "");
             if (!line.isEmpty()) {
                 for (Consumer<String> listener : new ArrayList<>(lineListeners)) {
                     listener.accept(line);

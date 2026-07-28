@@ -2,19 +2,14 @@ import javax.swing.*;
 import java.awt.*;
 
 /**
- * Modaler Dialog, mit dem die als konstant angenommene Messunsicherheit (Standardabweichung
- * sigma) eingestellt wird, die {@link ChartPanel} für die Chi²-Berechnung und die Breite des
- * Toleranzbands um eine Fit-Kurve verwendet.
+ * Dialog zum Einstellen der als konstant angenommenen Messunsicherheit (Standardabweichung
+ * sigma), die {@link ChartPanel} für Chi²-Berechnung und Toleranzband verwendet.
  */
 public class StandardDeviationDialog extends JDialog {
-    private JTextField tfValue;
+    private final JTextField tfValue;
     private boolean confirmed = false;
     private double standardDeviation;
 
-    /**
-     * @param parent     Eigentümerfenster (für Modalität und Positionierung)
-     * @param currentVal aktuell eingestellte Standardabweichung, wird als Startwert vorbelegt
-     */
     public StandardDeviationDialog(JFrame parent, double currentVal) {
         super(parent, "Standardabweichung einstellen", true);
         setSize(300, 150);
@@ -23,11 +18,9 @@ public class StandardDeviationDialog extends JDialog {
 
         JPanel panel = new JPanel(new GridLayout(2, 2, 10, 10));
         panel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
-
         panel.add(new JLabel("Standardabweichung (s):"));
         tfValue = new JTextField(String.valueOf(currentVal));
         panel.add(tfValue);
-
         add(panel, BorderLayout.CENTER);
 
         JPanel btnPanel = new JPanel();
@@ -48,7 +41,6 @@ public class StandardDeviationDialog extends JDialog {
                 JOptionPane.showMessageDialog(this, "Bitte geben Sie eine gültige Zahl ein.", "Ungültige Eingabe", JOptionPane.ERROR_MESSAGE);
             }
         });
-
         btnCancel.addActionListener(e -> dispose());
 
         btnPanel.add(btnOk);
@@ -56,12 +48,12 @@ public class StandardDeviationDialog extends JDialog {
         add(btnPanel, BorderLayout.SOUTH);
     }
 
-    /** @return {@code true}, wenn der Dialog über "Übernehmen" mit einem gültigen Wert geschlossen wurde */
+    /** @return {@code true}, wenn über "Übernehmen" mit gültigem Wert bestätigt wurde */
     public boolean isConfirmed() {
         return confirmed;
     }
 
-    /** @return die vom Nutzer bestätigte Standardabweichung (nur gültig, wenn {@link #isConfirmed()} true ist) */
+    /** @return die bestätigte Standardabweichung (nur gültig, wenn {@link #isConfirmed()}) */
     public double getStandardDeviation() {
         return standardDeviation;
     }

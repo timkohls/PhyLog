@@ -6,21 +6,17 @@ import java.awt.event.WindowEvent;
 import java.util.function.Consumer;
 
 /**
- * Einfaches serielles Terminal-Fenster für die ESP32-Firmware (phylog_firmware.ino,
- * Digital-only Version): PING, START, STOP, RATE,&lt;hz&gt;.
- *
- * <p>Nutzt die geteilte {@link DeviceConnection}, damit dieselbe Verbindung auch vom
- * Hauptfenster ({@link GUI}) für Start/Stop der Live-Messung verwendet werden kann.</p>
+ * Serielles Terminal-Fenster für die ESP32-Firmware (PING, START, STOP, RATE,&lt;hz&gt;).
+ * Nutzt die geteilte {@link DeviceConnection}, damit dieselbe Verbindung auch vom Hauptfenster
+ * ({@link GUI}) für Start/Stop der Live-Messung verwendet werden kann.
  */
 public class Terminal extends JFrame {
 
     private JComboBox<String> comboPort;
     private JTextField txtBaud;
     private JButton btnConnect;
-    private JButton btnRefresh;
     private JTextArea txtLog;
     private JTextField txtCommand;
-    private JButton btnSend;
 
     private final Consumer<String> lineListener = this::appendLog;
 
@@ -30,7 +26,6 @@ public class Terminal extends JFrame {
         setLocationRelativeTo(null);
         setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         setLayout(new BorderLayout(8, 8));
-
         getContentPane().setBackground(Theme.BG);
 
         add(buildConnectionPanel(), BorderLayout.NORTH);
@@ -38,7 +33,6 @@ public class Terminal extends JFrame {
         add(buildCommandPanel(), BorderLayout.SOUTH);
 
         refreshPorts();
-
         DeviceConnection.getInstance().addLineListener(lineListener);
 
         if (DeviceConnection.getInstance().isConnected()) {
@@ -62,7 +56,7 @@ public class Terminal extends JFrame {
         comboPort = new JComboBox<>();
         comboPort.setPreferredSize(new Dimension(160, 26));
 
-        btnRefresh = new JButton("Aktualisieren");
+        JButton btnRefresh = new JButton("Aktualisieren");
         btnRefresh.addActionListener(e -> refreshPorts());
 
         txtBaud = new JTextField("115200", 7);
@@ -76,7 +70,6 @@ public class Terminal extends JFrame {
         panel.add(new JLabel("Baud:"));
         panel.add(txtBaud);
         panel.add(btnConnect);
-
         return panel;
     }
 
@@ -92,7 +85,7 @@ public class Terminal extends JFrame {
         return scrollPane;
     }
 
-    /** Nur noch die vier Befehle, die die vereinfachte Digital-only Firmware kennt. */
+    /** Nur die vier Befehle, die die vereinfachte Digital-only Firmware kennt. */
     private JPanel buildCommandPanel() {
         JPanel outer = new JPanel(new BorderLayout(8, 8));
         outer.setBorder(new EmptyBorder(0, 8, 8, 8));
@@ -110,7 +103,7 @@ public class Terminal extends JFrame {
         txtCommand = new JTextField();
         txtCommand.addActionListener(e -> sendCurrentCommand());
 
-        btnSend = new JButton("Senden");
+        JButton btnSend = new JButton("Senden");
         btnSend.addActionListener(e -> sendCurrentCommand());
 
         inputRow.add(txtCommand, BorderLayout.CENTER);
