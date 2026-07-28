@@ -13,7 +13,6 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.PrintWriter;
 import java.io.IOException;
-import java.net.URL;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.regex.Matcher;
@@ -98,11 +97,7 @@ public class GUI extends JFrame {
 
     private void loadWindowIcon() {
         try {
-            File fallbackFile = new File("src/assets/icon.png");
-            if (fallbackFile.exists()) {
-                setIconImage(Toolkit.getDefaultToolkit().getImage(fallbackFile.getAbsolutePath()));
-                return;
-            }
+            setIconImage(new ImageIcon("src/assets/icon.png").getImage());
 
             System.err.println("Hinweis: Fenster-Icon 'assets/icon.png' wurde weder im Klassenpfad " +
                     "noch unter 'src/assets/icon.png' gefunden. Es wird kein Icon gesetzt.");
@@ -573,6 +568,12 @@ public class GUI extends JFrame {
             return;
         }
 
+        if (activeSensorA == SensorRegistry.NO_SENSOR && activeSensorB == SensorRegistry.NO_SENSOR){
+            JOptionPane.showMessageDialog(this,
+                    "Kein Sensor ausgewählt! Bitte unter Sensor, Sensor konfigurieren.","Kein Sensor konfiguriert", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
         measurementStartMillis = -1;
         latestValueA = null;
         latestValueB = null;
@@ -619,29 +620,19 @@ public class GUI extends JFrame {
         }
     }
 
-    /**
-     * Dekodiert einen Slot-Wert eines Kanals. Ein bekannter Phantom-Messwert (siehe
-     * {@link Sensor#isPhantomReading}, z. B. eine schwebende Leitung ohne echten Anschluss) wird
-     * NICHT verworfen, sondern als 0 eingetragen: so bleibt in Tabelle und Diagramm sichtbar,
-     * dass gerade aktiv (aber ohne echtes Signal) gemessen wird, statt einer Lücke in der
-     * Zeitreihe, die wie "nichts läuft" aussieht.
-     */
     private void ingestSample(Sensor sensor, int slot, long rawValue, double timeSeconds, boolean isChannelA) {
         if (sensor == null || sensor == SensorRegistry.NO_SENSOR) {
             return;
         }
 
         List<Sensor.Quantity> quantities = sensor.getQuantities();
-        if (quantities.isEmpty() || quantities.get(0).slot != slot) {
+        if (quantities.isEmpty() || quantities.getFirst().slot != slot) {
             return; // Slot gehört nicht zur Messgröße dieses Profils
         }
 
         double value = sensor.decode(slot, rawValue);
         if (Double.isNaN(value) || Double.isInfinite(value)) {
             return;
-        }
-        if (sensor.isPhantomReading(slot, value)) {
-            value = 0.0;
         }
 
         Object[] row = {timeSeconds, value};
@@ -709,7 +700,7 @@ public class GUI extends JFrame {
      *  da alte Zeilen unter einer neuen Spaltenbedeutung keinen Sinn mehr ergeben würden. */
     private void configureTableModel(DefaultTableModel model, List<Sensor.Quantity> quantities) {
         model.setRowCount(0);
-        String header = quantities.isEmpty() ? "Messwert" : quantities.get(0).getColumnHeader();
+        String header = quantities.isEmpty() ? "Messwert" : quantities.getFirst().getColumnHeader();
         model.setColumnIdentifiers(new Object[]{"Zeit (s)", header});
     }
 

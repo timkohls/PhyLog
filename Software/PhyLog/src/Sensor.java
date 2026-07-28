@@ -37,14 +37,6 @@ public abstract class Sensor {
     /** Bezeichner, den die Firmware für diesen Sensor beim {@code SET}-Kommando erwartet. */
     public abstract String getFirmwareTypeName();
 
-    /**
-     * Erkennt bekannte Störmuster (z. B. schwebende/nicht angeschlossene Leitungen), die zwar
-     * als plausibler Zahlenwert dekodiert werden, aber keine echte Messung sind. Standard:
-     * alles gilt als echte Messung.
-     */
-    public boolean isPhantomReading(int slot, double decodedValue) {
-        return false;
-    }
 
     /**
      * Eine benannte Messgröße eines Sensorprofils, z. B. "Spannung (V)". Wird als Spaltenkopf in
