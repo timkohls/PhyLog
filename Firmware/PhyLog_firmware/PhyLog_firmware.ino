@@ -1,5 +1,5 @@
 /*
- * PhyLog ESP32 Firmware v7.2
+ * PhyLog ESP32 Firmware v7.3
  *
  * Sensortypen: I2C (INA219, VEML7700), HX711 (DOUT/SCK, kein I2C), Analog-Pin, sowie ein
  * INMP441-Mikrofon (I2S). Welcher Sensortyp auf Kanal A/B aktiv ist, wird ausschließlich über
@@ -15,13 +15,19 @@
  *   Analog:    Pin2=Eingang
  * Nie mehr als drei Adern pro Sensor, unabhängig vom Typ.</p>
  *
+ * <p>Das Mikrofon nutzt bewusst den NEUEN I2S-Standardtreiber (driver/i2s_std.h), nicht den
+ * alten driver/i2s.h: der alte Treiber bringt intern noch den Legacy-ADC-Treiber mit, der auf
+ * aktuellen arduino-esp32-Versionen mit dem von analogRead() genutzten ADC-Treiber
+ * ("driver_ng") kollidiert - das führte zu einem abort() beim Start, sobald irgendein Kanal auf
+ * TYPE_ANALOG stand. Der neue Treiber betrifft den ADC-Pfad nicht.</p>
+ *
  * <p>Kanal A und Kanal B hängen an physisch getrennten Bussen (I2C: Wire/Wire1, I2S: Port 0/1) -
  * das ist notwendig, sobald beide Kanäle gleichzeitig einen Sensor betreiben, auch denselben
  * Typ zweimal.</p>
  */
 
 #include <Wire.h>
-#include <driver/i2s.h>
+#include <driver/i2s_std.h>
 
 enum SensorType {
   TYPE_NONE = 0,
@@ -88,6 +94,19 @@ TwoWire &busForChannel(char channelName) {
 /** @return den I2S-Port, der physisch zu diesem Kanal gehört (analog zu {@link #busForChannel}). */
 i2s_port_t i2sPortForChannel(char channelName) {
   return (channelName == 'A') ? I2S_NUM_0 : I2S_NUM_1;
+}
+
+/** Channel-Handle des neuen I2S-Treibers (driver/i2s_std.h) je Kanal - {@code NULL}, solange
+ *  kein Mikrofon konfiguriert ist. Der alte, mit driver/i2s.h installierte Legacy-Treiber
+ *  kollidiert auf aktuellen arduino-esp32-Versionen mit dem für analogRead() genutzten
+ *  ADC-Treiber ("driver_ng") und führt zu einem Absturz beim Start - der neue Treiber betrifft
+ *  den ADC-Pfad nicht und ist deshalb mit TYPE_ANALOG auf dem jeweils anderen Kanal kombinierbar. */
+i2s_chan_handle_t micHandleA = NULL;
+i2s_chan_handle_t micHandleB = NULL;
+
+/** @return das I2S-Channel-Handle, das physisch zu diesem Kanal gehört. */
+i2s_chan_handle_t &micHandleForChannel(char channelName) {
+  return (channelName == 'A') ? micHandleA : micHandleB;
 }
 
 /**
@@ -198,30 +217,36 @@ void configureSensorOnBus(TwoWire &bus, SensorType type, char channelName) {
   }
 }
 
-/** Startet den I2S-Treiber eines Kanals im Empfangsmodus für das INMP441 (Philips-I2S, mono,
- *  32-Bit-Slot - das Modul liefert 24 gültige Datenbits linksbündig in einem 32-Bit-Wort). */
+/** Startet den I2S-Kanal im Empfangsmodus für das INMP441 (Philips-I2S, mono, 32-Bit-Slot -
+ *  das Modul liefert 24 gültige Datenbits linksbündig in einem 32-Bit-Wort) über den neuen
+ *  I2S-Standardtreiber (siehe Kommentar bei {@link #micHandleA} zum Grund). */
 void configureMicrophone(char channelName, const int pins[3]) {
-  i2s_config_t i2sConfig = {
-      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
-      .sample_rate = MIC_SAMPLE_RATE_HZ,
-      .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
-      .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-      .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-      .intr_alloc_flags = 0,
-      .dma_buf_count = 4,
-      .dma_buf_len = MIC_READ_SAMPLES,
-      .use_apll = false
-  };
-  i2s_pin_config_t pinConfig = {
-      .bck_io_num = pins[1],
-      .ws_io_num = pins[0],
-      .data_out_num = I2S_PIN_NO_CHANGE,
-      .data_in_num = pins[2]
+  i2s_chan_handle_t &handle = micHandleForChannel(channelName);
+
+  i2s_chan_config_t chanConfig = I2S_CHANNEL_DEFAULT_CONFIG(i2sPortForChannel(channelName), I2S_ROLE_MASTER);
+  if (i2s_new_channel(&chanConfig, NULL, &handle) != ESP_OK) {
+    reportSensorError(channelName, "I2S");
+    return;
+  }
+
+  i2s_std_config_t stdConfig = {
+      .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(MIC_SAMPLE_RATE_HZ),
+      .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO),
+      .gpio_cfg = {
+          .mclk = I2S_GPIO_UNUSED,
+          .bclk = (gpio_num_t) pins[1],
+          .ws   = (gpio_num_t) pins[0],
+          .dout = I2S_GPIO_UNUSED,
+          .din  = (gpio_num_t) pins[2],
+          .invert_flags = {
+              .mclk_inv = false,
+              .bclk_inv = false,
+              .ws_inv = false
+          }
+      }
   };
 
-  i2s_port_t port = i2sPortForChannel(channelName);
-  if (i2s_driver_install(port, &i2sConfig, 0, NULL) != ESP_OK ||
-      i2s_set_pin(port, &pinConfig) != ESP_OK) {
+  if (i2s_channel_init_std_mode(handle, &stdConfig) != ESP_OK || i2s_channel_enable(handle) != ESP_OK) {
     reportSensorError(channelName, "I2S");
   }
 }
@@ -234,7 +259,12 @@ void releaseChannelHardware(char channelName, SensorType oldType) {
   if (oldType == TYPE_INA219 || oldType == TYPE_VEML7700) {
     busForChannel(channelName).end();
   } else if (oldType == TYPE_MICROPHONE) {
-    i2s_driver_uninstall(i2sPortForChannel(channelName));
+    i2s_chan_handle_t &handle = micHandleForChannel(channelName);
+    if (handle != NULL) {
+      i2s_channel_disable(handle);
+      i2s_del_channel(handle);
+      handle = NULL;
+    }
   }
 }
 
@@ -270,7 +300,7 @@ void processCommand(String command) {
   command.trim();
 
   if (command.equalsIgnoreCase("PING")) {
-    Serial.println("#HELLO,PhyLog-ESP32,fw=7.2");
+    Serial.println("#HELLO,PhyLog-ESP32,fw=7.3");
   } else if (command.equalsIgnoreCase("START")) {
     isStreaming = true;
     Serial.println("#OK,START");
@@ -346,10 +376,16 @@ void sendDataPacket(char channel, int slot, long rawValue) {
  *  Intervall) - die hohe I2S-Abtastrate bleibt intern und wird nicht Sample für Sample über die
  *  serielle Verbindung geschickt, was bei 115200 Baud ohnehin nicht möglich wäre. */
 void sampleMicrophone(char channelName) {
+  i2s_chan_handle_t handle = micHandleForChannel(channelName);
+  if (handle == NULL) {
+    reportSensorError(channelName, "I2S");
+    return;
+  }
+
   int32_t buffer[MIC_READ_SAMPLES];
   size_t bytesRead = 0;
 
-  esp_err_t err = i2s_read(i2sPortForChannel(channelName), buffer, sizeof(buffer), &bytesRead, pdMS_TO_TICKS(20));
+  esp_err_t err = i2s_channel_read(handle, buffer, sizeof(buffer), &bytesRead, pdMS_TO_TICKS(20));
   if (err != ESP_OK || bytesRead == 0) {
     reportSensorError(channelName, "I2S");
     return;
@@ -413,7 +449,7 @@ void setup() {
   // Bewusst KEINE Pin-/Bus-Initialisierung hier: welche Rolle die drei Kanal-Pins spielen,
   // hängt vom gewählten Sensortyp ab und wird erst bei SET über configureChannelHardware()
   // hergestellt - beide Kanäle starten unkonfiguriert bei TYPE_NONE.
-  Serial.println("#HELLO,PhyLog-ESP32,fw=7.2");
+  Serial.println("#HELLO,PhyLog-ESP32,fw=7.3");
 }
 
 void loop() {
