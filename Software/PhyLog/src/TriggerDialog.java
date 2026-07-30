@@ -2,17 +2,23 @@ import javax.swing.*;
 import java.awt.*;
 
 /**
- * Dialog zur Konfiguration eines schwellenwertbasierten Mess-Triggers (Modus, Flanke,
- * Schwellenwert, Vorlaufzeit).
- *
- * <p>Hinweis: Sammelt nur die gewünschte Konfiguration über {@link #getTriggerMode()},
- * {@link #getEdge()}, {@link #getThreshold()} und {@link #getPreTriggerMs()} - {@code GUI}
- * wertet das Ergebnis aktuell noch nicht aus, da noch keine echte Trigger-Hardware angebunden
- * ist. Sobald ein Live-Datenstrom existiert, kann der Aufrufer nach {@link #isApplied()} diese
- * Getter auslesen und die Aufnahme entsprechend steuern.</p>
+ * Dialog zur Konfiguration eines schwellenwertbasierten Mess-Triggers: Kanal, Modus, Flanke,
+ * Schwellenwert und Vorlaufzeit. Das Ergebnis wird als {@link Config} zurückgegeben, das
+ * {@code GUI} nach {@link #isApplied()} über {@link #getConfig()} abholt und tatsächlich
+ * auswertet (siehe {@code GUI.startMeasurement}/{@code GUI.ingestSample}).
  */
 public class TriggerDialog extends JDialog {
 
+    /** Ergebnis einer Trigger-Konfiguration, unabhängig von der Dialog-UI. */
+    public static final class Config {
+        public char channel = 'A';
+        public boolean thresholdMode = false;
+        public boolean risingEdge = true;
+        public double threshold = 2.5;
+        public int preTriggerMs = 100;
+    }
+
+    private final JComboBox<String> cbChannel;
     private final JComboBox<String> cbTriggerMode;
     private final JComboBox<String> cbEdge;
     private final JTextField txtThreshold;
@@ -20,9 +26,10 @@ public class TriggerDialog extends JDialog {
 
     private boolean applied = false;
 
-    public TriggerDialog(JFrame parent) {
+    /** @param current aktuell geltende Konfiguration, wird als Startauswahl vorbelegt */
+    public TriggerDialog(JFrame parent, Config current) {
         super(parent, "Trigger konfigurieren", true);
-        setSize(400, 260);
+        setSize(400, 300);
         setLocationRelativeTo(parent);
         setLayout(new BorderLayout(10, 10));
 
@@ -34,26 +41,35 @@ public class TriggerDialog extends JDialog {
         gbc.weightx = 1.0;
 
         gbc.gridx = 0; gbc.gridy = 0;
+        formPanel.add(new JLabel("Kanal:"), gbc);
+        cbChannel = new JComboBox<>(new String[]{"Kanal A", "Kanal B"});
+        cbChannel.setSelectedIndex(current.channel == 'B' ? 1 : 0);
+        gbc.gridx = 1;
+        formPanel.add(cbChannel, gbc);
+
+        gbc.gridx = 0; gbc.gridy = 1;
         formPanel.add(new JLabel("Trigger-Modus:"), gbc);
         cbTriggerMode = new JComboBox<>(new String[]{"Manuell (Start-Button)", "Schwellenwert (Analog)"});
+        cbTriggerMode.setSelectedIndex(current.thresholdMode ? 1 : 0);
         gbc.gridx = 1;
         formPanel.add(cbTriggerMode, gbc);
 
-        gbc.gridx = 0; gbc.gridy = 1;
+        gbc.gridx = 0; gbc.gridy = 2;
         formPanel.add(new JLabel("Flanke:"), gbc);
         cbEdge = new JComboBox<>(new String[]{"Steigend (▲)", "Fallend (▼)"});
+        cbEdge.setSelectedIndex(current.risingEdge ? 0 : 1);
         gbc.gridx = 1;
         formPanel.add(cbEdge, gbc);
 
-        gbc.gridx = 0; gbc.gridy = 2;
+        gbc.gridx = 0; gbc.gridy = 3;
         formPanel.add(new JLabel("Schwellenwert:"), gbc);
-        txtThreshold = new JTextField("2.50");
+        txtThreshold = new JTextField(String.valueOf(current.threshold));
         gbc.gridx = 1;
         formPanel.add(txtThreshold, gbc);
 
-        gbc.gridx = 0; gbc.gridy = 3;
+        gbc.gridx = 0; gbc.gridy = 4;
         formPanel.add(new JLabel("Vorlaufzeit (ms):"), gbc);
-        spPreTrigger = new JSpinner(new SpinnerNumberModel(100, 0, 5000, 50));
+        spPreTrigger = new JSpinner(new SpinnerNumberModel(current.preTriggerMs, 0, 5000, 50));
         gbc.gridx = 1;
         formPanel.add(spPreTrigger, gbc);
 
@@ -77,32 +93,32 @@ public class TriggerDialog extends JDialog {
         add(buttonPanel, BorderLayout.SOUTH);
     }
 
-    /** Aktiviert Flanke/Schwellenwert/Vorlaufzeit nur im Schwellenwert-Modus. */
+    /** Aktiviert Kanal/Flanke/Schwellenwert/Vorlaufzeit nur im Schwellenwert-Modus. */
     private void updateFieldStates() {
         boolean isThreshold = cbTriggerMode.getSelectedIndex() == 1;
+        cbChannel.setEnabled(isThreshold);
         cbEdge.setEnabled(isThreshold);
         txtThreshold.setEnabled(isThreshold);
         spPreTrigger.setEnabled(isThreshold);
     }
 
     /** @return {@code true}, wenn der Dialog über "Übernehmen" geschlossen wurde */
-    public boolean isApplied() { return applied; }
-
-    /** @return der gewählte Trigger-Modus als Anzeigetext */
-    public String getTriggerMode() { return (String) cbTriggerMode.getSelectedItem(); }
-
-    /** @return die gewählte Flanke (nur relevant im Schwellenwert-Modus) */
-    public String getEdge() { return (String) cbEdge.getSelectedItem(); }
-
-    /** @return der eingestellte Schwellenwert, oder 0.0 bei ungültiger Eingabe */
-    public double getThreshold() {
-        try {
-            return Double.parseDouble(txtThreshold.getText().replace(",", "."));
-        } catch (NumberFormatException e) {
-            return 0.0;
-        }
+    public boolean isApplied() {
+        return applied;
     }
 
-    /** @return die eingestellte Vorlaufzeit in Millisekunden */
-    public int getPreTriggerMs() { return (int) spPreTrigger.getValue(); }
+    /** @return die im Dialog gewählte Konfiguration (nur sinnvoll, wenn {@link #isApplied()}) */
+    public Config getConfig() {
+        Config cfg = new Config();
+        cfg.channel = (cbChannel.getSelectedIndex() == 1) ? 'B' : 'A';
+        cfg.thresholdMode = cbTriggerMode.getSelectedIndex() == 1;
+        cfg.risingEdge = cbEdge.getSelectedIndex() == 0;
+        cfg.preTriggerMs = (int) spPreTrigger.getValue();
+        try {
+            cfg.threshold = Double.parseDouble(txtThreshold.getText().replace(",", "."));
+        } catch (NumberFormatException ignored) {
+            cfg.threshold = 0.0;
+        }
+        return cfg;
+    }
 }

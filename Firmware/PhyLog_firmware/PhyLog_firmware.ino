@@ -1,35 +1,52 @@
 /*
- * PhyLog ESP32 Firmware v6.5
- * Flexible Kanal-Konfiguration für I2C-Sensoren (INA219, VEML7700), den HX711-Wägesensor (DOUT/SCK, kein I2C) und Analog-Pins.
- * Welcher Sensortyp auf Kanal A/B aktiv ist, wird ausschließlich über das serielle
- * Kommando SET,<Kanal>,<Typ> von der Software gesetzt (siehe GUI.applySensorSelectionToFirmware).
- * Beide Kanäle starten daher mit TYPE_NONE, bis die Software eine Auswahl sendet.
+ * PhyLog ESP32 Firmware v7.3
  *
- * Kanal A und Kanal B hängen an PHYSISCH GETRENNTEN I2C-Bussen (Wire für A, Wire1 für B) - beide
- * haben eigene SDA/SCL-Pins, siehe PINS_CHANNEL_A/B. Das ist notwendig, sobald man auf beiden
- * Kanälen gleichzeitig einen I2C-Sensor (auch denselben Typ zweimal) betreiben will: ein einzelner
- * gemeinsamer Bus könnte einen an Kanal B angeschlossenen Sensor gar nicht erreichen.
+ * Sensortypen: I2C (INA219, VEML7700), HX711 (DOUT/SCK, kein I2C), Analog-Pin, sowie ein
+ * INMP441-Mikrofon (I2S). Welcher Sensortyp auf Kanal A/B aktiv ist, wird ausschließlich über
+ * das serielle Kommando SET,<Kanal>,<Typ> gesetzt (siehe GUI.pushSensorSelectionToFirmware).
+ * Beide Kanäle starten bei TYPE_NONE, bis die Software eine Auswahl sendet.
+ *
+ * <p>Jeder Kanal-Port (RJ45, 9 Pins) hat genau drei Signal-Pins (Pin 2, 3, 4 - siehe
+ * pinout.md), deren Rolle sich erst beim SET-Kommando aus dem gewählten Sensortyp ergibt (siehe
+ * {@link #configureChannelHardware}):
+ *   I2C:       Pin2=SDA,  Pin3=SCL
+ *   HX711:     Pin2=DOUT, Pin3=SCK
+ *   I2S (Mic): Pin2=WS,   Pin3=BCLK, Pin4=SD
+ *   Analog:    Pin2=Eingang
+ * Nie mehr als drei Adern pro Sensor, unabhängig vom Typ.</p>
+ *
+ * <p>Das Mikrofon nutzt bewusst den NEUEN I2S-Standardtreiber (driver/i2s_std.h), nicht den
+ * alten driver/i2s.h: der alte Treiber bringt intern noch den Legacy-ADC-Treiber mit, der auf
+ * aktuellen arduino-esp32-Versionen mit dem von analogRead() genutzten ADC-Treiber
+ * ("driver_ng") kollidiert - das führte zu einem abort() beim Start, sobald irgendein Kanal auf
+ * TYPE_ANALOG stand. Der neue Treiber betrifft den ADC-Pfad nicht.</p>
+ *
+ * <p>Kanal A und Kanal B hängen an physisch getrennten Bussen (I2C: Wire/Wire1, I2S: Port 0/1) -
+ * das ist notwendig, sobald beide Kanäle gleichzeitig einen Sensor betreiben, auch denselben
+ * Typ zweimal.</p>
  */
 
 #include <Wire.h>
+#include <driver/i2s_std.h>
 
 enum SensorType {
   TYPE_NONE = 0,
   TYPE_ANALOG = 1,
   TYPE_INA219 = 2,
   TYPE_VEML7700 = 3,
-  TYPE_HX711 = 4
+  TYPE_HX711 = 4,
+  TYPE_MICROPHONE = 5
 };
 
 SensorType configChannelA = TYPE_NONE;
 SensorType configChannelB = TYPE_NONE;
 
-const int PINS_CHANNEL_A[2] = {13, 12}; // GPIO13 (SDA), GPIO12 (SCL) - Bus "Wire"
-const int PINS_CHANNEL_B[2] = {14, 27};  // GPIO15 (SDA), GPIO2 (SCL)  - Bus "Wire1"
-
-/** HX711 hängt nicht am I2C-Bus, sondern an zwei eigenen GPIOs pro Kanal (DOUT, SCK). */
-const int PINS_HX711_A[2] = {25, 26}; // GPIO25 (DOUT), GPIO26 (SCK)
-const int PINS_HX711_B[2] = {32, 33}; // GPIO32 (DOUT), GPIO33 (SCK)
+/** Die drei Signal-Pins eines Kanal-Ports (Steckerposition 2, 3, 4 - siehe pinout.md), deren
+ *  Rolle vom gewählten Sensortyp abhängt (siehe {@link #configureChannelHardware}):
+ *  I2C: [0]=SDA, [1]=SCL   HX711: [0]=DOUT, [1]=SCK   I2S: [0]=WS, [1]=BCLK, [2]=SD
+ *  Analog: [0]=Eingang */
+const int PINS_CHANNEL_A[3] = {13, 12, 14};
+const int PINS_CHANNEL_B[3] = {27, 26, 25};
 
 const uint8_t ADDR_INA219   = 0x40;
 const uint8_t ADDR_VEML7700 = 0x10;
@@ -37,22 +54,25 @@ const uint8_t ADDR_VEML7700 = 0x10;
 /** Maximale Wartezeit in ms auf ein bereites HX711-Modul, bevor der Zyklus als Fehler gilt. */
 const unsigned long HX711_TIMEOUT_MS = 100;
 
+/** I2S-Abtastrate für das INMP441-Mikrofon und wie viele 32-Bit-Samples je Zyklus gelesen
+ *  werden, um daraus einen einzelnen Spitzenwert zu bilden (siehe {@link #sampleMicrophone}). */
+const int MIC_SAMPLE_RATE_HZ = 16000;
+const int MIC_READ_SAMPLES = 256;
+
 bool isStreaming = false;
 unsigned long sampleIntervalMs = 50; // Standard: 20 Hz
 unsigned long lastSampleTimeMs = 0;
 
-/** Letzter Zeitpunkt einer gemeldeten I2C-Fehlermeldung je Kanal, um das serielle Log bei
+/** Letzter Zeitpunkt einer gemeldeten Fehlermeldung je Kanal, um das serielle Log bei
  *  dauerhaften Fehlern nicht mit Meldungen zu fluten (siehe {@link #reportSensorError}). */
 unsigned long lastErrorReportMsA = 0;
 unsigned long lastErrorReportMsB = 0;
 
 /** Meldet einen fehlgeschlagenen Sensorzugriff auf einen Kanal, höchstens einmal pro Sekunde je
- *  Kanal. Vorher wurde ein solcher Fehler komplett verschluckt (kein Datenpaket, aber auch keine
- *  Meldung) - dadurch war von der PC-Seite aus nicht zu unterscheiden, ob der Sensor gerade
- *  nichts Neues zu melden hat oder ob die Kommunikation grundsätzlich fehlschlägt.
+ *  Kanal, statt einen solchen Fehler stillschweigend zu verschlucken.
  *
  * @param channelName betroffener Kanal ('A' oder 'B')
- * @param errorTag    Fehlerart für das Log, z. B. "I2C" oder "HX711"
+ * @param errorTag    Fehlerart für das Log, z. B. "I2C", "HX711" oder "I2S"
  */
 void reportSensorError(char channelName, const char *errorTag) {
   unsigned long &lastReport = (channelName == 'A') ? lastErrorReportMsA : lastErrorReportMsB;
@@ -66,20 +86,37 @@ void reportSensorError(char channelName, const char *errorTag) {
   }
 }
 
-/** @return den I2C-Bus, der physisch zu diesem Kanal gehört (siehe Datei-Kommentar oben). */
+/** @return den I2C-Bus, der physisch zu diesem Kanal gehört. */
 TwoWire &busForChannel(char channelName) {
   return (channelName == 'A') ? Wire : Wire1;
 }
 
+/** @return den I2S-Port, der physisch zu diesem Kanal gehört (analog zu {@link #busForChannel}). */
+i2s_port_t i2sPortForChannel(char channelName) {
+  return (channelName == 'A') ? I2S_NUM_0 : I2S_NUM_1;
+}
+
+/** Channel-Handle des neuen I2S-Treibers (driver/i2s_std.h) je Kanal - {@code NULL}, solange
+ *  kein Mikrofon konfiguriert ist. Der alte, mit driver/i2s.h installierte Legacy-Treiber
+ *  kollidiert auf aktuellen arduino-esp32-Versionen mit dem für analogRead() genutzten
+ *  ADC-Treiber ("driver_ng") und führt zu einem Absturz beim Start - der neue Treiber betrifft
+ *  den ADC-Pfad nicht und ist deshalb mit TYPE_ANALOG auf dem jeweils anderen Kanal kombinierbar. */
+i2s_chan_handle_t micHandleA = NULL;
+i2s_chan_handle_t micHandleB = NULL;
+
+/** @return das I2S-Channel-Handle, das physisch zu diesem Kanal gehört. */
+i2s_chan_handle_t &micHandleForChannel(char channelName) {
+  return (channelName == 'A') ? micHandleA : micHandleB;
+}
+
 /**
  * Liest ein 16-Bit-I2C-Register MSB-zuerst (big-endian, TI-Konvention - passend für den
- * INA219) über den angegebenen Bus. Gibt bei Erfolg true zurück und schreibt den Rohwert nach
- * outValue; bei einem Übertragungsfehler wird false zurückgegeben und outValue nicht verändert.
+ * INA219). Gibt bei Erfolg true zurück und schreibt den Rohwert nach outValue; bei einem
+ * Übertragungsfehler wird false zurückgegeben und outValue nicht verändert.
  *
  * <p>outValue ist bewusst uint16_t (nicht int16_t): der Rohwert wird unverändert als 0..65535
  * über die serielle Schnittstelle geschickt, die softwareseitige Sensor-Klasse entscheidet dann
- * je nach physikalischer Größe, ob und wie er vorzeichenbehaftet zu interpretieren ist (siehe
- * z. B. INA219CurrentSensor.decode in der Software).</p>
+ * je nach physikalischer Größe, ob und wie er vorzeichenbehaftet zu interpretieren ist.</p>
  */
 bool readI2CRegister16(TwoWire &bus, uint8_t addr, uint8_t reg, uint16_t &outValue) {
   bus.beginTransmission(addr);
@@ -152,11 +189,9 @@ bool readHX711(int doutPin, int sckPin, long &outValue) {
   return true;
 }
 
-
-/** Schreibt die Init-Konfiguration eines Sensortyps auf den angegebenen Bus (No-Op für
- *  TYPE_NONE/TYPE_ANALOG, die keine I2C-Konfiguration brauchen). Meldet einen Fehler, falls
- *  einer der Schreibvorgänge fehlschlägt - das würde den Sensor unbrauchbar machen, noch bevor
- *  überhaupt eine Messung versucht wird. */
+/** Schreibt die Init-Konfiguration eines I2C-Sensortyps auf den angegebenen (bereits über
+ *  {@link #configureChannelHardware} gestarteten) Bus. Meldet einen Fehler, falls einer der
+ *  Schreibvorgänge fehlschlägt. */
 void configureSensorOnBus(TwoWire &bus, SensorType type, char channelName) {
   bool ok = true;
 
@@ -182,18 +217,90 @@ void configureSensorOnBus(TwoWire &bus, SensorType type, char channelName) {
   }
 }
 
-/** Konfiguriert beide Busse unabhängig - jeder Kanal bekommt nur den Init-Schreibvorgang für
- *  seinen EIGENEN Sensortyp, nicht den des anderen Kanals. */
-void setupI2CSensors() {
-  configureSensorOnBus(Wire, configChannelA, 'A');
-  configureSensorOnBus(Wire1, configChannelB, 'B');
+/** Startet den I2S-Kanal im Empfangsmodus für das INMP441 (Philips-I2S, mono, 32-Bit-Slot -
+ *  das Modul liefert 24 gültige Datenbits linksbündig in einem 32-Bit-Wort) über den neuen
+ *  I2S-Standardtreiber (siehe Kommentar bei {@link #micHandleA} zum Grund). */
+void configureMicrophone(char channelName, const int pins[3]) {
+  i2s_chan_handle_t &handle = micHandleForChannel(channelName);
+
+  i2s_chan_config_t chanConfig = I2S_CHANNEL_DEFAULT_CONFIG(i2sPortForChannel(channelName), I2S_ROLE_MASTER);
+  if (i2s_new_channel(&chanConfig, NULL, &handle) != ESP_OK) {
+    reportSensorError(channelName, "I2S");
+    return;
+  }
+
+  i2s_std_config_t stdConfig = {
+      .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(MIC_SAMPLE_RATE_HZ),
+      .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO),
+      .gpio_cfg = {
+          .mclk = I2S_GPIO_UNUSED,
+          .bclk = (gpio_num_t) pins[1],
+          .ws   = (gpio_num_t) pins[0],
+          .dout = I2S_GPIO_UNUSED,
+          .din  = (gpio_num_t) pins[2],
+          .invert_flags = {
+              .mclk_inv = false,
+              .bclk_inv = false,
+              .ws_inv = false
+          }
+      }
+  };
+
+  if (i2s_channel_init_std_mode(handle, &stdConfig) != ESP_OK || i2s_channel_enable(handle) != ESP_OK) {
+    reportSensorError(channelName, "I2S");
+  }
+}
+
+/** Gibt die Hardware frei, die {@code oldType} auf diesem Kanal belegt hat, damit die drei
+ *  gemeinsam genutzten Signal-Pins (siehe {@link #PINS_CHANNEL_A}) anschließend für einen
+ *  anderen Sensortyp neu konfiguriert werden können. Für HX711/Analog/NONE ist nichts
+ *  freizugeben - die neue Konfiguration überschreibt deren Pin-Modi einfach direkt. */
+void releaseChannelHardware(char channelName, SensorType oldType) {
+  if (oldType == TYPE_INA219 || oldType == TYPE_VEML7700) {
+    busForChannel(channelName).end();
+  } else if (oldType == TYPE_MICROPHONE) {
+    i2s_chan_handle_t &handle = micHandleForChannel(channelName);
+    if (handle != NULL) {
+      i2s_channel_disable(handle);
+      i2s_del_channel(handle);
+      handle = NULL;
+    }
+  }
+}
+
+/** Konfiguriert die drei Kanal-Pins für den neu gewählten Sensortyp (siehe Klassenkommentar zur
+ *  Pin-Belegung). Vorher muss die alte Hardware über {@link #releaseChannelHardware}
+ *  freigegeben worden sein. */
+void configureChannelHardware(char channelName, SensorType newType, const int pins[3]) {
+  switch (newType) {
+    case TYPE_ANALOG:
+      break; // analogRead() braucht keine explizite pinMode()
+    case TYPE_INA219:
+    case TYPE_VEML7700: {
+      TwoWire &bus = busForChannel(channelName);
+      bus.begin(pins[0], pins[1], 400000);
+      configureSensorOnBus(bus, newType, channelName);
+      break;
+    }
+    case TYPE_HX711:
+      pinMode(pins[0], INPUT);
+      pinMode(pins[1], OUTPUT);
+      digitalWrite(pins[1], LOW);
+      break;
+    case TYPE_MICROPHONE:
+      configureMicrophone(channelName, pins);
+      break;
+    case TYPE_NONE:
+    default:
+      break;
+  }
 }
 
 void processCommand(String command) {
   command.trim();
 
   if (command.equalsIgnoreCase("PING")) {
-    Serial.println("#HELLO,PhyLog-ESP32,fw=6.5");
+    Serial.println("#HELLO,PhyLog-ESP32,fw=7.3");
   } else if (command.equalsIgnoreCase("START")) {
     isStreaming = true;
     Serial.println("#OK,START");
@@ -202,7 +309,7 @@ void processCommand(String command) {
     Serial.println("#OK,STOP");
   } else if (command.startsWith("RATE,")) {
     long rateHz = command.substring(5).toInt();
-    if (rateHz >= 1 && rateHz <= 200) {
+    if (rateHz >= 1 && rateHz <= 1000) {
       sampleIntervalMs = 1000 / rateHz;
       Serial.print("#OK,RATE,"); Serial.println(rateHz);
     }
@@ -220,11 +327,18 @@ void processCommand(String command) {
       else if (sensorTypeName.equalsIgnoreCase("VEML7700")) newType = TYPE_VEML7700;
       else if (sensorTypeName.equalsIgnoreCase("ANALOG")) newType = TYPE_ANALOG;
       else if (sensorTypeName.equalsIgnoreCase("HX711")) newType = TYPE_HX711;
+      else if (sensorTypeName.equalsIgnoreCase("MIC")) newType = TYPE_MICROPHONE;
 
-      if (targetChannel == 'A') configChannelA = newType;
-      else if (targetChannel == 'B') configChannelB = newType;
+      if (targetChannel == 'A') {
+        releaseChannelHardware('A', configChannelA);
+        configChannelA = newType;
+        configureChannelHardware('A', newType, PINS_CHANNEL_A);
+      } else if (targetChannel == 'B') {
+        releaseChannelHardware('B', configChannelB);
+        configChannelB = newType;
+        configureChannelHardware('B', newType, PINS_CHANNEL_B);
+      }
 
-      setupI2CSensors();
       Serial.print("#OK,SET,"); Serial.print(targetChannel); Serial.print(","); Serial.println(sensorTypeName);
     }
   }
@@ -256,10 +370,42 @@ void sendDataPacket(char channel, int slot, long rawValue) {
   Serial.println(rawValue);
 }
 
-/** Tastet den konfigurierten Sensor eines Kanals über dessen EIGENEN I2C-Bus ab (siehe
- *  {@link #busForChannel}). Bei einem I2C-Fehler wird für das betroffene Register kein
- *  Datenpaket verschickt (siehe {@link #reportSensorError}), statt einen falschen 0-Wert zu senden. */
-void sampleChannel(char channelName, SensorType type, const int pins[2]) {
+/** Liest einen kurzen Block Rohsamples vom INMP441 und bildet daraus den Spitzenbetrag
+ *  (Peak-Amplitude) - ein einzelner Wert pro Aufrufzyklus, genau wie bei allen anderen
+ *  Sensortypen. Das hält das serielle Protokoll unverändert (ein Datenpaket pro Kanal und
+ *  Intervall) - die hohe I2S-Abtastrate bleibt intern und wird nicht Sample für Sample über die
+ *  serielle Verbindung geschickt, was bei 115200 Baud ohnehin nicht möglich wäre. */
+void sampleMicrophone(char channelName) {
+  i2s_chan_handle_t handle = micHandleForChannel(channelName);
+  if (handle == NULL) {
+    reportSensorError(channelName, "I2S");
+    return;
+  }
+
+  int32_t buffer[MIC_READ_SAMPLES];
+  size_t bytesRead = 0;
+
+  esp_err_t err = i2s_channel_read(handle, buffer, sizeof(buffer), &bytesRead, pdMS_TO_TICKS(20));
+  if (err != ESP_OK || bytesRead == 0) {
+    reportSensorError(channelName, "I2S");
+    return;
+  }
+
+  int sampleCount = bytesRead / sizeof(int32_t);
+  int32_t peak = 0;
+  for (int i = 0; i < sampleCount; i++) {
+    int32_t sample = buffer[i] >> 8; // 24 gültige Bits liegen linksbündig im 32-Bit-Wort
+    int32_t magnitude = (sample < 0) ? -sample : sample;
+    if (magnitude > peak) peak = magnitude;
+  }
+
+  sendDataPacket(channelName, 0, peak);
+}
+
+/** Tastet den konfigurierten Sensor eines Kanals ab. Bei einem Übertragungsfehler wird für das
+ *  betroffene Register kein Datenpaket verschickt (siehe {@link #reportSensorError}), statt
+ *  einen falschen 0-Wert zu senden. */
+void sampleChannel(char channelName, SensorType type, const int pins[3]) {
   if (type == TYPE_ANALOG) {
     int analogVal = analogRead(pins[0]);
     sendDataPacket(channelName, 0, analogVal);
@@ -285,13 +431,14 @@ void sampleChannel(char channelName, SensorType type, const int pins[2]) {
       reportSensorError(channelName, "I2C");
     }
   } else if (type == TYPE_HX711) {
-    const int *hxPins = (channelName == 'A') ? PINS_HX711_A : PINS_HX711_B;
     long rawWeight;
-    if (readHX711(hxPins[0], hxPins[1], rawWeight)) {
+    if (readHX711(pins[0], pins[1], rawWeight)) {
       sendDataPacket(channelName, 0, rawWeight);
     } else {
       reportSensorError(channelName, "HX711");
     }
+  } else if (type == TYPE_MICROPHONE) {
+    sampleMicrophone(channelName);
   }
 }
 
@@ -299,18 +446,10 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
-  Wire.begin(PINS_CHANNEL_A[0], PINS_CHANNEL_A[1], 400000);
-  Wire1.begin(PINS_CHANNEL_B[0], PINS_CHANNEL_B[1], 400000);
-
-  pinMode(PINS_HX711_A[0], INPUT);
-  pinMode(PINS_HX711_A[1], OUTPUT);
-  digitalWrite(PINS_HX711_A[1], LOW);
-  pinMode(PINS_HX711_B[0], INPUT);
-  pinMode(PINS_HX711_B[1], OUTPUT);
-  digitalWrite(PINS_HX711_B[1], LOW);
-
-  setupI2CSensors();
-  Serial.println("#HELLO,PhyLog-ESP32,fw=6.5");
+  // Bewusst KEINE Pin-/Bus-Initialisierung hier: welche Rolle die drei Kanal-Pins spielen,
+  // hängt vom gewählten Sensortyp ab und wird erst bei SET über configureChannelHardware()
+  // hergestellt - beide Kanäle starten unkonfiguriert bei TYPE_NONE.
+  Serial.println("#HELLO,PhyLog-ESP32,fw=7.3");
 }
 
 void loop() {

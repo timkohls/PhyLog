@@ -1,39 +1,15 @@
-### Port 1: **Sensor A** (9 Pins)
+# Pinout
 
-* **Pin 1:** Ground
-* **Pin 2:** D13
-* **Pin 3:** D12
-* **Pin 4:** *leer*
-* **Pin 5:** *leer*
-* **Pin 6:** D26
-* **Pin 7:** D25
-* **Pin 8:** VCC
-* **Pin 9:** *leer*
 
----
 
-### Port 2: **Sensor B** (9 Pins)
-
-* **Pin 1:** Ground
-* **Pin 2:** D14
-* **Pin 3:** D27
-* **Pin 4:** *leer*
-* **Pin 5:** *leer*
-* **Pin 6:** D33
-* **Pin 7:** D32
-* **Pin 8:** VCC
-* **Pin 9:** *leer*
-
----
-
-### Port 3: **Sensor** (9 Pins)
-
-* **Pin 1:** Ground
-* **Pin 2:** SDA
-* **Pin 3:** SCL
-* **Pin 4:** *leer*
-* **Pin 5:** *leer*
-* **Pin 6:** SCK
-* **Pin 7:** Dout
-* **Pin 8:** VCC
-* **Pin 9:** *leer*
+| **RJ45-Pin** | **Sensor A (ESP-Pin)** | **Sensor B (ESP-Pin)** | **I2C-Sensor** | **I2S-Sensor** | **2WS-Sensor** | **Analog-Sensor** |
+| ------------ | ---------------------- | ---------------------- | -------------- | -------------- | -------------- | ----------------- |
+| **1**        | Ground                 | Ground                 | Ground         | Ground         | Ground         | Ground            |
+| **2**        | D13                    | D27                    | SDA            | WS             | DOUT           | Analog            |
+| **3**        | D12                    | D26                    | SCL            | BCLK           | SCK            | *leer*            |
+| **4**        | D14                    | D25                    | *leer*         | SD             | *leer*         | *leer*            |
+| **5**        | *leer*                 | *leer*                 | *leer*         | *leer*         | *leer*         | *leer*            |
+| **6**        | *leer*                 | *leer*                 | *leer*         | *leer*         | *leer*         | *leer*            |
+| **7**        | *leer*                 | *leer*                 | *leer*         | *leer*         | *leer*         | *leer*            |
+| **8**        | VCC                    | VCC                    | VCC            | VCC            | VCC            | VCC               |
+| **9**        | *leer*                 | *leer*                 | *leer*         | *leer*         | *leer*         | *leer*            |

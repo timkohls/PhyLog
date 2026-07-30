@@ -1,24 +1,22 @@
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 /** Verwaltet alle verfügbaren Sensor-Implementierungen. */
 public class SensorRegistry {
 
-    private static final List<Sensor> REGISTERED_SENSORS = new ArrayList<>();
     public static final Sensor NO_SENSOR = new NoSensor();
 
-    static {
-        REGISTERED_SENSORS.add(NO_SENSOR);
-        REGISTERED_SENSORS.add(new INA219VoltageSensor());
-        REGISTERED_SENSORS.add(new INA219CurrentSensor());
-        REGISTERED_SENSORS.add(new VEML7700Sensor());
-        REGISTERED_SENSORS.add(new HX711Sensor());
-    }
+    private static final List<Sensor> REGISTERED_SENSORS = List.of(
+            NO_SENSOR,
+            new INA219VoltageSensor(),
+            new INA219CurrentSensor(),
+            new VEML7700Sensor(),
+            new HX711Sensor(),
+            new MicrophoneSensor()
+    );
 
     /** @return unveränderliche Liste aller verfügbaren Sensoren. */
     public static List<Sensor> getAvailableSensors() {
-        return Collections.unmodifiableList(REGISTERED_SENSORS);
+        return REGISTERED_SENSORS;
     }
 
     /** Sucht einen registrierten Sensor anhand eines Einheiten-Strings, oder {@code null}. */
