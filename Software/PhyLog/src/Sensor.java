@@ -1,8 +1,8 @@
 import java.util.List;
 
 /**
- * Basisklasse aller Sensoren. Kennt Namen, Einheit(en) und entscheidet, wie ein roher
- * Firmware-Wert (Slot + Rohwert) in physikalische Größen umgerechnet wird.
+ * Basisklasse aller Sensoren: Name, Einheit(en) und Umrechnung eines rohen Firmware-Werts
+ * (Slot + Rohwert) in eine physikalische Größe.
  */
 public abstract class Sensor {
     private final String name;
@@ -37,11 +37,15 @@ public abstract class Sensor {
     /** Bezeichner, den die Firmware für diesen Sensor beim {@code SET}-Kommando erwartet. */
     public abstract String getFirmwareTypeName();
 
+    /** Messgröße(n) dieses Sensorprofils (aktuell jeweils genau eine, siehe {@code NoSensor}). */
+    public abstract List<Quantity> getQuantities();
 
-    /**
-     * Eine benannte Messgröße eines Sensorprofils, z. B. "Spannung (V)". Wird als Spaltenkopf in
-     * der Tabelle verwendet.
-     */
+    @Override
+    public String toString() {
+        return name;
+    }
+
+    /** Eine benannte Messgröße eines Sensorprofils, z. B. "Spannung (V)"; dient als Spaltenkopf. */
     public static final class Quantity {
         public final String label;
         public final String unit;
@@ -57,17 +61,5 @@ public abstract class Sensor {
         public String getColumnHeader() {
             return unit.isEmpty() ? label : label + " (" + unit + ")";
         }
-    }
-
-    /**
-     * Messgröße(n) dieses Sensorprofils - aktuell liefert jeder Sensor genau eine (oder keine,
-     * siehe {@code NoSensor}). Als Liste modelliert, damit Tabellen-Spaltenaufbau einheitlich
-     * bleibt, falls künftig doch wieder mehrere Größen gleichzeitig sinnvoll werden.
-     */
-    public abstract List<Quantity> getQuantities();
-
-    @Override
-    public String toString() {
-        return name;
     }
 }

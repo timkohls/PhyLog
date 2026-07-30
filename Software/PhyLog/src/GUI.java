@@ -15,35 +15,62 @@ import java.io.PrintWriter;
 import java.io.IOException;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Hauptfenster von PhyLog: Menüleiste, Werkzeugleiste, Messwerttabellen für Kanal A/B
- * mit automatischem Scrollen, das {@link ChartPanel} sowie die Entgegennahme und Filterung
- * der Live-Messdaten vom ESP32 (siehe {@link #handleIncomingLine}).
+ * Hauptfenster von PhyLog: Menüleiste, Werkzeugleiste, Messwerttabellen für Kanal A/B mit
+ * automatischem Scrollen, das {@link ChartPanel} sowie die Entgegennahme und Filterung der
+ * Live-Messdaten vom ESP32 (siehe {@link #handleIncomingLine}).
  */
 public class GUI extends JFrame {
 
     private static final int DEFAULT_WIDTH = 1280;
     private static final int DEFAULT_HEIGHT = 720;
 
-    private DefaultTableModel tableModelA;
-    private DefaultTableModel tableModelB;
-    private JTable tableA;
-    private JTable tableB;
+    /** Farbe, in der Kanal B im Diagramm dargestellt wird (Kanal A nutzt {@link Theme#POINT}). */
+    private static final Color CHANNEL_B_COLOR = new Color(46, 204, 113);
 
-    private JScrollPane scrollPaneA;
-    private JScrollPane scrollPaneB;
+    /**
+     * Bündelt alles, was pro Messkanal (A oder B) getrennt gehalten werden muss: Tabelle,
+     * aktiver Sensor, letzter Live-Wert, Tara-Offset sowie den kurzen Ringpuffer für den
+     * Trigger-Vorlauf. Ersetzt die früher parallel geführten *A/*B-Feld- und Methodenpaare
+     * durch je eine gemeinsame, kanal-parametrisierte Stelle.
+     */
+    private static final class Channel {
+        final char id;
+        DefaultTableModel tableModel;
+        JTable table;
+        JScrollPane scrollPane;
+        Sensor sensor = SensorRegistry.NO_SENSOR;
+        /** Letzter gültiger, tarierter Messwert für die Live-Anzeige im Konfigurationsdialog. */
+        volatile Double latestValue = null;
+        double tareOffset = 0.0;
+
+        /** Rollierender Puffer der letzten Samples (Millis, Wert) für den Trigger-Vorlauf
+         *  (siehe {@link #bufferForPreTrigger}) - unabhängig davon, ob dieser Kanal selbst der
+         *  Trigger-Kanal ist, da im Trigger-Moment beide Kanäle mit Vorlauf befüllt werden. */
+        final Deque<double[]> preTriggerBuffer = new ArrayDeque<>();
+        /** Vorheriger Wert des Trigger-Kanals, um eine Schwellenwert-Überschreitung als
+         *  Vorzeichenwechsel zu erkennen (siehe {@link #checkTriggerCondition}). */
+        Double lastValueForEdge = null;
+
+        Channel(char id) {
+            this.id = id;
+        }
+    }
+
+    private final Channel channelA = new Channel('A');
+    private final Channel channelB = new Channel('B');
+
     private JPanel tableContainerPanel;
-
     private ChartPanel chartPanel;
     private JSplitPane mainSplitPane;
 
-    private Sensor activeSensorA = SensorRegistry.NO_SENSOR;
-    private Sensor activeSensorB = SensorRegistry.NO_SENSOR;
-
     private JButton btnStart, btnStop, btnTrigger, btnZoomIn, btnZoomOut, btnResetZoom, btnClear;
+    private JLabel lblTriggerStatus;
 
     /** Referenz auf ein bereits geöffnetes Terminal-Fenster. */
     private Terminal terminalWindow;
@@ -51,23 +78,25 @@ public class GUI extends JFrame {
     /** Nullpunkt für die relative Zeitachse in Millisekunden. -1 = noch nicht gesetzt. */
     private long measurementStartMillis = -1;
 
-    /** {@code true} während einer laufenden Aufzeichnung (zwischen Start und Stop). Der
-     *  Zeilen-Listener läuft unabhängig davon dauerhaft - nur das Schreiben in Tabelle/Diagramm
-     *  hängt an dieser Flagge, damit Live-Werte (siehe unten) auch ohne Aufzeichnung ankommen. */
+    /** {@code true} während einer laufenden Aufzeichnung. Der Zeilen-Listener läuft unabhängig
+     *  davon dauerhaft - nur das Schreiben in Tabelle/Diagramm hängt an dieser Flagge, damit
+     *  Live-Werte auch ohne Aufzeichnung ankommen. */
     private boolean recording = false;
-
-    /** Letzter gültiger Messwert je Kanal (des aktiven Sensors), für die Live-Anzeige im
-     *  Sensor-Konfigurationsdialog. {@code null} solange kein gültiger Wert vorliegt. */
-    private volatile Double latestValueA = null;
-    private volatile Double latestValueB = null;
-
-    /** Tara-Offset je Kanal, wird von jedem dekodierten Wert abgezogen (siehe {@link #ingestSample}
-     *  und {@link #onTareRequested}). 0.0 = kein Tara aktiv, unverändertes Verhalten. */
-    private double tareOffsetA = 0.0;
-    private double tareOffsetB = 0.0;
 
     /** Für beide Kanäle gemeinsam geltende Abtastrate in Hz (siehe {@link SensorConfigDialog}). */
     private int sampleRateHz = 20;
+
+    /** Aktuelle Trigger-Konfiguration (siehe {@link TriggerDialog}), Standard: manueller Start. */
+    private TriggerDialog.Config triggerConfig = new TriggerDialog.Config();
+
+    /** {@code true}, nachdem Start gedrückt wurde, solange im Schwellenwert-Modus noch auf die
+     *  Trigger-Bedingung gewartet wird - es wird noch nichts aufgezeichnet (siehe {@link #recording}). */
+    private boolean waitingForTrigger = false;
+
+    /** @return den Kanal 'A' oder 'B'; alles andere fällt auf Kanal A zurück. */
+    private Channel channel(char id) {
+        return (id == 'B') ? channelB : channelA;
+    }
 
     public GUI() {
         super("PhyLog");
@@ -88,7 +117,7 @@ public class GUI extends JFrame {
         initToolBar();
         initMainArea();
 
-        // Läuft dauerhaft, nicht nur während einer Aufzeichnung - siehe ingestSample().
+        // Läuft dauerhaft, nicht nur während einer Aufzeichnung - siehe ingestSample.
         DeviceConnection.getInstance().addLineListener(this::handleIncomingLine);
 
         setSize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
@@ -262,6 +291,7 @@ public class GUI extends JFrame {
                     }
                 }
             }
+            updateStatusLabel();
         });
 
 
@@ -345,41 +375,19 @@ public class GUI extends JFrame {
         toolBar.addSeparator();
         toolBar.add(btnClear);
 
+        toolBar.add(Box.createHorizontalGlue());
+        toolBar.add(new JLabel("Status: "));
+        lblTriggerStatus = new JLabel();
+        toolBar.add(lblTriggerStatus);
+        toolBar.add(Box.createHorizontalStrut(8));
+
         add(toolBar, BorderLayout.NORTH);
+        updateStatusLabel();
     }
 
     private void initMainArea() {
-        tableModelA = createTableModel();
-        tableA = new JTable(tableModelA);
-        tableA.setFillsViewportHeight(true);
-        tableModelA.addTableModelListener(e -> {
-            updateChartData();
-            if (e.getType() == TableModelEvent.INSERT) {
-                SwingUtilities.invokeLater(() -> {
-                    int lastRow = tableA.getRowCount() - 1;
-                    if (lastRow >= 0) {
-                        tableA.scrollRectToVisible(tableA.getCellRect(lastRow, 0, true));
-                    }
-                });
-            }
-        });
-        scrollPaneA = new JScrollPane(tableA);
-
-        tableModelB = createTableModel();
-        tableB = new JTable(tableModelB);
-        tableB.setFillsViewportHeight(true);
-        tableModelB.addTableModelListener(e -> {
-            updateChartData();
-            if (e.getType() == TableModelEvent.INSERT) {
-                SwingUtilities.invokeLater(() -> {
-                    int lastRow = tableB.getRowCount() - 1;
-                    if (lastRow >= 0) {
-                        tableB.scrollRectToVisible(tableB.getCellRect(lastRow, 0, true));
-                    }
-                });
-            }
-        });
-        scrollPaneB = new JScrollPane(tableB);
+        initChannelTable(channelA);
+        initChannelTable(channelB);
 
         tableContainerPanel = new JPanel(new BorderLayout());
         tableContainerPanel.setBackground(Theme.BG);
@@ -394,6 +402,26 @@ public class GUI extends JFrame {
         mainSplitPane.setResizeWeight(0.25);
 
         add(mainSplitPane, BorderLayout.CENTER);
+    }
+
+    /** Baut Tabellenmodell, {@link JTable} und {@link JScrollPane} für einen Kanal und richtet
+     *  automatisches Scrollen zur zuletzt eingefügten Zeile ein. */
+    private void initChannelTable(Channel ch) {
+        ch.tableModel = createTableModel();
+        ch.table = new JTable(ch.tableModel);
+        ch.table.setFillsViewportHeight(true);
+        ch.tableModel.addTableModelListener(e -> {
+            updateChartData();
+            if (e.getType() == TableModelEvent.INSERT) {
+                SwingUtilities.invokeLater(() -> {
+                    int lastRow = ch.table.getRowCount() - 1;
+                    if (lastRow >= 0) {
+                        ch.table.scrollRectToVisible(ch.table.getCellRect(lastRow, 0, true));
+                    }
+                });
+            }
+        });
+        ch.scrollPane = new JScrollPane(ch.table);
     }
 
     private void resetLayout() {
@@ -440,7 +468,7 @@ public class GUI extends JFrame {
                     }
 
                     if (parts.length >= 2) {
-                        int columnCount = tableModelA.getColumnCount();
+                        int columnCount = channelA.tableModel.getColumnCount();
                         if (parts.length < columnCount) continue;
 
                         try {
@@ -448,7 +476,7 @@ public class GUI extends JFrame {
                             for (int c = 0; c < columnCount; c++) {
                                 row[c] = Double.parseDouble(parts[c].replace(",", ".").trim());
                             }
-                            tableModelA.addRow(row);
+                            channelA.tableModel.addRow(row);
                         } catch (NumberFormatException ignored) {
                         }
                     }
@@ -469,7 +497,7 @@ public class GUI extends JFrame {
             Sensor matchedSensor = SensorRegistry.findByUnit(extractedUnit);
 
             if (matchedSensor != null) {
-                activeSensorA = matchedSensor;
+                channelA.sensor = matchedSensor;
                 updateTableLayout();
             }
         }
@@ -503,13 +531,13 @@ public class GUI extends JFrame {
     }
 
     private void openSensorConfigDialog() {
-        Sensor previousA = activeSensorA;
-        Sensor previousB = activeSensorB;
+        Sensor previousA = channelA.sensor;
+        Sensor previousB = channelB.sensor;
 
         boolean liveMonitoringStartedByDialog = ensureLiveDataFlowing();
 
-        SensorConfigDialog dialog = new SensorConfigDialog(this, activeSensorA, activeSensorB, sampleRateHz,
-                () -> latestValueA, () -> latestValueB,
+        SensorConfigDialog dialog = new SensorConfigDialog(this, channelA.sensor, channelB.sensor, sampleRateHz,
+                () -> channelA.latestValue, () -> channelB.latestValue,
                 this::pushSensorSelectionToFirmware, this::onTareRequested);
         dialog.setVisible(true);
 
@@ -518,13 +546,13 @@ public class GUI extends JFrame {
         }
 
         if (dialog.isApplied()) {
-            activeSensorA = dialog.getSelectedSensorA();
-            activeSensorB = dialog.getSelectedSensorB();
+            channelA.sensor = dialog.getSelectedSensorA();
+            channelB.sensor = dialog.getSelectedSensorB();
             sampleRateHz = dialog.getSampleRate();
             updateTableLayout();
             applySampleRateToFirmware();
-            // Die Sensorauswahl selbst wurde schon während der Bedienung live an die Firmware
-            // gesendet (siehe pushSensorSelectionToFirmware), kein erneutes SET nötig.
+            // Die Sensorauswahl selbst wurde schon live an die Firmware gesendet (siehe
+            // pushSensorSelectionToFirmware), kein erneutes SET nötig.
         } else {
             // Abgebrochen: eine im Dialog probeweise gewählte Sensorauswahl wieder rückgängig machen.
             pushSensorSelectionToFirmware('A', previousA);
@@ -549,36 +577,26 @@ public class GUI extends JFrame {
     }
 
     /** Teilt der Firmware sofort mit, welchen Sensortyp ein Kanal abtasten soll, und übernimmt
-     *  die Auswahl zugleich lokal als aktiven Sensor - wird bereits bei jeder Auswahl im Dialog
-     *  aufgerufen, nicht erst nach "Übernehmen" (siehe {@link SensorConfigDialog.SensorSelectionListener}).
-     *  Ohne diese sofortige lokale Übernahme würde {@link #ingestSample} ankommende Live-Werte
-     *  noch mit dem alten Sensorprofil dekodieren, wodurch die Live-Anzeige im Dialog erst nach
-     *  "Übernehmen" und erneutem Öffnen funktionieren würde. Bricht der Nutzer ab, macht
-     *  {@link #openSensorConfigDialog()} dies über denselben Weg wieder rückgängig. */
-    private void pushSensorSelectionToFirmware(char channel, Sensor sensor) {
-        if (channel == 'A') {
-            if (activeSensorA != sensor) tareOffsetA = 0.0;
-            activeSensorA = sensor;
-        } else {
-            if (activeSensorB != sensor) tareOffsetB = 0.0;
-            activeSensorB = sensor;
-        }
+     *  die Auswahl zugleich lokal - wird schon bei jeder Auswahl im Dialog aufgerufen, nicht
+     *  erst nach "Übernehmen" (siehe {@link SensorConfigDialog.SensorSelectionListener}), sonst
+     *  würde {@link #ingestSample} ankommende Live-Werte noch mit dem alten Sensorprofil
+     *  dekodieren. Bricht der Nutzer ab, macht {@link #openSensorConfigDialog()} dies rückgängig. */
+    private void pushSensorSelectionToFirmware(char channelId, Sensor sensor) {
+        Channel ch = channel(channelId);
+        if (ch.sensor != sensor) ch.tareOffset = 0.0;
+        ch.sensor = sensor;
 
         if (!DeviceConnection.getInstance().isConnected()) {
             return;
         }
-        DeviceConnection.getInstance().sendLine("SET," + channel + "," + sensor.getFirmwareTypeName());
+        DeviceConnection.getInstance().sendLine("SET," + channelId + "," + sensor.getFirmwareTypeName());
     }
 
-    /** Übernimmt den aktuell angezeigten Live-Wert eines Kanals als neuen Tara-Offset - kumulativ,
-     *  damit mehrfaches Nullen unproblematisch bleibt (siehe {@link #ingestSample}). Ohne einen
-     *  bereits vorliegenden Live-Wert passiert nichts. */
-    private void onTareRequested(char channel) {
-        if (channel == 'A') {
-            if (latestValueA != null) tareOffsetA += latestValueA;
-        } else {
-            if (latestValueB != null) tareOffsetB += latestValueB;
-        }
+    /** Übernimmt den aktuell angezeigten Live-Wert eines Kanals als neuen (kumulativen)
+     *  Tara-Offset. Ohne bereits vorliegenden Live-Wert passiert nichts. */
+    private void onTareRequested(char channelId) {
+        Channel ch = channel(channelId);
+        if (ch.latestValue != null) ch.tareOffset += ch.latestValue;
     }
 
     private void openTerminal() {
@@ -597,23 +615,65 @@ public class GUI extends JFrame {
             return;
         }
 
-        if (activeSensorA == SensorRegistry.NO_SENSOR && activeSensorB == SensorRegistry.NO_SENSOR){
+        if (channelA.sensor == SensorRegistry.NO_SENSOR && channelB.sensor == SensorRegistry.NO_SENSOR) {
             JOptionPane.showMessageDialog(this,
-                    "Kein Sensor ausgewählt! Bitte unter Sensor, Sensor konfigurieren.","Kein Sensor konfiguriert", JOptionPane.WARNING_MESSAGE);
+                    "Kein Sensor ausgewählt! Bitte unter Sensor, Sensor konfigurieren.", "Kein Sensor konfiguriert", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        if (triggerConfig.thresholdMode && channel(triggerConfig.channel).sensor == SensorRegistry.NO_SENSOR) {
+            JOptionPane.showMessageDialog(this,
+                    "Für den Trigger-Kanal " + triggerConfig.channel + " ist kein Sensor konfiguriert.",
+                    "Trigger nicht konfigurierbar", JOptionPane.WARNING_MESSAGE);
             return;
         }
 
         measurementStartMillis = -1;
-        latestValueA = null;
-        latestValueB = null;
-        recording = true;
+        channelA.latestValue = null;
+        channelB.latestValue = null;
+        channelA.preTriggerBuffer.clear();
+        channelB.preTriggerBuffer.clear();
+        channelA.lastValueForEdge = null;
+        channelB.lastValueForEdge = null;
+
+        if (triggerConfig.thresholdMode) {
+            waitingForTrigger = true;
+            recording = false;
+        } else {
+            waitingForTrigger = false;
+            recording = true;
+        }
+        updateStatusLabel();
 
         DeviceConnection.getInstance().sendLine("START");
     }
 
     private void stopMeasurement() {
         recording = false;
+        waitingForTrigger = false;
+        updateStatusLabel();
         DeviceConnection.getInstance().sendLine("STOP");
+    }
+
+    /** Setzt den Text und die Farbe der Statusanzeige passend zu Verbindung und Messzustand -
+     *  zentrale Stelle, damit die Anzeige nie einen Zustand behauptet, der nicht (mehr) zutrifft
+     *  (z. B. "Bereit", obwohl gar keine Verbindung besteht). */
+    private void updateStatusLabel() {
+        if (lblTriggerStatus == null) return;
+
+        if (!DeviceConnection.getInstance().isConnected()) {
+            lblTriggerStatus.setText("Nicht verbunden");
+            lblTriggerStatus.setForeground(Color.LIGHT_GRAY);
+        } else if (waitingForTrigger) {
+            lblTriggerStatus.setText("Warte auf Trigger (Kanal " + triggerConfig.channel + ") …");
+            lblTriggerStatus.setForeground(Theme.POINT);
+        } else if (recording) {
+            lblTriggerStatus.setText(triggerConfig.thresholdMode ? "Aufnahme läuft (getriggert)" : "Aufnahme läuft");
+            lblTriggerStatus.setForeground(new Color(46, 204, 113));
+        } else {
+            lblTriggerStatus.setText("Bereit");
+            lblTriggerStatus.setForeground(Theme.ACCENT);
+        }
     }
 
     /** Verarbeitet eine von der Firmware empfangene Datenzeile ("D,millis,Kanal,Slot,Rohwert"). */
@@ -627,29 +687,27 @@ public class GUI extends JFrame {
 
         try {
             long millis = Long.parseLong(parts[1].trim());
-            char channel = parts[2].trim().charAt(0);
+            char channelId = parts[2].trim().charAt(0);
             int slot = Integer.parseInt(parts[3].trim());
             long rawValue = Long.parseLong(parts[4].trim());
 
-            double timeSeconds = 0.0;
-            if (recording) {
-                if (measurementStartMillis < 0) {
-                    measurementStartMillis = millis;
-                }
-                timeSeconds = (millis - measurementStartMillis) / 1000.0;
-            }
-
-            if (channel == 'A') {
-                ingestSample(activeSensorA, slot, rawValue, timeSeconds, true);
-            } else if (channel == 'B') {
-                ingestSample(activeSensorB, slot, rawValue, timeSeconds, false);
+            if (channelId == 'A' || channelId == 'B') {
+                ingestSample(channel(channelId), slot, rawValue, millis);
             }
         } catch (NumberFormatException e) {
             // Defekte/unvollständige Zeilen stumm verwerfen
         }
     }
 
-    private void ingestSample(Sensor sensor, int slot, long rawValue, double timeSeconds, boolean isChannelA) {
+    /**
+     * Dekodiert einen Rohwert für den gegebenen Kanal, zieht dessen Tara-Offset ab und
+     * aktualisiert den Live-Wert. Solange auf den Trigger gewartet wird ({@link #waitingForTrigger}),
+     * fließt der Wert nur in den Vorlauf-Puffer und die Flankenprüfung (siehe
+     * {@link #checkTriggerCondition}); erst nach dem Auslösen bzw. im manuellen Modus landet er
+     * in der Tabelle des Kanals.
+     */
+    private void ingestSample(Channel ch, int slot, long rawValue, long millis) {
+        Sensor sensor = ch.sensor;
         if (sensor == null || sensor == SensorRegistry.NO_SENSOR) {
             return;
         }
@@ -664,82 +722,152 @@ public class GUI extends JFrame {
             return;
         }
 
-        double tareOffset = isChannelA ? tareOffsetA : tareOffsetB;
-        double value = rawDecoded - tareOffset;
+        double value = rawDecoded - ch.tareOffset;
+        ch.latestValue = value;
+        bufferForPreTrigger(ch, millis, value);
 
-        Object[] row = {timeSeconds, value};
-        if (isChannelA) {
-            latestValueA = value;
-            if (recording) tableModelA.addRow(row);
-        } else {
-            latestValueB = value;
-            if (recording) tableModelB.addRow(row);
+        if (waitingForTrigger) {
+            checkTriggerCondition(ch, millis, value);
+            return;
+        }
+
+        if (!recording) return;
+
+        if (measurementStartMillis < 0) {
+            measurementStartMillis = millis;
+        }
+        double timeSeconds = (millis - measurementStartMillis) / 1000.0;
+        ch.tableModel.addRow(new Object[]{timeSeconds, value});
+    }
+
+    /** Hält die letzten {@link TriggerDialog.Config#preTriggerMs} Millisekunden Messwerte eines
+     *  Kanals vor, damit {@link #fireTrigger} den Vorlauf beider Kanäle nachtragen kann. */
+    private void bufferForPreTrigger(Channel ch, long millis, double value) {
+        if (triggerConfig.preTriggerMs <= 0) return;
+
+        ch.preTriggerBuffer.addLast(new double[]{millis, value});
+        long cutoff = millis - triggerConfig.preTriggerMs;
+        while (!ch.preTriggerBuffer.isEmpty() && ch.preTriggerBuffer.peekFirst()[0] < cutoff) {
+            ch.preTriggerBuffer.removeFirst();
         }
     }
 
+    /** Prüft, ob der neue Wert des Trigger-Kanals die konfigurierte Schwelle in der gewünschten
+     *  Richtung überschreitet (Vorzeichenwechsel zwischen vorherigem und aktuellem Wert), und
+     *  löst in diesem Fall {@link #fireTrigger} aus. Samples anderer Kanäle werden ignoriert. */
+    private void checkTriggerCondition(Channel ch, long millis, double value) {
+        if (ch.id != triggerConfig.channel) return;
+
+        Double previous = ch.lastValueForEdge;
+        ch.lastValueForEdge = value;
+        if (previous == null) return; // erster Wert nach dem Scharfstellen: noch keine Flanke möglich
+
+        double threshold = triggerConfig.threshold;
+        boolean crossed = triggerConfig.risingEdge
+                ? (previous < threshold && value >= threshold)
+                : (previous > threshold && value <= threshold);
+
+        if (crossed) {
+            fireTrigger(millis);
+        }
+    }
+
+    /** Löst die Aufzeichnung aus: setzt den Zeitnullpunkt auf {@code preTriggerMs} vor dem
+     *  Trigger-Zeitpunkt und trägt die zwischenzeitlich gepufferten Vorlauf-Samples beider
+     *  Kanäle in ihre Tabellen nach, bevor live weiter aufgezeichnet wird. */
+    private void fireTrigger(long triggerMillis) {
+        waitingForTrigger = false;
+        recording = true;
+        measurementStartMillis = triggerMillis - triggerConfig.preTriggerMs;
+
+        backfillPreTriggerData(channelA);
+        backfillPreTriggerData(channelB);
+
+        updateStatusLabel();
+    }
+
+    /** Trägt die im Vorlauf-Puffer gesammelten Samples eines Kanals in dessen Tabelle nach,
+     *  soweit sie nach {@link #measurementStartMillis} liegen, und leert den Puffer danach. */
+    private void backfillPreTriggerData(Channel ch) {
+        for (double[] sample : ch.preTriggerBuffer) {
+            long sampleMillis = (long) sample[0];
+            if (sampleMillis < measurementStartMillis) continue;
+            double timeSeconds = (sampleMillis - measurementStartMillis) / 1000.0;
+            ch.tableModel.addRow(new Object[]{timeSeconds, sample[1]});
+        }
+        ch.preTriggerBuffer.clear();
+    }
+
     /** Sendet die für beide Kanäle gemeinsam geltende Abtastrate ({@link #sampleRateHz}) an die
-     *  Firmware (Obergrenze 200 Hz, siehe {@code phylog_firmware.ino}). */
+     *  Firmware (Obergrenze 1000 Hz, siehe {@code phylog_firmware.ino}). */
     private void applySampleRateToFirmware() {
         if (!DeviceConnection.getInstance().isConnected() || sampleRateHz <= 0) {
             return;
         }
-        DeviceConnection.getInstance().sendLine("RATE," + Math.min(sampleRateHz, 200));
+        DeviceConnection.getInstance().sendLine("RATE," + Math.min(sampleRateHz, 1000));
     }
 
     private void openTriggerDialog() {
-        TriggerDialog dialog = new TriggerDialog(this);
+        TriggerDialog dialog = new TriggerDialog(this, triggerConfig);
         dialog.setVisible(true);
+
+        if (dialog.isApplied()) {
+            triggerConfig = dialog.getConfig();
+        }
     }
 
     private void updateTableLayout() {
         tableContainerPanel.removeAll();
 
-        configureTableModel(tableModelA, activeSensorA.getQuantities());
-        configureTableModel(tableModelB, activeSensorB.getQuantities());
+        configureTableModel(channelA);
+        configureTableModel(channelB);
         updateChartUnits();
 
-        scrollPaneA.setBorder(BorderFactory.createTitledBorder(
+        channelA.scrollPane.setBorder(BorderFactory.createTitledBorder(
                 BorderFactory.createLineBorder(Theme.BORDER),
-                "Sensor A: " + activeSensorA.getName(),
+                "Sensor A: " + channelA.sensor.getName(),
                 0, 0, null, Theme.TEXT));
 
-        boolean hasSecondSensor = activeSensorB != null && activeSensorB != SensorRegistry.NO_SENSOR;
-
-        if (hasSecondSensor) {
-            scrollPaneB.setBorder(BorderFactory.createTitledBorder(
+        if (hasSensor(channelB)) {
+            channelB.scrollPane.setBorder(BorderFactory.createTitledBorder(
                     BorderFactory.createLineBorder(Theme.BORDER),
-                    "Sensor B: " + activeSensorB.getName(),
+                    "Sensor B: " + channelB.sensor.getName(),
                     0, 0, null, Theme.TEXT));
 
-            JSplitPane verticalSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, scrollPaneA, scrollPaneB);
+            JSplitPane verticalSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, channelA.scrollPane, channelB.scrollPane);
             verticalSplit.setResizeWeight(0.5);
             tableContainerPanel.add(verticalSplit, BorderLayout.CENTER);
         } else {
-            tableContainerPanel.add(scrollPaneA, BorderLayout.CENTER);
+            tableContainerPanel.add(channelA.scrollPane, BorderLayout.CENTER);
         }
 
         tableContainerPanel.revalidate();
         tableContainerPanel.repaint();
     }
 
-    /** Setzt den Spaltenkopf für die Messgröße eines Sensorprofils und leert dabei die Tabelle,
-     *  da alte Zeilen unter einer neuen Spaltenbedeutung keinen Sinn mehr ergeben würden. */
-    private void configureTableModel(DefaultTableModel model, List<Sensor.Quantity> quantities) {
-        model.setRowCount(0);
+    /** @return {@code true}, wenn der Kanal einen echten (nicht "Kein Sensor") Sensor gewählt hat. */
+    private boolean hasSensor(Channel ch) {
+        return ch.sensor != null && ch.sensor != SensorRegistry.NO_SENSOR;
+    }
+
+    /** Setzt den Spaltenkopf für die Messgröße eines Kanals und leert dabei die Tabelle, da alte
+     *  Zeilen unter einer neuen Spaltenbedeutung keinen Sinn mehr ergeben würden. */
+    private void configureTableModel(Channel ch) {
+        List<Sensor.Quantity> quantities = ch.sensor.getQuantities();
+        ch.tableModel.setRowCount(0);
         String header = quantities.isEmpty() ? "Messwert" : quantities.getFirst().getColumnHeader();
-        model.setColumnIdentifiers(new Object[]{"Zeit (s)", header});
+        ch.tableModel.setColumnIdentifiers(new Object[]{"Zeit (s)", header});
     }
 
     /** Setzt die Achsenbeschriftung: bei nur einem aktiven Kanal zeigt die Y-Achse dessen
-     *  Messgröße, bei zwei aktiven Kanälen bleibt sie bewusst generisch ("Messwerte"), da eine
-     *  einzelne Achse nicht zwei unterschiedlichen Einheiten gerecht werden kann. Welche Einheit
-     *  zu welchem Kanal gehört, zeigt stattdessen die Legende im Diagramm (siehe
-     *  {@link ChartPanel#setMainLabel} und {@link #updateChartData}). */
+     *  Messgröße, bei zwei aktiven Kanälen bleibt sie generisch ("Messwerte"), da eine einzelne
+     *  Achse nicht zwei Einheiten gerecht werden kann - welche Einheit zu welchem Kanal gehört,
+     *  zeigt stattdessen die Legende (siehe {@link ChartPanel#setMainLabel}). */
     private void updateChartUnits() {
         if (chartPanel == null) return;
 
-        List<Sensor.Quantity> quantitiesA = activeSensorA.getQuantities();
-        boolean hasSecondSensor = activeSensorB != null && activeSensorB != SensorRegistry.NO_SENSOR;
+        List<Sensor.Quantity> quantitiesA = channelA.sensor.getQuantities();
+        boolean hasSecondSensor = hasSensor(channelB);
 
         String axisLabel = hasSecondSensor
                 ? "Messwerte"
@@ -760,31 +888,30 @@ public class GUI extends JFrame {
     }
 
     /** Zeigt Kanal A immer, Kanal B (falls ein Sensor gewählt ist) zusätzlich in eigener Farbe
-     *  im selben Diagramm - damit auch der zweite Kanal wie gewünscht sichtbar ist. */
+     *  im selben Diagramm. */
     private void updateChartData() {
         if (chartPanel == null) return;
 
-        chartPanel.setData(extractDataFromTable(tableModelA, 1));
+        chartPanel.setData(extractDataFromTable(channelA.tableModel, 1));
 
         List<ChartPanel.Series> extras = new ArrayList<>();
-        if (activeSensorB != null && activeSensorB != SensorRegistry.NO_SENSOR) {
-            List<Sensor.Quantity> quantitiesB = activeSensorB.getQuantities();
-            String labelB = "Kanal B: " + (quantitiesB.isEmpty() ? activeSensorB.getName() : quantitiesB.get(0).getColumnHeader());
-            extras.add(new ChartPanel.Series(labelB, new Color(46, 204, 113), extractDataFromTable(tableModelB, 1)));
+        if (hasSensor(channelB)) {
+            List<Sensor.Quantity> quantitiesB = channelB.sensor.getQuantities();
+            String labelB = "Kanal B: " + (quantitiesB.isEmpty() ? channelB.sensor.getName() : quantitiesB.get(0).getColumnHeader());
+            extras.add(new ChartPanel.Series(labelB, CHANNEL_B_COLOR, extractDataFromTable(channelB.tableModel, 1)));
         }
         chartPanel.setExtraSeries(extras);
 
         chartPanel.repaint();
     }
 
-    /** Exportiert Kanal A und/oder Kanal B als CSV - je nachdem, welche(r) Kanal/Kanäle
-     *  Messwerte enthält. Haben beide Daten, entstehen zwei separate Dateien (Suffix "_KanalA"
-     *  bzw. "_KanalB" vor der Endung), da eine gemeinsame Datei bei unterschiedlichen Sensoren
-     *  und potenziell unterschiedlicher Zeilenzahl je Kanal keine sinnvolle gemeinsame
+    /** Exportiert Kanal A und/oder Kanal B als CSV, je nachdem welche(r) Kanal Messwerte enthält.
+     *  Haben beide Daten, entstehen zwei separate Dateien (Suffix "_KanalA"/"_KanalB"), da eine
+     *  gemeinsame Datei bei unterschiedlichen Sensoren/Zeilenzahlen keine sinnvolle gemeinsame
      *  Tabellenstruktur hätte. */
     private void exportCsv() {
-        boolean hasDataA = tableModelA.getRowCount() > 0;
-        boolean hasDataB = tableModelB.getRowCount() > 0;
+        boolean hasDataA = channelA.tableModel.getRowCount() > 0;
+        boolean hasDataB = channelB.tableModel.getRowCount() > 0;
 
         if (!hasDataA && !hasDataB) {
             JOptionPane.showMessageDialog(this, "Keine Daten zum Exportieren vorhanden.", "Hinweis", JOptionPane.INFORMATION_MESSAGE);
@@ -808,15 +935,11 @@ public class GUI extends JFrame {
         List<String> writtenFileNames = new ArrayList<>();
 
         try {
-            if (hasDataA) {
-                File fileA = bothActive ? withSuffix(selectedFile, "KanalA") : selectedFile;
-                writeCsv(fileA, tableModelA);
-                writtenFileNames.add(fileA.getName());
-            }
-            if (hasDataB) {
-                File fileB = bothActive ? withSuffix(selectedFile, "KanalB") : selectedFile;
-                writeCsv(fileB, tableModelB);
-                writtenFileNames.add(fileB.getName());
+            for (Channel ch : new Channel[]{channelA, channelB}) {
+                if (ch.tableModel.getRowCount() == 0) continue;
+                File file = bothActive ? withSuffix(selectedFile, "Kanal" + ch.id) : selectedFile;
+                writeCsv(file, ch.tableModel);
+                writtenFileNames.add(file.getName());
             }
             JOptionPane.showMessageDialog(this, "CSV erfolgreich gespeichert: " + String.join(", ", writtenFileNames),
                     "Erfolg", JOptionPane.INFORMATION_MESSAGE);
@@ -892,8 +1015,8 @@ public class GUI extends JFrame {
     }
 
     public void clearData() {
-        tableModelA.setRowCount(0);
-        tableModelB.setRowCount(0);
+        channelA.tableModel.setRowCount(0);
+        channelB.tableModel.setRowCount(0);
     }
 
     private List<double[]> extractDataFromTable(DefaultTableModel model, int valueColumnIndex) {

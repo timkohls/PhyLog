@@ -85,7 +85,7 @@ public class Terminal extends JFrame {
         return scrollPane;
     }
 
-    /** Nur die vier Befehle, die die vereinfachte Digital-only Firmware kennt. */
+    /** Vier Quick Befehle. */
     private JPanel buildCommandPanel() {
         JPanel outer = new JPanel(new BorderLayout(8, 8));
         outer.setBorder(new EmptyBorder(0, 8, 8, 8));

@@ -1,23 +1,11 @@
 import javax.swing.*;
-import com.formdev.flatlaf.FlatDarkLaf;
 
-/**
- * Einstiegspunkt der PhyLog-Anwendung.
- */
+/** Einstiegspunkt der PhyLog-Anwendung. */
 public class Main {
 
-    /**
-     * Richtet das Dark-Theme ein und öffnet das Hauptfenster auf dem Swing-Event-Dispatch-Thread.
-     *
-     * @param args Kommandozeilenargumente (werden aktuell nicht ausgewertet)
-     */
+    /** Richtet das Dark-Theme ein und öffnet das Hauptfenster auf dem EDT. */
     public static void main(String[] args) {
-
         Theme.setup();
-
-        SwingUtilities.invokeLater(() -> {
-            new GUI().setVisible(true);
-        });
+        SwingUtilities.invokeLater(() -> new GUI().setVisible(true));
     }
-
 }

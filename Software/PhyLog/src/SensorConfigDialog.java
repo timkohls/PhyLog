@@ -38,7 +38,7 @@ public class SensorConfigDialog extends JDialog {
         void onTareRequested(char channel);
     }
 
-    private static final String[] SAMPLE_RATES = {"10 Hz", "20 Hz", "50 Hz", "100 Hz", "200 Hz"};
+    private static final String[] SAMPLE_RATES = {"10 Hz", "20 Hz", "50 Hz", "100 Hz", "200 Hz", "500 Hz", "1000 Hz"};
     private static final int LIVE_REFRESH_MS = 200;
 
     private final Channel channelA = new Channel();

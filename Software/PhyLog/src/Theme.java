@@ -3,19 +3,12 @@ import com.formdev.flatlaf.FlatDarkLaf;
 import javax.swing.*;
 import java.awt.*;
 
-/**
- * Zentrale Farbpalette und Look-and-Feel-Konfiguration für PhyLog.
- *
- * <p>Alle Farbwerte, die anderswo im Programm verwendet werden (z. B. in {@link ChartPanel}
- * oder {@link ChiSquareInfoDialog}), sollten von hier bezogen werden, statt neue Farbwerte an
- * Ort und Stelle zu erfinden - so bleibt das Erscheinungsbild an einer einzigen Stelle
- * änderbar.</p>
- */
+/** Zentrale Farbpalette und Look-and-Feel-Konfiguration für PhyLog. */
 public class Theme {
 
     /** Fensterhintergrund. */
     public static final Color BG = new Color(37, 37, 37);
-    /** Hintergrund von Panels/Karten (etwas heller als {@link #BG}). */
+    /** Hintergrund von Panels/Karten. */
     public static final Color PANEL = new Color(48, 48, 48);
     /** Rahmen- und Trennlinienfarbe. */
     public static final Color BORDER = new Color(68, 68, 68);
@@ -26,14 +19,9 @@ public class Theme {
     /** Farbe für einzelne Messpunkte im Diagramm. */
     public static final Color POINT = new Color(255, 170, 90);
 
-    /**
-     * Initialisiert FlatLaf im Dark-Modus und überschreibt die für diese Anwendung relevanten
-     * UIManager-Standardwerte (Eckenradien, Panel-/Tabellen-/Menüfarben) mit den Werten aus
-     * dieser Klasse. Muss einmalig beim Programmstart aufgerufen werden, bevor irgendein
-     * Swing-Fenster erzeugt wird (siehe {@link Main#main(String[])}).
-     */
+    /** Initialisiert FlatLaf (Dark) und setzt die UIManager-Defaults auf diese Palette. Vor dem
+     *  ersten Swing-Fenster aufzurufen (siehe {@link Main#main}). */
     public static void setup() {
-
         FlatDarkLaf.setup();
 
         UIManager.put("Component.arc", 15);
@@ -66,5 +54,4 @@ public class Theme {
 
         UIManager.put("TitledBorder.titleColor", TEXT);
     }
-
 }

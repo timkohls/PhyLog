@@ -560,15 +560,15 @@ public class ChartPanel extends JPanel {
 
     /** Wertet eine per linker Maustaste gezogene Rubber-Band-Auswahl als neues Zoom-Fenster aus.
      *  {@link #originalData} bleibt dabei unangetastet - siehe {@link #recomputeDisplayData()}. */
+    /** Wertet ein per linker Maustaste gezogenes Rechteck aus: die Bounding-Box wird zum neuen
+     *  Zoom-Fenster (siehe {@link #viewMinX}). Die Pixel-zu-Daten-Umrechnung nutzt dieselbe
+     *  Geometrie wie das Zeichnen selbst ({@link #computePlotGeometry}), damit die Auswahl exakt
+     *  dem entspricht, was gerade sichtbar ist - auch wenn schon vorher gezoomt war. */
     private void applySelectionZoom(Point p1, Point p2) {
-        int padding = 65;
-        int width = getWidth();
-        int height = getHeight();
+        if (originalData == null || originalData.isEmpty()) return;
 
-        int plotWidth = width - 2 * padding;
-        int plotHeight = height - 2 * padding;
-
-        if (plotWidth <= 0 || plotHeight <= 0 || originalData == null || originalData.isEmpty()) return;
+        PlotGeometry geo = computePlotGeometry();
+        if (geo == null) return;
 
         int rectX = Math.min(p1.x, p2.x);
         int rectY = Math.min(p1.y, p2.y);
@@ -577,35 +577,11 @@ public class ChartPanel extends JPanel {
 
         if (rectW < 10 || rectH < 10) return;
 
-        double minX = Double.MAX_VALUE, maxX = -Double.MAX_VALUE;
-        double minY = Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        double selMinX = geo.minX + ((double) (rectX - geo.padding) / geo.plotWidth) * geo.rangeX;
+        double selMaxX = geo.minX + ((double) (rectX + rectW - geo.padding) / geo.plotWidth) * geo.rangeX;
 
-        for (double[] point : displayData) {
-            if (point[0] < minX) minX = point[0];
-            if (point[0] > maxX) maxX = point[0];
-            if (point[1] < minY) minY = point[1];
-            if (point[1] > maxY) maxY = point[1];
-        }
-        for (Series series : extraSeries) {
-            for (double[] point : series.data) {
-                if (point[0] < minX) minX = point[0];
-                if (point[0] > maxX) maxX = point[0];
-                if (point[1] < minY) minY = point[1];
-                if (point[1] > maxY) maxY = point[1];
-            }
-        }
-
-        if (minX == maxX) maxX = minX + 1.0;
-        if (minY == maxY) { minY -= 1.0; maxY += 1.0; }
-
-        double rangeX = (maxX - minX) / zoomFactor;
-        double rangeY = (maxY - minY) / zoomFactor;
-
-        double selMinX = minX + ((double) (rectX - padding) / plotWidth) * rangeX;
-        double selMaxX = minX + ((double) (rectX + rectW - padding) / plotWidth) * rangeX;
-
-        double selMaxY = minY + ((double) ((height - padding) - rectY) / plotHeight) * rangeY;
-        double selMinY = minY + ((double) ((height - padding) - (rectY + rectH)) / plotHeight) * rangeY;
+        double selMaxY = geo.minY + ((double) ((geo.height - geo.padding) - rectY) / geo.plotHeight) * geo.rangeY;
+        double selMinY = geo.minY + ((double) ((geo.height - geo.padding) - (rectY + rectH)) / geo.plotHeight) * geo.rangeY;
 
         int pointsInWindow = 0;
         for (double[] pt : originalData) {
@@ -754,7 +730,7 @@ public class ChartPanel extends JPanel {
             }
 
             if (showLine && points.size() > 1) {
-                g2.setColor(series.color);
+                g2.setColor(series.color.darker());
                 g2.setStroke(new BasicStroke(1.5f));
                 Path2D path = new Path2D.Double();
                 path.moveTo(points.get(0).x, points.get(0).y);
@@ -842,47 +818,58 @@ public class ChartPanel extends JPanel {
 
         if (plotWidth <= 0 || plotHeight <= 0) return null;
 
-        double minX = 0, maxX = 10;
-        double minY = 0, maxY = 10;
+        double minX, maxX, minY, maxY;
 
-        boolean hasMainData = (displayData != null && !displayData.isEmpty());
-        boolean hasExtraData = false;
-        if (extraSeries != null) {
-            for (Series s : extraSeries) {
-                if (s.data != null && !s.data.isEmpty()) {
-                    hasExtraData = true;
-                    break;
-                }
-            }
-        }
+        if (viewMinX != null) {
+            // Ein Zoom-/Auswahlfenster ist aktiv: DAS ist die Achsen-Spanne. Würde man sie
+            // stattdessen wie unten aus den Daten neu berechnen, würde die volle Ausdehnung der
+            // (nicht gefilterten) Zusatzserien die Achse sofort wieder auf die Gesamtbreite
+            // aufziehen und den Zoom optisch aufheben, obwohl displayData korrekt gefiltert ist.
+            minX = viewMinX; maxX = viewMaxX;
+            minY = viewMinY; maxY = viewMaxY;
+        } else {
+            minX = 0; maxX = 10;
+            minY = 0; maxY = 10;
 
-        if (hasMainData || hasExtraData) {
-            minX = Double.MAX_VALUE; maxX = -Double.MAX_VALUE;
-            minY = Double.MAX_VALUE; maxY = -Double.MAX_VALUE;
-
-            if (hasMainData) {
-                for (double[] point : displayData) {
-                    if (point[0] < minX) minX = point[0];
-                    if (point[0] > maxX) maxX = point[0];
-                    if (point[1] < minY) minY = point[1];
-                    if (point[1] > maxY) maxY = point[1];
-                }
-            }
-
+            boolean hasMainData = (displayData != null && !displayData.isEmpty());
+            boolean hasExtraData = false;
             if (extraSeries != null) {
-                for (Series series : extraSeries) {
-                    if (series.data != null) {
-                        for (double[] point : series.data) {
-                            if (point[0] < minX) minX = point[0];
-                            if (point[0] > maxX) maxX = point[0];
-                            if (point[1] < minY) minY = point[1];
-                            if (point[1] > maxY) maxY = point[1];
-                        }
+                for (Series s : extraSeries) {
+                    if (s.data != null && !s.data.isEmpty()) {
+                        hasExtraData = true;
+                        break;
                     }
                 }
             }
 
-            if (minX == Double.MAX_VALUE) minX = 0; // Fallback falls doch etwas schiefgeht
+            if (hasMainData || hasExtraData) {
+                minX = Double.MAX_VALUE; maxX = -Double.MAX_VALUE;
+                minY = Double.MAX_VALUE; maxY = -Double.MAX_VALUE;
+
+                if (hasMainData) {
+                    for (double[] point : displayData) {
+                        if (point[0] < minX) minX = point[0];
+                        if (point[0] > maxX) maxX = point[0];
+                        if (point[1] < minY) minY = point[1];
+                        if (point[1] > maxY) maxY = point[1];
+                    }
+                }
+
+                if (extraSeries != null) {
+                    for (Series series : extraSeries) {
+                        if (series.data != null) {
+                            for (double[] point : series.data) {
+                                if (point[0] < minX) minX = point[0];
+                                if (point[0] > maxX) maxX = point[0];
+                                if (point[1] < minY) minY = point[1];
+                                if (point[1] > maxY) maxY = point[1];
+                            }
+                        }
+                    }
+                }
+
+                if (minX == Double.MAX_VALUE) minX = 0; // Fallback falls doch etwas schiefgeht
+            }
             if (minX == maxX) maxX = minX + 1.0;
             if (minY == maxY) { minY -= 1.0; maxY += 1.0; }
         }
@@ -979,7 +966,7 @@ public class ChartPanel extends JPanel {
      * @param points bereits in Bildschirmkoordinaten projizierte Messpunkte
      */
     private void drawConnectingLine(Graphics2D g2, List<Point2DDouble> points) {
-        g2.setColor(Theme.ACCENT);
+        g2.setColor(Theme.POINT.darker());
         g2.setStroke(new BasicStroke(1.5f));
         Path2D path = new Path2D.Double();
         path.moveTo(points.get(0).x, points.get(0).y);
