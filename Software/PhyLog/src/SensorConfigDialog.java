@@ -63,6 +63,7 @@ public class SensorConfigDialog extends JDialog {
         JTextField txtOffset;
         JLabel lblLive;
         JButton btnTara;
+        JButton btnCalibrate;
     }
 
     /**
@@ -85,7 +86,7 @@ public class SensorConfigDialog extends JDialog {
         this.selectionListener = selectionListener;
         this.tareListener = tareListener;
 
-        setSize(760, 300);
+        setSize(760, 330);
         setLocationRelativeTo(owner);
         setLayout(new BorderLayout(10, 10));
 
@@ -133,6 +134,7 @@ public class SensorConfigDialog extends JDialog {
         ch.lblLive = new JLabel("–");
         ch.lblLive.setForeground(Theme.ACCENT);
         ch.btnTara = new JButton("Nullen");
+        ch.btnCalibrate = new JButton("Kalibrieren...");
 
         ch.btnTara.addActionListener(e -> {
             LiveSource source = (ch == channelA) ? live1 : live2;
@@ -145,9 +147,18 @@ public class SensorConfigDialog extends JDialog {
             }
         });
 
+        ch.btnCalibrate.addActionListener(e -> {
+            Sensor sensor = (Sensor) ch.comboSensor.getSelectedItem();
+            if (sensor != null && !sensor.getCalibrationParameters().isEmpty()) {
+                new CalibrationDialog(SwingUtilities.getWindowAncestor(panel), sensor).setVisible(true);
+                updateChannelStates(); // Live-Anzeige kann sich durch die neue Kalibrierung ändern
+            }
+        });
+
         addFormRow(panel, gbc, 0, "Sensor:", ch.comboSensor);
         addFormRow(panel, gbc, 1, "Einheit:", ch.lblUnit);
         addTaraRow(panel, gbc, 2, "Offset / Tara:", ch.txtOffset, ch.lblLive, ch.btnTara);
+        addFormRow(panel, gbc, 3, "Kalibrierung:", ch.btnCalibrate);
 
         return panel;
     }
@@ -217,6 +228,7 @@ public class SensorConfigDialog extends JDialog {
 
         ch.lblUnit.setText(active ? sensor.getUnit() : "-");
         ch.txtOffset.setEnabled(active);
+        ch.btnCalibrate.setEnabled(active && !sensor.getCalibrationParameters().isEmpty());
 
         Double liveValue = (active && source != null) ? source.poll() : null;
         ch.lblLive.setText(liveValue != null ? String.format("Live: %.3f %s", liveValue, sensor.getUnit()) : "–");

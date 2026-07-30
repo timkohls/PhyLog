@@ -106,14 +106,17 @@ class VEML7700Sensor extends Sensor {
 
 /** HX711: dekodiert die Messwerte einer Wägezelle/Kraftsensors (Slot 0). */
 class HX711Sensor extends Sensor {
+    /** Counts pro Newton - über {@code CalibrationDialog} anpassbar (siehe
+     *  {@link #getCalibrationParameters}), da dieser Wert von der konkreten Wägezelle abhängt. */
+    private double calibrationFactor = 10000.0;
+
     public HX711Sensor() {
         super("HX711 (Kraft / Gewicht)", "N", List.of("N", "G", "KG"));
     }
 
     @Override
     public double decode(int slot, long rawValue) {
-        // TODO: eigenen Kalibrierungsfaktor der Wägezelle eintragen (z. B. rawValue / 2280.0).
-        return rawValue / 1000.0;
+        return rawValue / calibrationFactor;
     }
 
     @Override
@@ -125,34 +128,59 @@ class HX711Sensor extends Sensor {
     public String getFirmwareTypeName() {
         return "HX711";
     }
+
+    @Override
+    public List<CalibrationParameter> getCalibrationParameters() {
+        return List.of(new CalibrationParameter("Kalibrierfaktor", "Counts/N",
+                () -> calibrationFactor, v -> calibrationFactor = v));
+    }
 }
 
 /**
  * INMP441: I2S-MEMS-Mikrofon (Slot 0). Die Firmware liest die hohe I2S-Abtastrate intern und
  * schickt je Zyklus nur den Spitzenbetrag (Peak-Amplitude, 0..8388607 für 24 Bit) - der
  * serielle Kanal bleibt dadurch identisch zu allen anderen Sensoren (ein Wert pro Intervall).
- * Ohne Kalibrierung auf ein Referenz-Schallpegelmessgerät ist das eine relative Lautstärke,
- * kein kalibrierter dB(SPL)-Wert.
+ *
+ * <p>decode() rechnet den Spitzenbetrag über die Datenblatt-Empfindlichkeit (typischerweise
+ * -26 dBFS bei 94 dB SPL, siehe {@link #getCalibrationParameters}) auf einen geschätzten
+ * Schalldruckpegel um. Das ist eine Schätzung auf Basis des Datenblatt-Richtwerts, keine
+ * kalibrierte Messung - dazu müsste die konkrete Kapsel gegen ein Referenz-Schallpegelmessgerät
+ * abgeglichen werden. Es ist außerdem unbewertet (kein A-Filter, nur Spitzenwert einer
+ * I2S-Charge), also kein echtes dB(A).</p>
  */
 class MicrophoneSensor extends Sensor {
     private static final double FULL_SCALE = 8_388_607.0; // 2^23 - 1, größter 24-Bit-Betrag
+    /** Testbedingung, auf die sich Mikrofon-Datenblätter üblicherweise beziehen. */
+    private static final double REFERENCE_SPL_DB = 94.0;
+
+    /** Empfindlichkeit in dBFS bei {@link #REFERENCE_SPL_DB} - Datenblatt-Richtwert für das
+     *  INMP441, streut aber pro Exemplar; über {@link #getCalibrationParameters} anpassbar. */
+    private double sensitivityDbfsAt94db = 0.0;
 
     public MicrophoneSensor() {
-        super("INMP441 (Mikrofon)", "%", List.of("%", "REL"));
+        super("INMP441 (Mikrofon)", "dB", List.of("DB", "DBSPL"));
     }
 
     @Override
     public double decode(int slot, long rawValue) {
-        return (rawValue / FULL_SCALE) * 100.0;
+        double amplitude = Math.max(rawValue, 1) / FULL_SCALE;
+        double dbFullScale = 20.0 * Math.log10(amplitude);
+        return REFERENCE_SPL_DB + (dbFullScale - sensitivityDbfsAt94db);
     }
 
     @Override
     public List<Quantity> getQuantities() {
-        return List.of(new Quantity("Lautstärke (rel.)", "%", 0));
+        return List.of(new Quantity("Schalldruckpegel (geschätzt)", "dB", 0));
     }
 
     @Override
     public String getFirmwareTypeName() {
         return "MIC";
+    }
+
+    @Override
+    public List<CalibrationParameter> getCalibrationParameters() {
+        return List.of(new CalibrationParameter("Empfindlichkeit @ 94 dB SPL", "dBFS",
+                () -> sensitivityDbfsAt94db, v -> sensitivityDbfsAt94db = v));
     }
 }
