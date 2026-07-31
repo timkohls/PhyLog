@@ -41,18 +41,18 @@ public class TriggerDialog extends JDialog {
         gbc.weightx = 1.0;
 
         gbc.gridx = 0; gbc.gridy = 0;
-        formPanel.add(new JLabel("Kanal:"), gbc);
-        cbChannel = new JComboBox<>(new String[]{"Kanal A", "Kanal B"});
-        cbChannel.setSelectedIndex(current.channel == 'B' ? 1 : 0);
-        gbc.gridx = 1;
-        formPanel.add(cbChannel, gbc);
-
-        gbc.gridx = 0; gbc.gridy = 1;
         formPanel.add(new JLabel("Trigger-Modus:"), gbc);
         cbTriggerMode = new JComboBox<>(new String[]{"Manuell (Start-Button)", "Schwellenwert (Analog)"});
         cbTriggerMode.setSelectedIndex(current.thresholdMode ? 1 : 0);
         gbc.gridx = 1;
         formPanel.add(cbTriggerMode, gbc);
+
+        gbc.gridx = 0; gbc.gridy = 1;
+        formPanel.add(new JLabel("Kanal:"), gbc);
+        cbChannel = new JComboBox<>(new String[]{"Kanal A", "Kanal B"});
+        cbChannel.setSelectedIndex(current.channel == 'B' ? 1 : 0);
+        gbc.gridx = 1;
+        formPanel.add(cbChannel, gbc);
 
         gbc.gridx = 0; gbc.gridy = 2;
         formPanel.add(new JLabel("Flanke:"), gbc);

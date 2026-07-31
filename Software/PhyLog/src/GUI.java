@@ -193,12 +193,27 @@ public class GUI extends JFrame {
         JCheckBoxMenuItem showPoints = new JCheckBoxMenuItem("Messpunkte anzeigen", true);
         showPoints.addActionListener(e -> chartPanel.setShowPoints(showPoints.isSelected()));
 
-        JCheckBoxMenuItem showLine = new JCheckBoxMenuItem("Verbindungslinie", false);
-        showLine.addActionListener(e -> chartPanel.setShowLine(showLine.isSelected()));
+        JMenu menuLineMode = new JMenu("Linienart");
+        ButtonGroup lineModeGroup = new ButtonGroup();
+
+        JRadioButtonMenuItem lineModeNone = new JRadioButtonMenuItem("Keine Linie", true);
+        lineModeNone.addActionListener(e -> chartPanel.setLineMode(ChartPanel.LineMode.NONE));
+        lineModeGroup.add(lineModeNone);
+        menuLineMode.add(lineModeNone);
+
+        JRadioButtonMenuItem lineModeStraight = new JRadioButtonMenuItem("Verbindungslinie (gerade)");
+        lineModeStraight.addActionListener(e -> chartPanel.setLineMode(ChartPanel.LineMode.STRAIGHT));
+        lineModeGroup.add(lineModeStraight);
+        menuLineMode.add(lineModeStraight);
+
+        JRadioButtonMenuItem lineModeSpline = new JRadioButtonMenuItem("Spline (glatt)");
+        lineModeSpline.addActionListener(e -> chartPanel.setLineMode(ChartPanel.LineMode.SPLINE));
+        lineModeGroup.add(lineModeSpline);
+        menuLineMode.add(lineModeSpline);
 
         menuView.addSeparator();
         menuView.add(showPoints);
-        menuView.add(showLine);
+        menuView.add(menuLineMode);
 
         // --- Funktions-Fit Menü ---
         JMenu menuFit = new JMenu("Funktions-Fit");

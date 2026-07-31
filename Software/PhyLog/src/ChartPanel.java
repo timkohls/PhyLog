@@ -132,6 +132,10 @@ public class ChartPanel extends JPanel {
         }
     }
 
+    /** Wie die Messpunkte einer Kurve verbunden werden: gar nicht, gerade (Polylinie) oder als
+     *  glatte Spline (Catmull-Rom) durch alle Punkte - siehe {@link #setLineMode}. */
+    public enum LineMode { NONE, STRAIGHT, SPLINE }
+
     /** Zusätzliche, gleichzeitig dargestellte Kurven (siehe {@link Series}). Nehmen nicht an
      *  Zoom, Freihand-Auswahl, Fit oder Chi² teil - das bleibt der Hauptgröße vorbehalten. */
     private List<Series> extraSeries = new ArrayList<>();
@@ -143,7 +147,7 @@ public class ChartPanel extends JPanel {
     private String mainLabel = "Kanal A";
 
     private boolean showPoints = true;
-    private boolean showLine = false;
+    private LineMode lineMode = LineMode.NONE;
     private FitMode fitMode = FitMode.NONE;
     private int polynomialDegree = 2;
 
@@ -488,9 +492,9 @@ public class ChartPanel extends JPanel {
         repaint();
     }
 
-    /** @param showLine ob die Messpunkte zusätzlich durch eine Verbindungslinie verbunden werden sollen */
-    public void setShowLine(boolean showLine) {
-        this.showLine = showLine;
+    /** @param lineMode wie die Messpunkte verbunden werden sollen (siehe {@link LineMode}) */
+    public void setLineMode(LineMode lineMode) {
+        this.lineMode = (lineMode != null) ? lineMode : LineMode.NONE;
         repaint();
     }
 
@@ -683,7 +687,7 @@ public class ChartPanel extends JPanel {
 
         List<Point2DDouble> screenPoints = projectDataToScreen(geo);
 
-        if (showLine && screenPoints.size() > 1) {
+        if (lineMode != LineMode.NONE && screenPoints.size() > 1) {
             drawConnectingLine(g2, screenPoints);
         }
 
@@ -729,15 +733,10 @@ public class ChartPanel extends JPanel {
                 points.add(new Point2DDouble(px, py));
             }
 
-            if (showLine && points.size() > 1) {
+            if (lineMode != LineMode.NONE && points.size() > 1) {
                 g2.setColor(series.color.darker());
                 g2.setStroke(new BasicStroke(1.5f));
-                Path2D path = new Path2D.Double();
-                path.moveTo(points.get(0).x, points.get(0).y);
-                for (int i = 1; i < points.size(); i++) {
-                    path.lineTo(points.get(i).x, points.get(i).y);
-                }
-                g2.draw(path);
+                g2.draw(buildLinePath(points));
             }
 
             if (showPoints) {
@@ -968,12 +967,41 @@ public class ChartPanel extends JPanel {
     private void drawConnectingLine(Graphics2D g2, List<Point2DDouble> points) {
         g2.setColor(Theme.POINT.darker());
         g2.setStroke(new BasicStroke(1.5f));
+        g2.draw(buildLinePath(points));
+    }
+
+    /**
+     * Baut den Pfad durch eine Punktfolge passend zu {@link #lineMode}: bei
+     * {@link LineMode#STRAIGHT} (oder bei nur zwei Punkten) eine einfache Polylinie, bei
+     * {@link LineMode#SPLINE} eine glatte Catmull-Rom-Spline (als kubische Bézier-Segmente
+     * gezeichnet), die exakt durch jeden Messpunkt läuft statt ihn nur anzunähern.
+     */
+    private Path2D buildLinePath(List<Point2DDouble> points) {
         Path2D path = new Path2D.Double();
         path.moveTo(points.get(0).x, points.get(0).y);
-        for (int i = 1; i < points.size(); i++) {
-            path.lineTo(points.get(i).x, points.get(i).y);
+
+        if (lineMode == LineMode.SPLINE && points.size() > 2) {
+            int last = points.size() - 1;
+            for (int i = 0; i < last; i++) {
+                Point2DDouble p0 = points.get(Math.max(i - 1, 0));
+                Point2DDouble p1 = points.get(i);
+                Point2DDouble p2 = points.get(i + 1);
+                Point2DDouble p3 = points.get(Math.min(i + 2, last));
+
+                double cp1x = p1.x + (p2.x - p0.x) / 6.0;
+                double cp1y = p1.y + (p2.y - p0.y) / 6.0;
+                double cp2x = p2.x - (p3.x - p1.x) / 6.0;
+                double cp2y = p2.y - (p3.y - p1.y) / 6.0;
+
+                path.curveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+            }
+        } else {
+            for (int i = 1; i < points.size(); i++) {
+                path.lineTo(points.get(i).x, points.get(i).y);
+            }
         }
-        g2.draw(path);
+
+        return path;
     }
 
     /**
