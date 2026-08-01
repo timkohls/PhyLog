@@ -623,10 +623,28 @@ public class GUI extends JFrame {
     }
 
     private void startMeasurement() {
+        // 1. Prüfung: Ist eine verbindung da? (USB/COM-Port)
         if (!DeviceConnection.getInstance().isConnected()) {
-            JOptionPane.showMessageDialog(this,
-                    "Keine serielle Verbindung. Bitte zuerst mit dem ESP32 verbinden. COM Port auswählen und Verbinden.",
-                    "Nicht verbunden", JOptionPane.WARNING_MESSAGE);
+            JOptionPane.showMessageDialog(
+                    this,
+                    "Keine Verbindung zum Gerät! Bitte zuerst verbinden.",
+                    "Fehler: Kein Gerät",
+                    JOptionPane.WARNING_MESSAGE
+            );
+            return;
+        }
+
+        // 2. Prüfung: Ist auf mindestens einem Kanal ein Sensor ausgewählt?
+        boolean isSensorASelected = channelA.sensor != null && channelA.sensor != SensorRegistry.NO_SENSOR;
+        boolean isSensorBSelected = channelB.sensor != null && channelB.sensor != SensorRegistry.NO_SENSOR;
+
+        if (!isSensorASelected && !isSensorBSelected) {
+            JOptionPane.showMessageDialog(
+                    this,
+                    "Es ist kein Sensor ausgewählt! Bitte wähle über 'Sensor -> Sensor konfigurieren...' mindestens einen Sensor aus.",
+                    "Fehler: Kein Sensor gewählt",
+                    JOptionPane.WARNING_MESSAGE
+            );
             return;
         }
 
