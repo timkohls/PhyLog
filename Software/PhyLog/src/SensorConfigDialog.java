@@ -157,7 +157,7 @@ public class SensorConfigDialog extends JDialog {
 
         addFormRow(panel, gbc, 0, "Sensor:", ch.comboSensor);
         addFormRow(panel, gbc, 1, "Einheit:", ch.lblUnit);
-        addTaraRow(panel, gbc, 2, "Offset / Tara:", ch.txtOffset, ch.lblLive, ch.btnTara);
+        addTaraRow(panel, gbc, 2, "Offset:", ch.txtOffset, ch.lblLive, ch.btnTara);
         addFormRow(panel, gbc, 3, "Kalibrierung:", ch.btnCalibrate);
 
         return panel;

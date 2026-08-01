@@ -16,12 +16,23 @@ public class ChiSquareInfoDialog extends JDialog {
 
     public ChiSquareInfoDialog(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom,
                                ChartPanel.FitDescription fitDescription) {
+        this(ownerWindow, reducedChiSquare, degreesOfFreedom, fitDescription, ChartPanel.SigmaMode.CONSTANT);
+    }
+
+    /**
+     * @param sigmaMode aktuell in {@link ChartPanel} gewählter {@link ChartPanel.SigmaMode} -
+     *                  bei {@link ChartPanel.SigmaMode#RESIDUAL_GLOBAL} wird ein zusätzlicher
+     *                  Hinweis eingeblendet, da chi²_red dort durch die Art der Sigma-Schätzung
+     *                  rechnerisch immer nahe 1 liegt (siehe {@code ChartPanel.calculateChiSquare}).
+     */
+    public ChiSquareInfoDialog(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom,
+                               ChartPanel.FitDescription fitDescription, ChartPanel.SigmaMode sigmaMode) {
         super(ownerWindow, "Anpassungsgüte (\u03C7\u00B2_red)", ModalityType.APPLICATION_MODAL);
-        initUI(ownerWindow, reducedChiSquare, degreesOfFreedom, fitDescription);
+        initUI(ownerWindow, reducedChiSquare, degreesOfFreedom, fitDescription, sigmaMode);
     }
 
     private void initUI(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom,
-                        ChartPanel.FitDescription fitDescription) {
+                        ChartPanel.FitDescription fitDescription, ChartPanel.SigmaMode sigmaMode) {
         setLayout(new BorderLayout());
         setResizable(false);
 
@@ -46,6 +57,16 @@ public class ChiSquareInfoDialog extends JDialog {
         if (tipText != null) {
             mainPanel.add(Box.createVerticalStrut(14));
             mainPanel.add(buildTipCard(tipText, ratingColor));
+        }
+
+        if (sigmaMode == ChartPanel.SigmaMode.RESIDUAL_GLOBAL) {
+            mainPanel.add(Box.createVerticalStrut(14));
+            mainPanel.add(buildTipCard(
+                    "Sigma wird hier automatisch aus der Streuung aller Punkte um den Fit geschätzt - "
+                            + "dadurch liegt \u03C7\u00B2_red rechnerisch fast immer nahe 1. Für eine echte "
+                            + "Fit-Bewertung eignet sich der lokale Modus (Nächste Nachbarn) oder ein "
+                            + "unabhängig bekannter, konstanter Wert besser.",
+                    Theme.ACCENT));
         }
 
         if (fitDescription != null) {

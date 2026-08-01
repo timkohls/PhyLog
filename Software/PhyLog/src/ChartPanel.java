@@ -46,6 +46,24 @@ public class ChartPanel extends JPanel {
     }
 
     /**
+     * Wie die Messunsicherheit sigma bestimmt wird, die in Chi²-Berechnung und Toleranzband
+     * eingeht (siehe {@link StandardDeviationDialog}). Die automatischen Modi setzen einen
+     * aktiven Fit voraus - ist keiner aktiv (bzw. schlägt die Regression fehl), fällt
+     * {@link #ensureSigmaComputed} auf den konstanten Wert {@link #standardDeviation} zurück.
+     */
+    public enum SigmaMode {
+        /** Ein einziger, manuell eingegebener Wert für alle Punkte (bisheriges Verhalten). */
+        CONSTANT,
+        /** Ein einziger Wert, aus der Streuung aller Punkte um den aktuellen Fit geschätzt
+         *  (empirische Standardabweichung der Residuen unter Annahme gaußverteilten Rauschens). */
+        RESIDUAL_GLOBAL,
+        /** Ortsabhängiger Wert je Punkt, aus der Streuung der {@link #localSigmaNeighbors}
+         *  nächsten Nachbarn um den Fit geschätzt - passt sich ungleichmäßig verteiltem Rauschen
+         *  entlang der Messreihe an. */
+        RESIDUAL_LOCAL
+    }
+
+    /**
      * Bewertungsklassen für das reduzierte Chi-Quadrat.
      * Einzige Quelle der Wahrheit für die Schwellenwerte - {@link ChiSquareInfoDialog}
      * fragt ausschließlich hier ab, damit Diagramm-Overlay und Detail-Dialog niemals
@@ -165,8 +183,24 @@ public class ChartPanel extends JPanel {
     private double currentReducedChiSquare = 0.0;
     private int currentDegreesOfFreedom = 1;
 
-    /** Angenommene (konstante) Standardabweichung der Messwerte, geht als sigma in Chi^2 ein. */
+    /** Angenommene (konstante) Standardabweichung der Messwerte, geht als sigma in Chi^2 ein.
+     *  Dient außerdem als Rückfallebene für {@link SigmaMode#RESIDUAL_GLOBAL}/{@link SigmaMode#RESIDUAL_LOCAL},
+     *  solange kein Fit aktiv ist (siehe {@link #ensureSigmaComputed}). */
     private double standardDeviation = 0.07;
+
+    /** Wie sigma bestimmt wird (siehe {@link SigmaMode}). */
+    private SigmaMode sigmaMode = SigmaMode.CONSTANT;
+    /** Anzahl der je Punkt einbezogenen Nachbarn für {@link SigmaMode#RESIDUAL_LOCAL}. */
+    private int localSigmaNeighbors = 8;
+    /** {@code true}, wenn die aus Residuen abgeleiteten Sigma-Werte neu berechnet werden müssen
+     *  (siehe {@link #ensureSigmaComputed}) - analog zu {@link #fitDirty}, aber unabhängig davon
+     *  auch bei einem reinen Moduswechsel gesetzt. */
+    private boolean sigmaCacheDirty = true;
+    /** Zwischengespeicherter globaler Sigma-Wert für {@link SigmaMode#RESIDUAL_GLOBAL}. */
+    private double cachedGlobalSigma = standardDeviation;
+    /** Zwischengespeicherte, je Punkt in {@link #displayData} passende Sigma-Werte für
+     *  {@link SigmaMode#RESIDUAL_LOCAL}, {@code null} in den anderen Modi. */
+    private double[] cachedLocalSigmas = null;
 
     // --- Fit-Cache ---
     // Die komplette Regression (inkl. der iterativen Sinus-Anpassung) ist teuer und muss nicht
@@ -428,6 +462,7 @@ public class ChartPanel extends JPanel {
         this.originalData = (data != null) ? new ArrayList<>(data) : new ArrayList<>();
         recomputeDisplayData();
         fitDirty = true;
+        sigmaCacheDirty = true;
         repaint();
     }
 
@@ -507,6 +542,7 @@ public class ChartPanel extends JPanel {
     public void setFitMode(FitMode fitMode) {
         this.fitMode = fitMode;
         fitDirty = true;
+        sigmaCacheDirty = true;
         repaint();
     }
 
@@ -519,14 +555,15 @@ public class ChartPanel extends JPanel {
     public void setPolynomialDegree(int degree) {
         this.polynomialDegree = Math.max(1, Math.min(10, degree));
         fitDirty = true;
+        sigmaCacheDirty = true;
         repaint();
     }
 
     /**
-     * Legt die angenommene (konstante) Messunsicherheit sigma fest, die in die
-     * Chi²-Berechnung und die Breite des Toleranzbands um die Fit-Kurve eingeht.
-     * Beeinflusst nur Chi² (sigma steht als konstanter Faktor in der Summe), nicht die
-     * Kurvenparameter selbst - löst deshalb bewusst KEINEN Refit aus, nur ein repaint().
+     * Legt den konstanten Sigma-Wert fest, der bei {@link SigmaMode#CONSTANT} direkt verwendet
+     * wird und in den automatischen Modi als Rückfallebene ohne aktiven Fit dient. Beeinflusst
+     * nur Chi²/Toleranzband (sigma steht als Faktor in der Summe), nicht die Kurvenparameter
+     * selbst - löst deshalb bewusst KEINEN Refit aus, nur ein repaint().
      *
      * @param standardDeviation neue Standardabweichung, wird auf mindestens 1e-6 begrenzt
      */
@@ -537,6 +574,36 @@ public class ChartPanel extends JPanel {
 
     public double getStandardDeviation() { return standardDeviation; }
     public int getPolynomialDegree() { return polynomialDegree; }
+
+    /**
+     * Legt fest, wie sigma bestimmt wird (siehe {@link SigmaMode}). Markiert den Sigma-Cache
+     * als veraltet, damit ein automatischer Modus beim nächsten Zeichnen aus dem aktuellen Fit
+     * neu geschätzt wird - löst bewusst keinen Refit aus, da sich die Kurvenparameter dadurch
+     * nicht ändern.
+     *
+     * @param sigmaMode der gewünschte Modus, {@code null} fällt auf {@link SigmaMode#CONSTANT} zurück
+     */
+    public void setSigmaMode(SigmaMode sigmaMode) {
+        this.sigmaMode = (sigmaMode != null) ? sigmaMode : SigmaMode.CONSTANT;
+        sigmaCacheDirty = true;
+        repaint();
+    }
+
+    public SigmaMode getSigmaMode() { return sigmaMode; }
+
+    /**
+     * Legt die Anzahl der je Punkt einbezogenen Nachbarn für {@link SigmaMode#RESIDUAL_LOCAL}
+     * fest (mindestens 2) und markiert den Sigma-Cache als veraltet.
+     *
+     * @param neighbors gewünschte Nachbarn-Anzahl
+     */
+    public void setLocalSigmaNeighbors(int neighbors) {
+        this.localSigmaNeighbors = Math.max(2, neighbors);
+        sigmaCacheDirty = true;
+        repaint();
+    }
+
+    public int getLocalSigmaNeighbors() { return localSigmaNeighbors; }
 
     public void zoomIn() {
         zoomFactor *= 1.2;
@@ -559,6 +626,7 @@ public class ChartPanel extends JPanel {
         viewMaxY = null;
         recomputeDisplayData();
         fitDirty = true;
+        sigmaCacheDirty = true;
         repaint();
     }
 
@@ -602,6 +670,7 @@ public class ChartPanel extends JPanel {
             zoomFactor = 1.0;
             recomputeDisplayData();
             fitDirty = true;
+            sigmaCacheDirty = true;
         }
     }
 
@@ -650,6 +719,7 @@ public class ChartPanel extends JPanel {
             zoomFactor = 1.0;
             recomputeDisplayData();
             fitDirty = true;
+            sigmaCacheDirty = true;
         }
     }
 
@@ -1056,6 +1126,7 @@ public class ChartPanel extends JPanel {
      */
     private void drawCachedFitIfPresent(Graphics2D g2, PlotGeometry geo) {
         if (cachedFit == null) return;
+        ensureSigmaComputed(cachedFit);
         calculateChiSquare(cachedFit.func, cachedFit.paramCount);
         currentFitDescription = cachedFit.description;
         drawFunctionPathWithTolerance(g2, cachedFit.func, geo.minX, geo.visibleMaxX, geo.minY,
@@ -1192,14 +1263,23 @@ public class ChartPanel extends JPanel {
     /** Öffnet den Detail-Dialog mit einer Erklärung des aktuellen Chi²-Gütewerts. */
     private void showChiSquareInfoDialog() {
         Window parentWindow = SwingUtilities.getWindowAncestor(this);
-        ChiSquareInfoDialog dialog = new ChiSquareInfoDialog(parentWindow, currentReducedChiSquare, currentDegreesOfFreedom, currentFitDescription);
+        ChiSquareInfoDialog dialog = new ChiSquareInfoDialog(parentWindow, currentReducedChiSquare, currentDegreesOfFreedom, currentFitDescription, sigmaMode);
         dialog.setVisible(true);
     }
 
     /**
      * Berechnet das reduzierte Chi-Quadrat für eine gegebene Fit-Funktion:
-     * chi²_red = (1 / DOF) * Summe((y_i - f(x_i))² / sigma²), DOF = n - Parameteranzahl.
+     * chi²_red = (1 / DOF) * Summe((y_i - f(x_i))² / sigma_i²), DOF = n - Parameteranzahl.
+     * Sigma_i stammt je nach {@link #sigmaMode} entweder vom konstanten Wert, vom einmalig
+     * global geschätzten Wert, oder individuell je Punkt (siehe {@link #sigmaForDataPoint}).
      * Aktualisiert {@link #currentReducedChiSquare} und {@link #currentDegreesOfFreedom}.
+     *
+     * <p>Hinweis: Bei {@link SigmaMode#RESIDUAL_GLOBAL} liegt chi²_red durch die Art der
+     * Schätzung (sigma wird ja gerade so gewählt, dass die Residuen im Mittel genau sigma
+     * entsprechen) rechnerisch immer nahe 1 - dort dient die Anzeige eher der Kontrolle, dass
+     * die Schätzung funktioniert hat, als einer echten Gütebewertung. Bei
+     * {@link SigmaMode#RESIDUAL_LOCAL} bleibt chi²_red dagegen aussagekräftig, da sigma_i aus
+     * den Nachbarn, nicht aus dem Punkt selbst geschätzt wird.</p>
      *
      * @param func           die angepasste Funktion
      * @param parameterCount Anzahl der freien Parameter des Modells (für die Freiheitsgrade)
@@ -1214,18 +1294,153 @@ public class ChartPanel extends JPanel {
             return;
         }
 
-        double sigma = this.standardDeviation;
-        double sigmaSq = sigma * sigma;
-
         double sumChiSq = 0;
-        for (double[] pt : displayData) {
+        for (int i = 0; i < n; i++) {
+            double[] pt = displayData.get(i);
             double yExp = func.eval(pt[0]);
             double diff = pt[1] - yExp;
-            sumChiSq += (diff * diff) / sigmaSq;
+            double sigma = sigmaForDataPoint(i);
+            sumChiSq += (diff * diff) / (sigma * sigma);
         }
 
         this.currentDegreesOfFreedom = dof;
         this.currentReducedChiSquare = sumChiSq / dof;
+    }
+
+    /**
+     * Liefert die für Chi² am Datenpunkt mit Index {@code i} in {@link #displayData} zu
+     * verwendende Standardabweichung, abhängig vom gewählten {@link #sigmaMode}. Setzt voraus,
+     * dass {@link #ensureSigmaComputed} zuvor gelaufen ist.
+     */
+    private double sigmaForDataPoint(int i) {
+        return switch (sigmaMode) {
+            case RESIDUAL_GLOBAL -> cachedGlobalSigma;
+            case RESIDUAL_LOCAL -> (cachedLocalSigmas != null && i < cachedLocalSigmas.length)
+                    ? cachedLocalSigmas[i] : standardDeviation;
+            default -> standardDeviation;
+        };
+    }
+
+    /**
+     * Liefert die Standardabweichung an einer beliebigen X-Stelle (nicht notwendigerweise ein
+     * Messpunkt) für das Toleranzband der Fit-Kurve - im lokalen Modus zwischen den beiden
+     * benachbarten Messpunkten linear interpoliert (siehe {@link #interpolateLocalSigma}).
+     */
+    private double sigmaForToleranceBand(double x) {
+        return switch (sigmaMode) {
+            case RESIDUAL_GLOBAL -> cachedGlobalSigma;
+            case RESIDUAL_LOCAL -> interpolateLocalSigma(x);
+            default -> standardDeviation;
+        };
+    }
+
+    /**
+     * Berechnet, falls {@link #sigmaCacheDirty}, die aus den Fit-Residuen abgeleiteten
+     * Sigma-Werte für {@link SigmaMode#RESIDUAL_GLOBAL}/{@link SigmaMode#RESIDUAL_LOCAL} neu.
+     * Für {@link SigmaMode#CONSTANT} sowie ohne gültigen Fit passiert nichts weiter, als dass
+     * die Rückfallebene {@link #standardDeviation} verwendet wird (siehe
+     * {@link #sigmaForDataPoint}/{@link #sigmaForToleranceBand}).
+     *
+     * <p>Grundidee: Ohne bekannte Messunsicherheit lässt sich sigma aus der tatsächlichen
+     * Streuung der Messwerte um den aktuellen Fit schätzen - unter der (für viele Messungen
+     * plausiblen) Annahme gaußverteilten Rauschens ist die empirische Standardabweichung der
+     * Residuen genau dieser Schätzer. Bei {@link SigmaMode#RESIDUAL_GLOBAL} geschieht das einmal
+     * für den gesamten sichtbaren Datensatz; bei {@link SigmaMode#RESIDUAL_LOCAL} lokal je Punkt
+     * aus dessen {@link #localSigmaNeighbors} nächsten Nachbarn (siehe {@link #localWindowStdDev}),
+     * sodass sich Toleranzband und Chi² an ungleichmäßig verteiltes Rauschen entlang der
+     * Messreihe anpassen, statt eine einzige Streuung für den gesamten Datensatz anzunehmen.</p>
+     *
+     * @param fit der aktuell zwischengespeicherte Fit, oder {@code null} ohne aktiven Fit
+     */
+    private void ensureSigmaComputed(FitResult fit) {
+        if (!sigmaCacheDirty) return;
+        sigmaCacheDirty = false;
+
+        int n = displayData.size();
+        if (fit == null || n == 0 || sigmaMode == SigmaMode.CONSTANT) {
+            cachedGlobalSigma = standardDeviation;
+            cachedLocalSigmas = null;
+            return;
+        }
+
+        double[] residuals = new double[n];
+        for (int i = 0; i < n; i++) {
+            double[] pt = displayData.get(i);
+            residuals[i] = pt[1] - fit.func.eval(pt[0]);
+        }
+
+        if (sigmaMode == SigmaMode.RESIDUAL_GLOBAL) {
+            int dof = Math.max(1, n - fit.paramCount);
+            double sumSq = 0;
+            for (double r : residuals) sumSq += r * r;
+            cachedGlobalSigma = Math.max(1e-6, Math.sqrt(sumSq / dof));
+            cachedLocalSigmas = null;
+        } else { // RESIDUAL_LOCAL
+            int k = Math.max(1, Math.min(localSigmaNeighbors, n - 1));
+            cachedLocalSigmas = new double[n];
+            for (int i = 0; i < n; i++) {
+                cachedLocalSigmas[i] = Math.max(1e-6, localWindowStdDev(residuals, i, k));
+            }
+        }
+    }
+
+    /**
+     * Mittlere quadratische Residuenstreuung im Index-Fenster um Punkt {@code i} (siehe
+     * {@link #ensureSigmaComputed}). Da {@link #displayData} zeitlich aufsteigend sortiert ist
+     * (bzw. beim Zoomen/Filtern diese Reihenfolge erhält), entsprechen benachbarte Indizes den
+     * in X nächstgelegenen Nachbarn - deutlich günstiger als eine echte Abstandssuche und für
+     * annähernd gleichmäßig abgetastete Messreihen äquivalent dazu.
+     *
+     * @param residuals Residuen aller Punkte (y_i - f(x_i))
+     * @param i         Index des Punkts, für den sigma geschätzt wird
+     * @param k         gewünschte Anzahl einbezogener Nachbarn
+     */
+    private double localWindowStdDev(double[] residuals, int i, int k) {
+        int n = residuals.length;
+        int half = Math.max(1, k / 2);
+        int lo = Math.max(0, i - half);
+        int hi = Math.min(n - 1, i + half);
+        while (hi - lo + 1 < Math.min(k + 1, n)) {
+            if (lo > 0) lo--;
+            else if (hi < n - 1) hi++;
+            else break;
+        }
+
+        double sumSq = 0;
+        int count = 0;
+        for (int j = lo; j <= hi; j++) {
+            sumSq += residuals[j] * residuals[j];
+            count++;
+        }
+        return Math.sqrt(sumSq / count);
+    }
+
+    /**
+     * Lineare Interpolation von {@link #cachedLocalSigmas} zwischen den beiden {@link #displayData}-
+     * Punkten, die {@code x} einschließen - für Stellen zwischen echten Messpunkten (z. B. beim
+     * Zeichnen des Toleranzbands mit seinen 400 Zwischenschritten, siehe
+     * {@link #drawFunctionPathWithTolerance}). Außerhalb des Datenbereichs wird der jeweilige
+     * Randwert fortgeschrieben.
+     */
+    private double interpolateLocalSigma(double x) {
+        if (cachedLocalSigmas == null || displayData.isEmpty()) return standardDeviation;
+        int n = displayData.size();
+        if (n == 1) return cachedLocalSigmas[0];
+
+        if (x <= displayData.get(0)[0]) return cachedLocalSigmas[0];
+        if (x >= displayData.get(n - 1)[0]) return cachedLocalSigmas[n - 1];
+
+        int lo = 0, hi = n - 1;
+        while (hi - lo > 1) {
+            int mid = (lo + hi) / 2;
+            if (displayData.get(mid)[0] <= x) lo = mid; else hi = mid;
+        }
+
+        double x0 = displayData.get(lo)[0], x1 = displayData.get(hi)[0];
+        double s0 = cachedLocalSigmas[lo], s1 = cachedLocalSigmas[hi];
+        if (x1 == x0) return s0;
+        double t = (x - x0) / (x1 - x0);
+        return s0 + t * (s1 - s0);
     }
 
     /**
@@ -1576,7 +1791,10 @@ public class ChartPanel extends JPanel {
 
     /**
      * Zeichnet eine Modellfunktion als gestrichelte Kurve inklusive eines halbtransparenten
-     * Toleranzbands der Breite +/- {@link #standardDeviation} um die Kurve herum.
+     * Toleranzbands der Breite +/- sigma um die Kurve herum. Sigma stammt je nach
+     * {@link #sigmaMode} entweder vom konstanten Wert, vom global geschätzten Wert, oder
+     * ortsabhängig aus {@link #sigmaForToleranceBand(double)} - im letzten Fall ändert sich
+     * die Bandbreite dadurch sichtbar entlang der X-Achse.
      *
      * @param g2       Ziel-Grafikkontext
      * @param func     die zu zeichnende Modellfunktion
@@ -1598,22 +1816,24 @@ public class ChartPanel extends JPanel {
 
         double[] xVals = new double[steps + 1];
         double[] yVals = new double[steps + 1];
+        double[] sigmaVals = new double[steps + 1];
 
         for (int i = 0; i <= steps; i++) {
             double x = minX + i * stepSize;
             xVals[i] = x;
             yVals[i] = func.eval(x);
+            sigmaVals[i] = sigmaForToleranceBand(x);
         }
 
         Polygon bandPolygon = new Polygon();
         for (int i = 0; i <= steps; i++) {
-            double yUpper = yVals[i] + standardDeviation;
+            double yUpper = yVals[i] + sigmaVals[i];
             double px = padding + ((xVals[i] - minX) / rangeX) * plotWidth;
             double pyUpper = (height - padding) - ((yUpper - minY) / rangeY) * plotHeight;
             bandPolygon.addPoint((int) px, (int) pyUpper);
         }
         for (int i = steps; i >= 0; i--) {
-            double yLower = yVals[i] - standardDeviation;
+            double yLower = yVals[i] - sigmaVals[i];
             double px = padding + ((xVals[i] - minX) / rangeX) * plotWidth;
             double pyLower = (height - padding) - ((yLower - minY) / rangeY) * plotHeight;
             bandPolygon.addPoint((int) px, (int) pyLower);

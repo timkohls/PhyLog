@@ -3,9 +3,9 @@ import java.awt.*;
 
 /**
  * Dialog zur Konfiguration eines schwellenwertbasierten Mess-Triggers: Kanal, Modus, Flanke,
- * Schwellenwert und Vorlaufzeit. Das Ergebnis wird als {@link Config} zurückgegeben, das
- * {@code GUI} nach {@link #isApplied()} über {@link #getConfig()} abholt und tatsächlich
- * auswertet (siehe {@code GUI.startMeasurement}/{@code GUI.ingestSample}).
+ * Schwellenwert, Vorlaufzeit und maximale Messdauer. Das Ergebnis wird als {@link Config}
+ * zurückgegeben, das {@code GUI} nach {@link #isApplied()} über {@link #getConfig()} abholt und
+ * tatsächlich auswertet (siehe {@code GUI.startMeasurement}/{@code GUI.ingestSample}).
  */
 public class TriggerDialog extends JDialog {
 
@@ -16,6 +16,11 @@ public class TriggerDialog extends JDialog {
         public boolean risingEdge = true;
         public double threshold = 2.5;
         public int preTriggerMs = 100;
+        /** Maximale Messdauer in Millisekunden ab Aufnahmebeginn (bzw. ab dem um die
+         *  Vorlaufzeit vorverlegten Zeitnullpunkt bei getriggerten Messungen), nach der die
+         *  Aufnahme automatisch gestoppt wird. {@code 0} = keine Begrenzung. Gilt unabhängig
+         *  vom Trigger-Modus, also auch bei manuellem Start. */
+        public int maxDurationMs = 0;
     }
 
     private final JComboBox<String> cbChannel;
@@ -23,13 +28,15 @@ public class TriggerDialog extends JDialog {
     private final JComboBox<String> cbEdge;
     private final JTextField txtThreshold;
     private final JSpinner spPreTrigger;
+    private final JCheckBox cbLimitDuration;
+    private final JSpinner spMaxDuration;
 
     private boolean applied = false;
 
     /** @param current aktuell geltende Konfiguration, wird als Startauswahl vorbelegt */
     public TriggerDialog(JFrame parent, Config current) {
         super(parent, "Trigger konfigurieren", true);
-        setSize(400, 300);
+        setSize(400, 340);
         setLocationRelativeTo(parent);
         setLayout(new BorderLayout(10, 10));
 
@@ -73,6 +80,19 @@ public class TriggerDialog extends JDialog {
         gbc.gridx = 1;
         formPanel.add(spPreTrigger, gbc);
 
+        gbc.gridx = 0; gbc.gridy = 5;
+        cbLimitDuration = new JCheckBox("Messdauer:");
+        cbLimitDuration.setSelected(current.maxDurationMs > 0);
+        formPanel.add(cbLimitDuration, gbc);
+
+        int initialSeconds = (current.maxDurationMs > 0) ? Math.max(1, current.maxDurationMs / 1000) : 60;
+        spMaxDuration = new JSpinner(new SpinnerNumberModel(initialSeconds, 1, 36000, 1));
+        spMaxDuration.setEnabled(cbLimitDuration.isSelected());
+        gbc.gridx = 1;
+        formPanel.add(spMaxDuration, gbc);
+
+        cbLimitDuration.addActionListener(e -> spMaxDuration.setEnabled(cbLimitDuration.isSelected()));
+
         cbTriggerMode.addActionListener(e -> updateFieldStates());
         updateFieldStates();
 
@@ -114,6 +134,7 @@ public class TriggerDialog extends JDialog {
         cfg.thresholdMode = cbTriggerMode.getSelectedIndex() == 1;
         cfg.risingEdge = cbEdge.getSelectedIndex() == 0;
         cfg.preTriggerMs = (int) spPreTrigger.getValue();
+        cfg.maxDurationMs = cbLimitDuration.isSelected() ? (int) spMaxDuration.getValue() * 1000 : 0;
         try {
             cfg.threshold = Double.parseDouble(txtThreshold.getText().replace(",", "."));
         } catch (NumberFormatException ignored) {

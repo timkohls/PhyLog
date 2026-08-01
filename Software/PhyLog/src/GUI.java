@@ -337,12 +337,14 @@ public class GUI extends JFrame {
     }
 
     private void openStandardDeviationDialog() {
-        StandardDeviationDialog dialog = new StandardDeviationDialog(this, chartPanel.getStandardDeviation());
+        StandardDeviationDialog dialog = new StandardDeviationDialog(this, chartPanel.getStandardDeviation(),
+                chartPanel.getSigmaMode(), chartPanel.getLocalSigmaNeighbors());
         dialog.setVisible(true);
 
         if (dialog.isConfirmed()) {
-            double newStdDev = dialog.getStandardDeviation();
-            chartPanel.setStandardDeviation(newStdDev);
+            chartPanel.setStandardDeviation(dialog.getStandardDeviation());
+            chartPanel.setLocalSigmaNeighbors(dialog.getLocalSigmaNeighbors());
+            chartPanel.setSigmaMode(dialog.getSigmaMode());
         }
     }
 
@@ -737,7 +739,10 @@ public class GUI extends JFrame {
      * aktualisiert den Live-Wert. Solange auf den Trigger gewartet wird ({@link #waitingForTrigger}),
      * fließt der Wert nur in den Vorlauf-Puffer und die Flankenprüfung (siehe
      * {@link #checkTriggerCondition}); erst nach dem Auslösen bzw. im manuellen Modus landet er
-     * in der Tabelle des Kanals.
+     * in der Tabelle des Kanals. Ist eine maximale Messdauer konfiguriert
+     * ({@link TriggerDialog.Config#maxDurationMs}), wird die Aufzeichnung automatisch gestoppt,
+     * sobald die seit {@link #measurementStartMillis} verstrichene Zeit sie erreicht (siehe
+     * {@link #stopMeasurementDueToDurationLimit}).
      */
     private void ingestSample(Channel ch, int slot, long rawValue, long millis) {
         Sensor sensor = ch.sensor;
@@ -771,6 +776,20 @@ public class GUI extends JFrame {
         }
         double timeSeconds = (millis - measurementStartMillis) / 1000.0;
         ch.tableModel.addRow(new Object[]{timeSeconds, value});
+
+        if (triggerConfig.maxDurationMs > 0 && timeSeconds * 1000.0 >= triggerConfig.maxDurationMs) {
+            stopMeasurementDueToDurationLimit();
+        }
+    }
+
+    /** Stoppt eine laufende Aufzeichnung, weil die in {@link TriggerDialog.Config#maxDurationMs}
+     *  konfigurierte maximale Messdauer erreicht wurde. Nutzt {@link #stopMeasurement()} für die
+     *  eigentliche Stopp-Logik, überschreibt danach aber die Statusanzeige mit einem passenden
+     *  Hinweis statt des generischen "Bereit". */
+    private void stopMeasurementDueToDurationLimit() {
+        stopMeasurement();
+        lblTriggerStatus.setText("Maximale Messdauer erreicht - Aufnahme gestoppt");
+        lblTriggerStatus.setForeground(Theme.POINT);
     }
 
     /** Hält die letzten {@link TriggerDialog.Config#preTriggerMs} Millisekunden Messwerte eines
