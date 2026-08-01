@@ -1,6 +1,7 @@
 import javax.swing.*;
 import java.awt.*;
-import java.awt.geom.RoundRectangle2D;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.util.List;
 
 /** Zeigt Details zur Anpassungsgüte (reduziertes Chi²) als kompakte Karten statt eines
@@ -167,7 +168,14 @@ public class ChiSquareInfoDialog extends JDialog {
      * {@link ChartPanel#rateChiSquare} entsprechen (0.8 / 1.5 / 3.0), statt wie zuvor einem
      * frei gewählten optischen Verlauf, der nicht immer zu den tatsächlichen Zonen passte.
      */
+    /** Referenz-Skala für Balken und Beschriftung (0..4) - bewusst FEST, nicht vom aktuellen
+     *  Chi²-Wert abhängig: Farbverlauf und Zahlen sollen immer an derselben Stelle stehen, nur
+     *  der Marker bewegt sich. Werte über 4.0 lassen den Marker einfach am rechten Rand stehen. */
+    private static final double BAR_REFERENCE_SCALE = 4.0;
+
     private JComponent buildScaleBar(double reducedChiSquare) {
+        double[] markerValue = {0.0}; // von der Slide-in-Animation hochgezählt, siehe unten
+
         JPanel panel = new JPanel() {
             @Override
             protected void paintComponent(Graphics g) {
@@ -180,42 +188,86 @@ public class ChiSquareInfoDialog extends JDialog {
                 int barHeight = 14;
                 int barY = 4;
 
-                double maxScale = Math.max(4.0, reducedChiSquare);
-                int x1 = (int) Math.round((ChartPanel.CHI_OVERFIT_THRESHOLD / maxScale) * w);
-                int x2 = (int) Math.round((ChartPanel.CHI_GOOD_THRESHOLD / maxScale) * w);
-                int x3 = (int) Math.round(Math.min(ChartPanel.CHI_MODERATE_THRESHOLD / maxScale, 1.0) * w);
+                // Fester Farbverlauf Gelb→Grün→Rot - ändert sich NIE mit dem Wert, exakt wie
+                // vor der Karten-Überarbeitung: nur der Marker unten bewegt sich.
+                g2.setPaint(new GradientPaint(0, 0, new Color(241, 196, 15), w * 0.35f, 0, new Color(46, 204, 113)));
+                g2.fillRoundRect(0, barY, (int) (w * 0.5f), barHeight, 6, 6);
+                g2.setPaint(new GradientPaint(w * 0.35f, 0, new Color(46, 204, 113), w, 0, new Color(231, 76, 60)));
+                g2.fillRoundRect((int) (w * 0.35f) - 2, barY, w - (int) (w * 0.35f) + 2, barHeight, 6, 6);
 
-                Shape oldClip = g2.getClip();
-                g2.setClip(new RoundRectangle2D.Double(0, barY, w, barHeight, 8, 8));
-                g2.setColor(new Color(241, 196, 15));
-                g2.fillRect(0, barY, x1, barHeight);
-                g2.setColor(new Color(46, 204, 113));
-                g2.fillRect(x1, barY, x2 - x1, barHeight);
-                g2.setColor(new Color(241, 196, 15));
-                g2.fillRect(x2, barY, x3 - x2, barHeight);
-                g2.setColor(new Color(231, 76, 60));
-                g2.fillRect(x3, barY, w - x3, barHeight);
-                g2.setClip(oldClip);
-
-                double normalized = Math.min(reducedChiSquare, maxScale) / maxScale;
-                int markerX = (int) (normalized * w);
+                double normalized = Math.min(markerValue[0], BAR_REFERENCE_SCALE) / BAR_REFERENCE_SCALE;
+                int markerX = (int) (normalized * (w - 6));
                 g2.setColor(Theme.TEXT);
-                g2.fillRoundRect(Math.max(0, Math.min(markerX - 2, w - 4)), barY - 3, 4, barHeight + 6, 2, 2);
+                g2.fillRoundRect(markerX, barY - 3, 6, barHeight + 6, 2, 2);
 
                 g2.setFont(new Font("SansSerif", Font.PLAIN, 9));
                 g2.setColor(MUTED_TEXT);
                 int labelY = barY + barHeight + 13;
                 drawCenteredTick(g2, 0, "0", w, labelY);
-                drawCenteredTick(g2, x1, "0.8", w, labelY);
-                drawCenteredTick(g2, x2, "1.5", w, labelY);
-                drawCenteredTick(g2, x3, "3.0", w, labelY);
+                drawCenteredTick(g2, (int) Math.round(ChartPanel.CHI_OVERFIT_THRESHOLD / BAR_REFERENCE_SCALE * w), "0.8", w, labelY);
+                drawCenteredTick(g2, (int) Math.round(ChartPanel.CHI_GOOD_THRESHOLD / BAR_REFERENCE_SCALE * w), "1.5", w, labelY);
+                drawCenteredTick(g2, (int) Math.round(ChartPanel.CHI_MODERATE_THRESHOLD / BAR_REFERENCE_SCALE * w), "3.0", w, labelY);
             }
         };
         panel.setOpaque(false);
         panel.setAlignmentX(Component.CENTER_ALIGNMENT);
         panel.setPreferredSize(new Dimension(CONTENT_WIDTH, 36));
         panel.setMaximumSize(new Dimension(CONTENT_WIDTH, 36));
+
+        int durationMs = 3000;
+
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowOpened(WindowEvent e) {
+
+                Timer settleDelay = new Timer(100, null);
+
+                settleDelay.addActionListener(ev -> {
+
+                    settleDelay.stop();
+
+                    final long startTime = System.nanoTime();
+
+                    // Tatsächliches Animationsziel niemals über die Skala hinaus
+                    final double targetValue =
+                            Math.min(reducedChiSquare, BAR_REFERENCE_SCALE);
+
+                    Timer animationTimer = new Timer(16, null);
+
+                    animationTimer.addActionListener(tick -> {
+
+                        double elapsed =
+                                (System.nanoTime() - startTime) / 1_000_000_000.0;
+
+                        double t = Math.min(
+                                1.0,
+                                elapsed / (durationMs / 1000.0)
+                        );
+
+                        double eased = easeInOutSine(t);
+
+                        markerValue[0] = eased * targetValue;
+
+                        panel.repaint();
+
+                        if (t >= 1.0) {
+                            animationTimer.stop();
+                        }
+                    });
+
+                    animationTimer.start();
+                });
+
+                settleDelay.setRepeats(false);
+                settleDelay.start();
+            }
+        });
+
         return panel;
+    }
+
+    private double easeInOutSine(double t) {
+        return -(Math.cos(Math.PI * t) - 1) / 2;
     }
 
     private void drawCenteredTick(Graphics2D g2, int x, String text, int panelWidth, int y) {

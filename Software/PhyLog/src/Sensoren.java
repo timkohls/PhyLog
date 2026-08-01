@@ -142,7 +142,7 @@ class HX711Sensor extends Sensor {
  * serielle Kanal bleibt dadurch identisch zu allen anderen Sensoren (ein Wert pro Intervall).
  *
  * <p>decode() rechnet den Spitzenbetrag über die Datenblatt-Empfindlichkeit (typischerweise
- * -26 dBFS bei 94 dB SPL, siehe {@link #getCalibrationParameters}) auf einen geschätzten
+ * 0dBFs bei 94 dB SPL, siehe {@link #getCalibrationParameters}) auf einen geschätzten
  * Schalldruckpegel um. Das ist eine Schätzung auf Basis des Datenblatt-Richtwerts, keine
  * kalibrierte Messung - dazu müsste die konkrete Kapsel gegen ein Referenz-Schallpegelmessgerät
  * abgeglichen werden. Es ist außerdem unbewertet (kein A-Filter, nur Spitzenwert einer

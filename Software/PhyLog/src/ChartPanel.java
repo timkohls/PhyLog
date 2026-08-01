@@ -699,17 +699,19 @@ public class ChartPanel extends JPanel {
 
         drawExtraSeries(g2, geo);
 
-        if (fitMode != FitMode.NONE) {
-            drawChiSquareOverlay(g2, geo.width, geo.padding);
-        }
-
-        // Legende startet unterhalb der Chi²-Anzeige (falls sichtbar), statt an derselben Stelle
-        // in der oberen rechten Ecke zu überlappen und sie zu verdecken.
+        // Legende (Kanal-Einheiten) hat jetzt Vorrang oben rechts; die Chi²-Anzeige rutscht
+        // darunter - bzw. bleibt oben in der Ecke, wenn ohnehin keine Legende gezeichnet wird
+        // (nur ein Kanal aktiv, siehe legendHeight()).
         int legendTopY = geo.padding + 6;
-        if (fitMode != FitMode.NONE) {
-            legendTopY += CHI_OVERLAY_HEIGHT + 6;
-        }
         drawLegend(g2, geo, legendTopY);
+
+        if (fitMode != FitMode.NONE) {
+            int chiOverlayY = legendTopY;
+            if (!extraSeries.isEmpty()) {
+                chiOverlayY += legendHeight() + 6;
+            }
+            drawChiSquareOverlay(g2, geo.width, geo.padding, chiOverlayY);
+        }
 
         drawSelectionRectangle(g2);
         drawFreehandStroke(g2);
@@ -759,6 +761,15 @@ public class ChartPanel extends JPanel {
      *             Anzeige, falls diese sichtbar ist (siehe {@link #paintComponent}), damit sich
      *             beide Overlays nicht gegenseitig verdecken.
      */
+    /** Höhe der Legendenbox in Pixeln, oder 0 ohne Legende (keine Zusatzserien) - gemeinsam von
+     *  {@link #drawLegend} und {@link #paintComponent} genutzt, damit Chi²-Anzeige und Legende
+     *  nie überlappen, unabhängig davon, welche der beiden oben steht. */
+    private int legendHeight() {
+        if (extraSeries.isEmpty()) return 0;
+        int rowHeight = 16;
+        return (1 + extraSeries.size()) * rowHeight + 8;
+    }
+
     private void drawLegend(Graphics2D g2, PlotGeometry geo, int topY) {
         if (extraSeries.isEmpty()) return;
 
@@ -782,7 +793,7 @@ public class ChartPanel extends JPanel {
         }
 
         int boxWidth = swatch + 6 + maxTextWidth + 10;
-        int boxHeight = labels.size() * rowHeight + 8;
+        int boxHeight = legendHeight();
         int boxX = geo.width - geo.padding - boxWidth - 6;
         int boxY = topY;
 
@@ -1136,12 +1147,14 @@ public class ChartPanel extends JPanel {
      * @param g2      Ziel-Grafikkontext
      * @param width   Panelbreite
      * @param padding Innenabstand des Plots
+     * @param topY    obere Kante der Box - liegt unterhalb der Legende, falls diese sichtbar
+     *                ist (siehe {@link #paintComponent}), sonst direkt oben in der Ecke
      */
     /** Höhe der Chi²-Anzeige-Box (siehe {@link #drawChiSquareOverlay}) - als Konstante geteilt,
-     *  damit {@link #paintComponent} die Legende zuverlässig darunter platzieren kann. */
+     *  falls andere Stellen sie einmal mit einbeziehen müssen. */
     private static final int CHI_OVERLAY_HEIGHT = 26;
 
-    private void drawChiSquareOverlay(Graphics2D g2, int width, int padding) {
+    private void drawChiSquareOverlay(Graphics2D g2, int width, int padding, int topY) {
         String chiText = String.format("χ²_red = %.4f", currentReducedChiSquare);
         g2.setFont(new Font("SansSerif", Font.BOLD, 12));
         FontMetrics fm = g2.getFontMetrics();
@@ -1152,7 +1165,7 @@ public class ChartPanel extends JPanel {
         int boxHeight = CHI_OVERLAY_HEIGHT;
 
         int boxX = width - padding - totalWidth - 5;
-        int boxY = padding + 5;
+        int boxY = topY;
 
         Color statusColor = getChiSquareColor(currentReducedChiSquare);
 
