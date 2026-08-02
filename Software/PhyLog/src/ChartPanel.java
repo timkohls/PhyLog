@@ -164,10 +164,24 @@ public class ChartPanel extends JPanel {
      *  damit dieser bei zwei Kanälen generisch bleiben kann (siehe {@link #setUnits}). */
     private String mainLabel = "Kanal A";
 
+    /** Beschriftung der (optionalen) zweiten Y-Achse für Kanal B, nur relevant, solange
+     *  {@link #dualYAxisMode} aktiv ist und eine Extra-Serie mit Daten existiert - siehe
+     *  {@link #setSecondaryUnits}. */
+    private String secondaryYUnit = "Messwert";
+
     private boolean showPoints = true;
     private LineMode lineMode = LineMode.NONE;
     private FitMode fitMode = FitMode.NONE;
     private int polynomialDegree = 2;
+
+    /**
+     * {@code true}, wenn Kanal B (falls aktiv, siehe {@link #extraSeries}) über eine eigene,
+     * unabhängig skalierte zweite Y-Achse dargestellt wird, statt sich - wie im bisherigen,
+     * weiterhin verfügbaren Standardverhalten - dieselbe Achse mit Kanal A zu teilen. Betrifft
+     * ausschließlich die Darstellung: Zoom, Freihand-Auswahl, Fit und Chi² bleiben unabhängig
+     * davon exklusiv an Kanal A (die Hauptgröße) gebunden, siehe {@link #computeSecondaryRange}.
+     */
+    private boolean dualYAxisMode = false;
 
     private double zoomFactor = 1.0;
     private Point mousePoint = null;
@@ -186,7 +200,7 @@ public class ChartPanel extends JPanel {
     /** Angenommene (konstante) Standardabweichung der Messwerte, geht als sigma in Chi^2 ein.
      *  Dient außerdem als Rückfallebene für {@link SigmaMode#RESIDUAL_GLOBAL}/{@link SigmaMode#RESIDUAL_LOCAL},
      *  solange kein Fit aktiv ist (siehe {@link #ensureSigmaComputed}). */
-    private double standardDeviation = 0.07;
+    private double standardDeviation = 1.0;
 
     /** Wie sigma bestimmt wird (siehe {@link SigmaMode}). */
     private SigmaMode sigmaMode = SigmaMode.CONSTANT;
@@ -351,15 +365,22 @@ public class ChartPanel extends JPanel {
      * weitergereicht, damit sie konsistent dieselbe Koordinatenabbildung verwenden.
      */
     private static class PlotGeometry {
-        final int width, height, padding, plotWidth, plotHeight;
+        final int width, height, padding, rightPadding, plotWidth, plotHeight;
         final double minX, maxX, minY, maxY, rangeX, rangeY, visibleMaxX;
+        /** {@code true}, wenn eine zweite, unabhängig skalierte Y-Achse für Kanal B gezeichnet
+         *  wird (siehe {@link #dualYAxisMode}) - nur dann sind {@link #minY2}/{@link #maxY2}/
+         *  {@link #rangeY2} gültig. */
+        final boolean hasSecondaryAxis;
+        final double minY2, maxY2, rangeY2;
 
-        PlotGeometry(int width, int height, int padding, int plotWidth, int plotHeight,
+        PlotGeometry(int width, int height, int padding, int rightPadding, int plotWidth, int plotHeight,
                      double minX, double maxX, double minY, double maxY,
-                     double rangeX, double rangeY, double visibleMaxX) {
+                     double rangeX, double rangeY, double visibleMaxX,
+                     boolean hasSecondaryAxis, double minY2, double maxY2, double rangeY2) {
             this.width = width;
             this.height = height;
             this.padding = padding;
+            this.rightPadding = rightPadding;
             this.plotWidth = plotWidth;
             this.plotHeight = plotHeight;
             this.minX = minX;
@@ -369,6 +390,10 @@ public class ChartPanel extends JPanel {
             this.rangeX = rangeX;
             this.rangeY = rangeY;
             this.visibleMaxX = visibleMaxX;
+            this.hasSecondaryAxis = hasSecondaryAxis;
+            this.minY2 = minY2;
+            this.maxY2 = maxY2;
+            this.rangeY2 = rangeY2;
         }
     }
 
@@ -521,6 +546,31 @@ public class ChartPanel extends JPanel {
         repaint();
     }
 
+    /** Setzt die Beschriftung der zweiten Y-Achse (Kanal B), wirkt sich nur aus, solange
+     *  {@link #dualYAxisMode} aktiv ist (siehe {@link #setDualYAxisMode}).
+     *
+     * @param yLabel Beschriftung, {@code null}/leer fällt auf "Messwert" zurück
+     */
+    public void setSecondaryUnits(String yLabel) {
+        this.secondaryYUnit = (yLabel != null && !yLabel.isBlank()) ? yLabel.trim() : "Messwert";
+        repaint();
+    }
+
+    /**
+     * Legt fest, ob Kanal B (falls über {@link #setExtraSeries} mit Daten belegt) eine eigene,
+     * unabhängig skalierte zweite Y-Achse bekommt ({@code true}), oder wie bisher dieselbe Achse
+     * wie Kanal A teilt ({@code false}, Standard). Reine Darstellungsoption - Fit, Zoom, Freihand-
+     * Auswahl und Chi² bleiben in beiden Fällen exklusiv an Kanal A gebunden.
+     */
+    public void setDualYAxisMode(boolean dualYAxisMode) {
+        this.dualYAxisMode = dualYAxisMode;
+        repaint();
+    }
+
+    public boolean isDualYAxisMode() {
+        return dualYAxisMode;
+    }
+
     /** @param showPoints ob die einzelnen Messpunkte als Kreise gezeichnet werden sollen */
     public void setShowPoints(boolean showPoints) {
         this.showPoints = showPoints;
@@ -573,6 +623,7 @@ public class ChartPanel extends JPanel {
     }
 
     public double getStandardDeviation() { return standardDeviation; }
+
     public int getPolynomialDegree() { return polynomialDegree; }
 
     /**
@@ -750,7 +801,7 @@ public class ChartPanel extends JPanel {
 
         if (!hasAnyData) {
             drawEmptyDataMessage(g2, geo);
-            drawCrosshair(g2, geo.padding, geo.height, geo.plotWidth, geo.plotHeight, geo.minX, geo.rangeX, geo.minY, geo.rangeY);
+            drawCrosshair(g2, geo);
             g2.dispose();
             return;
         }
@@ -780,13 +831,20 @@ public class ChartPanel extends JPanel {
             if (!extraSeries.isEmpty()) {
                 chiOverlayY += legendHeight() + 6;
             }
-            drawChiSquareOverlay(g2, geo.width, geo.padding, chiOverlayY);
+            drawChiSquareOverlay(g2, geo.width, geo.rightPadding, chiOverlayY);
+
+            // Fit, Zoom und Chi² beziehen sich immer ausschließlich auf Kanal A (siehe
+            // {@link #setExtraSeries}) - sobald eine Extra-Kurve (Kanal B) mitgezeichnet wird,
+            // macht ein kurzer Hinweis das unmissverständlich, statt es der Doku zu überlassen.
+            if (!extraSeries.isEmpty()) {
+                drawFitScopeNote(g2, geo, chiOverlayY + CHI_OVERLAY_HEIGHT + 4);
+            }
         }
 
         drawSelectionRectangle(g2);
         drawFreehandStroke(g2);
 
-        drawCrosshair(g2, geo.padding, geo.height, geo.plotWidth, geo.plotHeight, geo.minX, geo.rangeX, geo.minY, geo.rangeY);
+        drawCrosshair(g2, geo);
         g2.dispose();
     }
 
@@ -797,11 +855,18 @@ public class ChartPanel extends JPanel {
      */
     private void drawExtraSeries(Graphics2D g2, PlotGeometry geo) {
         double pointSize = 6;
+        // Bei aktiver zweiter Achse (siehe {@link #dualYAxisMode}) projizieren die Extra-Serien
+        // auf deren eigene Skala (minY2/rangeY2), statt - wie im Standardfall - dieselbe Skala
+        // wie Kanal A zu verwenden.
+        double seriesMinY = geo.hasSecondaryAxis ? geo.minY2 : geo.minY;
+        double seriesRangeY = geo.hasSecondaryAxis ? geo.rangeY2 : geo.rangeY;
+        int rightEdge = geo.width - geo.rightPadding;
+
         for (Series series : extraSeries) {
             List<Point2DDouble> points = new ArrayList<>();
             for (double[] point : series.data) {
                 double px = geo.padding + ((point[0] - geo.minX) / geo.rangeX) * geo.plotWidth;
-                double py = (geo.height - geo.padding) - ((point[1] - geo.minY) / geo.rangeY) * geo.plotHeight;
+                double py = (geo.height - geo.padding) - ((point[1] - seriesMinY) / seriesRangeY) * geo.plotHeight;
                 points.add(new Point2DDouble(px, py));
             }
 
@@ -814,7 +879,7 @@ public class ChartPanel extends JPanel {
             if (showPoints) {
                 g2.setColor(series.color);
                 for (Point2DDouble pt : points) {
-                    if (pt.x >= geo.padding && pt.x <= geo.width - geo.padding
+                    if (pt.x >= geo.padding && pt.x <= rightEdge
                             && pt.y >= geo.padding && pt.y <= geo.height - geo.padding) {
                         g2.fill(new Ellipse2D.Double(pt.x - pointSize / 2, pt.y - pointSize / 2, pointSize, pointSize));
                     }
@@ -864,7 +929,7 @@ public class ChartPanel extends JPanel {
 
         int boxWidth = swatch + 6 + maxTextWidth + 10;
         int boxHeight = legendHeight();
-        int boxX = geo.width - geo.padding - boxWidth - 6;
+        int boxX = geo.width - geo.rightPadding - boxWidth - 6;
         int boxY = topY;
 
         g2.setColor(Theme.PANEL);
@@ -893,34 +958,51 @@ public class ChartPanel extends JPanel {
         int height = getHeight();
         int padding = 65;
 
-        int plotWidth = width - 2 * padding;
+        boolean hasExtraData = false;
+        if (extraSeries != null) {
+            for (Series s : extraSeries) {
+                if (s.data != null && !s.data.isEmpty()) {
+                    hasExtraData = true;
+                    break;
+                }
+            }
+        }
+        // Zweite Achse nur zeichnen, wenn der Modus aktiv ist UND es überhaupt etwas gibt, das
+        // sie beschriften würde - sonst bräuchte man den zusätzlichen rechten Rand umsonst.
+        boolean secondaryAxisActive = dualYAxisMode && hasExtraData;
+        int rightPadding = secondaryAxisActive ? 95 : padding;
+
+        int plotWidth = width - padding - rightPadding;
         int plotHeight = height - 2 * padding;
 
         if (plotWidth <= 0 || plotHeight <= 0) return null;
 
         double minX, maxX, minY, maxY;
+        double minY2 = 0, maxY2 = 10;
 
         if (viewMinX != null) {
-            // Ein Zoom-/Auswahlfenster ist aktiv: DAS ist die Achsen-Spanne. Würde man sie
-            // stattdessen wie unten aus den Daten neu berechnen, würde die volle Ausdehnung der
-            // (nicht gefilterten) Zusatzserien die Achse sofort wieder auf die Gesamtbreite
-            // aufziehen und den Zoom optisch aufheben, obwohl displayData korrekt gefiltert ist.
+            // Ein Zoom-/Auswahlfenster ist aktiv: DAS ist die Achsen-Spanne für Kanal A (bzw. für
+            // beide, im bisherigen Ein-Achsen-Modus). Würde man sie stattdessen wie unten aus den
+            // Daten neu berechnen, würde die volle Ausdehnung der (nicht gefilterten) Zusatzserien
+            // die Achse sofort wieder auf die Gesamtbreite aufziehen und den Zoom optisch
+            // aufheben, obwohl displayData korrekt gefiltert ist.
             minX = viewMinX; maxX = viewMaxX;
             minY = viewMinY; maxY = viewMaxY;
+
+            if (secondaryAxisActive) {
+                // Die zweite Achse ist bewusst NICHT an das (auf Kanal A bezogene) Zoom-Fenster
+                // gekoppelt, sondern skaliert sich innerhalb des sichtbaren X-Bereichs frisch auf
+                // die tatsächlichen Kanal-B-Werte - ein Zoom auf Kanal A soll Kanal B nicht
+                // willkürlich mit stauchen oder strecken.
+                double[] secRange = computeSecondaryRange(minX, maxX);
+                minY2 = secRange[0];
+                maxY2 = secRange[1];
+            }
         } else {
             minX = 0; maxX = 10;
             minY = 0; maxY = 10;
 
             boolean hasMainData = (displayData != null && !displayData.isEmpty());
-            boolean hasExtraData = false;
-            if (extraSeries != null) {
-                for (Series s : extraSeries) {
-                    if (s.data != null && !s.data.isEmpty()) {
-                        hasExtraData = true;
-                        break;
-                    }
-                }
-            }
 
             if (hasMainData || hasExtraData) {
                 minX = Double.MAX_VALUE; maxX = -Double.MAX_VALUE;
@@ -941,25 +1023,71 @@ public class ChartPanel extends JPanel {
                             for (double[] point : series.data) {
                                 if (point[0] < minX) minX = point[0];
                                 if (point[0] > maxX) maxX = point[0];
-                                if (point[1] < minY) minY = point[1];
-                                if (point[1] > maxY) maxY = point[1];
+                                if (!secondaryAxisActive) {
+                                    // Legacy-Verhalten: Extra-Kurven teilen sich die Y-Achse mit
+                                    // Kanal A, gehen also mit in deren Wertebereich ein. Mit
+                                    // eigener zweiter Achse (siehe unten) bleiben sie hiervon
+                                    // bewusst ausgenommen.
+                                    if (point[1] < minY) minY = point[1];
+                                    if (point[1] > maxY) maxY = point[1];
+                                }
                             }
                         }
                     }
                 }
 
                 if (minX == Double.MAX_VALUE) minX = 0; // Fallback falls doch etwas schiefgeht
+                if (minY == Double.MAX_VALUE) { minY = 0; maxY = 10; } // nur Kanal-B-Daten, keine Kanal-A-Werte
             }
             if (minX == maxX) maxX = minX + 1.0;
             if (minY == maxY) { minY -= 1.0; maxY += 1.0; }
+
+            if (secondaryAxisActive) {
+                double[] secRange = computeSecondaryRange(minX, maxX);
+                minY2 = secRange[0];
+                maxY2 = secRange[1];
+            }
         }
 
         double rangeX = (maxX - minX) / zoomFactor;
         double rangeY = (maxY - minY) / zoomFactor;
+        double rangeY2 = secondaryAxisActive ? (maxY2 - minY2) / zoomFactor : 0;
         double visibleMaxX = minX + rangeX;
 
-        return new PlotGeometry(width, height, padding, plotWidth, plotHeight,
-                minX, maxX, minY, maxY, rangeX, rangeY, visibleMaxX);
+        return new PlotGeometry(width, height, padding, rightPadding, plotWidth, plotHeight,
+                minX, maxX, minY, maxY, rangeX, rangeY, visibleMaxX,
+                secondaryAxisActive, minY2, maxY2, rangeY2);
+    }
+
+    /**
+     * Bestimmt den Y-Wertebereich der Extra-Serien (Kanal B) innerhalb des sichtbaren
+     * X-Fensters [{@code minX}, {@code maxX}] - Grundlage der unabhängig skalierten zweiten
+     * Y-Achse (siehe {@link #dualYAxisMode}). Liegt (noch) kein Kanal-B-Punkt im sichtbaren
+     * Fenster, weicht die Methode auf den gesamten Kanal-B-Datensatz aus, damit die Achse nicht
+     * grundlos auf 0..10 zurückfällt.
+     */
+    private double[] computeSecondaryRange(double minX, double maxX) {
+        double lo = Double.MAX_VALUE, hi = -Double.MAX_VALUE;
+        for (Series series : extraSeries) {
+            if (series.data == null) continue;
+            for (double[] point : series.data) {
+                if (point[0] < minX || point[0] > maxX) continue;
+                if (point[1] < lo) lo = point[1];
+                if (point[1] > hi) hi = point[1];
+            }
+        }
+        if (lo == Double.MAX_VALUE) {
+            for (Series series : extraSeries) {
+                if (series.data == null) continue;
+                for (double[] point : series.data) {
+                    if (point[1] < lo) lo = point[1];
+                    if (point[1] > hi) hi = point[1];
+                }
+            }
+        }
+        if (lo == Double.MAX_VALUE) { lo = 0; hi = 10; }
+        if (lo == hi) { lo -= 1.0; hi += 1.0; }
+        return new double[]{lo, hi};
     }
 
     /**
@@ -975,8 +1103,16 @@ public class ChartPanel extends JPanel {
         int width = geo.width;
         int plotWidth = geo.plotWidth;
         int plotHeight = geo.plotHeight;
+        int rightEdge = width - geo.rightPadding;
+        // Die linke Achse färbt sich nur dann in Kanal-A-Farbe ein, wenn wirklich beide Kanäle
+        // gleichzeitig genutzt werden (aktive zweite Achse, siehe #hasSecondaryAxis) - bei nur
+        // einem aktiven Sensor bleibt sie wie bisher neutral weiß, da es dort nichts von Kanal B
+        // abzugrenzen gibt.
+        Color primaryAxisColor = geo.hasSecondaryAxis ? Theme.POINT : Theme.TEXT;
+        // Sehr schwache, nur angedeutete Variante der jeweiligen Achsenfarbe für die
+        // horizontalen Gitterlinien (siehe unten) - dezent statt dominant.
+        Color primaryGridColor = withAlpha(primaryAxisColor, 40);
 
-        g2.setColor(Theme.BORDER);
         g2.setStroke(new BasicStroke(1.0f));
         int gridDivisions = 5;
 
@@ -984,31 +1120,93 @@ public class ChartPanel extends JPanel {
             double ratio = (double) i / gridDivisions;
             int x = padding + (int) (ratio * plotWidth);
             double valX = geo.minX + ratio * geo.rangeX;
+            g2.setColor(Theme.BORDER);
             g2.drawLine(x, padding, x, height - padding);
             g2.setColor(Theme.TEXT);
             g2.setFont(new Font("SansSerif", Font.PLAIN, 10));
             g2.drawString(String.format("%.2f", valX), x - 12, height - padding + 20);
-            g2.setColor(Theme.BORDER);
         }
 
         for (int i = 0; i <= gridDivisions; i++) {
             double ratio = (double) i / gridDivisions;
             int y = (height - padding) - (int) (ratio * plotHeight);
             double valY = geo.minY + ratio * geo.rangeY;
-            g2.drawLine(padding, y, width - padding, y);
-            g2.setColor(Theme.TEXT);
+
+            // Im Ein-Achsen-Modus (kein zweiter Sensor aktiv) bleibt die klassische, neutrale
+            // Gitterlinie erhalten. Erst mit aktiver zweiter Achse (siehe #hasSecondaryAxis)
+            // zeichnen beide Kanäle ihre eigene, ganz schwach angedeutete Gitterlinie in ihrer
+            // jeweiligen Farbe an derselben Bildschirmzeile - dezent statt dominant, damit es bei
+            // zwei gleichzeitig sichtbaren (weil unterschiedlich skalierten) Referenzlinien pro
+            // Reihe nicht überladen wirkt.
+            if (!geo.hasSecondaryAxis) {
+                g2.setColor(Theme.BORDER);
+                g2.drawLine(padding, y, rightEdge, y);
+            } else {
+                g2.setColor(primaryGridColor);
+                g2.drawLine(padding, y, rightEdge, y);
+            }
+
+            g2.setColor(primaryAxisColor);
+            g2.setFont(new Font("SansSerif", Font.PLAIN, 10));
             g2.drawString(String.format("%.2f", valY), padding - 50, y + 4);
-            g2.setColor(Theme.BORDER);
+
+            if (geo.hasSecondaryAxis) {
+                double valY2 = geo.minY2 + ratio * geo.rangeY2;
+
+                // Zusätzliche, ebenso schwache Gitterlinie für Kanal B in dessen Farbe, an
+                // derselben Bildschirmzeile - beide Linien treffen sich hier nur auf dem Papier
+                // (an dieser Pixelreihe), nicht inhaltlich (Kanal A und B haben an dieser Stelle
+                // i. A. unterschiedliche tatsächliche Werte, siehe Tick-Beschriftungen).
+                g2.setColor(withAlpha(secondaryAxisColor(), 40));
+                g2.drawLine(padding, y, rightEdge, y);
+
+                g2.setColor(secondaryAxisColor());
+                g2.setFont(new Font("SansSerif", Font.PLAIN, 10));
+                g2.drawString(String.format("%.2f", valY2), rightEdge + 8, y + 4);
+            }
+        }
+
+        // Zeitachse (unten) bleibt neutral eingefärbt, da sie für beide Kanäle gemeinsam gilt.
+        g2.setColor(Theme.TEXT);
+        g2.setStroke(new BasicStroke(1.5f));
+        g2.drawLine(padding, height - padding, rightEdge, height - padding);
+
+        // Linke Y-Achse in Kanal-A-Farbe (nur bei aktiver zweiter Achse, siehe oben), rechte
+        // (falls vorhanden) in Kanal-B-Farbe.
+        g2.setColor(primaryAxisColor);
+        g2.drawLine(padding, padding, padding, height - padding);
+
+        if (geo.hasSecondaryAxis) {
+            g2.setColor(secondaryAxisColor());
+            g2.setStroke(new BasicStroke(1.5f));
+            g2.drawLine(rightEdge, padding, rightEdge, height - padding);
         }
 
         g2.setColor(Theme.TEXT);
-        g2.setStroke(new BasicStroke(1.5f));
-        g2.drawLine(padding, height - padding, width - padding, height - padding);
-        g2.drawLine(padding, padding, padding, height - padding);
-
         g2.setFont(new Font("SansSerif", Font.BOLD, 11));
-        g2.drawString("Zeit (" + xUnit + ")", width - padding - 40, height - padding + 35);
+        g2.drawString("Zeit (" + xUnit + ")", padding + plotWidth / 2 - 30, height - padding + 35);
+
+        g2.setColor(primaryAxisColor);
         g2.drawString(yUnit, padding - 50, padding - 15);
+
+        if (geo.hasSecondaryAxis) {
+            g2.setColor(secondaryAxisColor());
+            FontMetrics fm = g2.getFontMetrics();
+            int labelWidth = fm.stringWidth(secondaryYUnit);
+            g2.drawString(secondaryYUnit, rightEdge - labelWidth + 55, padding - 15);
+        }
+    }
+
+    /** Liefert {@code color} mit auf {@code alpha} (0..255) gesetzter Deckkraft - Hilfsmethode
+     *  für die dezenten, farbigen horizontalen Gitterlinien (siehe {@link #drawGridAndAxes}). */
+    private static Color withAlpha(Color color, int alpha) {
+        return new Color(color.getRed(), color.getGreen(), color.getBlue(), alpha);
+    }
+
+    /** Farbe der zweiten Y-Achse - dieselbe wie die (aktuell einzige mögliche) Kanal-B-Kurve,
+     *  damit auf einen Blick klar ist, welche Achse zu welcher Kurve gehört. */
+    private Color secondaryAxisColor() {
+        return (extraSeries != null && !extraSeries.isEmpty()) ? extraSeries.get(0).color : Theme.TEXT;
     }
 
     /**
@@ -1142,8 +1340,9 @@ public class ChartPanel extends JPanel {
      */
     private void drawDataPoints(Graphics2D g2, PlotGeometry geo, List<Point2DDouble> points) {
         double pointSize = 7;
+        int rightEdge = geo.width - geo.rightPadding;
         for (Point2DDouble pt : points) {
-            if (pt.x >= geo.padding && pt.x <= geo.width - geo.padding
+            if (pt.x >= geo.padding && pt.x <= rightEdge
                     && pt.y >= geo.padding && pt.y <= geo.height - geo.padding) {
                 g2.setColor(Theme.POINT);
                 g2.fill(new Ellipse2D.Double(pt.x - pointSize / 2, pt.y - pointSize / 2, pointSize, pointSize));
@@ -1215,18 +1414,26 @@ public class ChartPanel extends JPanel {
      * Zeichnet die kleine Chi²-Anzeige mit farbigem Status-Icon oben rechts im Plot und
      * merkt sich dessen Klickfläche in {@link #infoButtonBounds} für {@link #showChiSquareInfoDialog()}.
      *
-     * @param g2      Ziel-Grafikkontext
-     * @param width   Panelbreite
-     * @param padding Innenabstand des Plots
-     * @param topY    obere Kante der Box - liegt unterhalb der Legende, falls diese sichtbar
-     *                ist (siehe {@link #paintComponent}), sonst direkt oben in der Ecke
+     * @param g2           Ziel-Grafikkontext
+     * @param width        Panelbreite
+     * @param rightPadding rechter Innenabstand des Plots (siehe {@link PlotGeometry#rightPadding}
+     *                     - bei aktiver zweiter Y-Achse größer als der übrige Innenabstand)
+     * @param topY         obere Kante der Box - liegt unterhalb der Legende, falls diese sichtbar
+     *                     ist (siehe {@link #paintComponent}), sonst direkt oben in der Ecke
      */
     /** Höhe der Chi²-Anzeige-Box (siehe {@link #drawChiSquareOverlay}) - als Konstante geteilt,
      *  falls andere Stellen sie einmal mit einbeziehen müssen. */
     private static final int CHI_OVERLAY_HEIGHT = 26;
 
-    private void drawChiSquareOverlay(Graphics2D g2, int width, int padding, int topY) {
+    private void drawChiSquareOverlay(Graphics2D g2, int width, int rightPadding, int topY) {
+        // Bei SigmaMode.RESIDUAL_GLOBAL liegt sigma per Konstruktion so, dass chi²_red hier
+        // rechnerisch (fast) immer exakt 1 ergibt (siehe Javadoc von calculateChiSquare) - das
+        // ist kein Fehler, sondern lässt sich ohne den Hinweis leicht als "kaputte Anzeige"
+        // missverstehen. Der Klick auf das "i"-Symbol erklärt es zusätzlich ausführlich.
         String chiText = String.format("χ²_red = %.4f", currentReducedChiSquare);
+        if (sigmaMode == SigmaMode.RESIDUAL_GLOBAL) {
+            chiText += "  (per Definition \u2248 1)";
+        }
         g2.setFont(new Font("SansSerif", Font.BOLD, 12));
         FontMetrics fm = g2.getFontMetrics();
 
@@ -1235,7 +1442,7 @@ public class ChartPanel extends JPanel {
         int totalWidth = textWidth + iconSize + 16;
         int boxHeight = CHI_OVERLAY_HEIGHT;
 
-        int boxX = width - padding - totalWidth - 5;
+        int boxX = width - rightPadding - totalWidth - 5;
         int boxY = topY;
 
         Color statusColor = getChiSquareColor(currentReducedChiSquare);
@@ -1258,6 +1465,27 @@ public class ChartPanel extends JPanel {
         g2.setColor(Theme.BG);
         g2.setFont(new Font("Serif", Font.BOLD | Font.ITALIC, 11));
         g2.drawString("i", iconX + 6, iconY + 12);
+    }
+
+    /**
+     * Zeichnet einen kleinen, rechtsbündigen Hinweis unterhalb der Chi²-Anzeige, dass sich Fit
+     * und Chi² ausschließlich auf Kanal A beziehen - nur sichtbar, solange mindestens eine
+     * Extra-Serie (Kanal B) gleichzeitig dargestellt wird (siehe {@link #paintComponent}).
+     * Ohne diesen Hinweis könnte man leicht annehmen, der Fit gelte für beide Kanäle.
+     *
+     * @param g2   Ziel-Grafikkontext
+     * @param geo  aktuelle Plot-Geometrie
+     * @param topY obere Kante des Hinweistexts, direkt unterhalb der Chi²-Box
+     */
+    private void drawFitScopeNote(Graphics2D g2, PlotGeometry geo, int topY) {
+        String note = "Fit gilt nur für Kanal A";
+        g2.setFont(new Font("SansSerif", Font.ITALIC, 10));
+        FontMetrics fm = g2.getFontMetrics();
+        int textWidth = fm.stringWidth(note);
+        int boxX = geo.width - geo.rightPadding - textWidth - 5;
+
+        g2.setColor(Theme.TEXT);
+        g2.drawString(note, boxX, topY + 10);
     }
 
     /** Öffnet den Detail-Dialog mit einer Erklärung des aktuellen Chi²-Gütewerts. */
@@ -1863,52 +2091,55 @@ public class ChartPanel extends JPanel {
 
     /**
      * Zeichnet ein Fadenkreuz mit Koordinatenanzeige an der aktuellen Mausposition, sofern
-     * sich die Maus innerhalb der Plotfläche befindet.
+     * sich die Maus innerhalb der Plotfläche befindet. Ist eine zweite Y-Achse aktiv (siehe
+     * {@link #dualYAxisMode}), zeigt die Koordinatenbox zusätzlich den Y-Wert auf dieser Achse
+     * an derselben Bildschirmhöhe an - die beiden Kurven haben an dieser Stelle ja i. A.
+     * unterschiedliche tatsächliche Werte.
      *
-     * @param g2         Ziel-Grafikkontext
-     * @param padding    Innenabstand des Plots (Pixel)
-     * @param height     Panelhöhe (Pixel)
-     * @param plotWidth  Breite der Plotfläche (Pixel)
-     * @param plotHeight Höhe der Plotfläche (Pixel)
-     * @param minX       kleinster X-Wert des sichtbaren Bereichs (Datenraum)
-     * @param rangeX     Breite des sichtbaren X-Bereichs (Datenraum)
-     * @param minY       kleinster Y-Wert des sichtbaren Bereichs (Datenraum)
-     * @param rangeY     Höhe des sichtbaren Y-Bereichs (Datenraum)
+     * @param g2  Ziel-Grafikkontext
+     * @param geo aktuelle Plot-Geometrie
      */
-    private void drawCrosshair(Graphics2D g2, int padding, int height, int plotWidth, int plotHeight,
-                               double minX, double rangeX, double minY, double rangeY) {
-        if (mousePoint != null) {
-            int mx = mousePoint.x;
-            int my = mousePoint.y;
+    private void drawCrosshair(Graphics2D g2, PlotGeometry geo) {
+        if (mousePoint == null) return;
 
-            if (mx >= padding && mx <= getWidth() - padding && my >= padding && my <= height - padding) {
-                g2.setColor(Theme.BORDER);
-                g2.setStroke(new BasicStroke(1.0f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10.0f, new float[]{4.0f, 4.0f}, 0.0f));
+        int mx = mousePoint.x;
+        int my = mousePoint.y;
+        int rightEdge = geo.width - geo.rightPadding;
 
-                g2.drawLine(mx, padding, mx, height - padding);
-                g2.drawLine(padding, my, getWidth() - padding, my);
+        if (mx < geo.padding || mx > rightEdge || my < geo.padding || my > geo.height - geo.padding) return;
 
-                double realX = minX + ((double) (mx - padding) / plotWidth) * rangeX;
-                double realY = minY + ((double) ((height - padding) - my) / plotHeight) * rangeY;
+        g2.setColor(Theme.BORDER);
+        g2.setStroke(new BasicStroke(1.0f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10.0f, new float[]{4.0f, 4.0f}, 0.0f));
 
-                String coordStr = String.format("X: %.2f %s | Y: %.2f", realX, xUnit, realY);
-                g2.setFont(new Font("SansSerif", Font.PLAIN, 11));
-                FontMetrics fm = g2.getFontMetrics();
-                int strWidth = fm.stringWidth(coordStr);
+        g2.drawLine(mx, geo.padding, mx, geo.height - geo.padding);
+        g2.drawLine(geo.padding, my, rightEdge, my);
 
-                int boxX = mx + 10;
-                int boxY = my - 10;
-                if (boxX + strWidth + 10 > getWidth() - padding) boxX = mx - strWidth - 15;
-                if (boxY - 15 < padding) boxY = my + 20;
+        double realX = geo.minX + ((double) (mx - geo.padding) / geo.plotWidth) * geo.rangeX;
+        double realY = geo.minY + ((double) ((geo.height - geo.padding) - my) / geo.plotHeight) * geo.rangeY;
 
-                g2.setColor(Theme.PANEL);
-                g2.fillRect(boxX, boxY - 12, strWidth + 8, 16);
-                g2.setColor(Theme.BORDER);
-                g2.drawRect(boxX, boxY - 12, strWidth + 8, 16);
-                g2.setColor(Theme.TEXT);
-                g2.drawString(coordStr, boxX + 4, boxY);
-            }
+        String coordStr;
+        if (geo.hasSecondaryAxis) {
+            double realY2 = geo.minY2 + ((double) ((geo.height - geo.padding) - my) / geo.plotHeight) * geo.rangeY2;
+            coordStr = String.format("X: %.2f %s | A: %.2f | B: %.2f", realX, xUnit, realY, realY2);
+        } else {
+            coordStr = String.format("X: %.2f %s | Y: %.2f", realX, xUnit, realY);
         }
+
+        g2.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        FontMetrics fm = g2.getFontMetrics();
+        int strWidth = fm.stringWidth(coordStr);
+
+        int boxX = mx + 10;
+        int boxY = my - 10;
+        if (boxX + strWidth + 10 > rightEdge) boxX = mx - strWidth - 15;
+        if (boxY - 15 < geo.padding) boxY = my + 20;
+
+        g2.setColor(Theme.PANEL);
+        g2.fillRect(boxX, boxY - 12, strWidth + 8, 16);
+        g2.setColor(Theme.BORDER);
+        g2.drawRect(boxX, boxY - 12, strWidth + 8, 16);
+        g2.setColor(Theme.TEXT);
+        g2.drawString(coordStr, boxX + 4, boxY);
     }
 
     /** Einfacher (double-x, double-y)-Bildschirmpunkt, um Rundungsfehler bei kleinen Panels zu vermeiden. */

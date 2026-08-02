@@ -49,7 +49,7 @@ public class TriggerDialog extends JDialog {
 
         gbc.gridx = 0; gbc.gridy = 0;
         formPanel.add(new JLabel("Trigger-Modus:"), gbc);
-        cbTriggerMode = new JComboBox<>(new String[]{"Manuell (Start-Button)", "Schwellenwert (Analog)"});
+        cbTriggerMode = new JComboBox<>(new String[]{"Manuell (Start-Button)", "Schwellenwert"});
         cbTriggerMode.setSelectedIndex(current.thresholdMode ? 1 : 0);
         gbc.gridx = 1;
         formPanel.add(cbTriggerMode, gbc);

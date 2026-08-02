@@ -42,7 +42,7 @@ public class StandardDeviationDialog extends JDialog {
      */
     public StandardDeviationDialog(JFrame parent, double currentVal, ChartPanel.SigmaMode currentMode, int currentNeighbors) {
         super(parent, "Standardabweichung einstellen", true);
-        setSize(560, 420);
+        setSize(560, 400);
         setLocationRelativeTo(parent);
         setLayout(new BorderLayout(10, 10));
 

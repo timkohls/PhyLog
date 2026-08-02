@@ -72,6 +72,16 @@ public class GUI extends JFrame {
     private JButton btnStart, btnStop, btnTrigger, btnZoomIn, btnZoomOut, btnResetZoom, btnClear;
     private JLabel lblTriggerStatus;
 
+    /** "Sensor konfigurieren..."-Menüeintrag - nur nutzbar, solange eine Verbindung zum ESP32
+     *  besteht (siehe {@link #openSensorConfigDialog()} und {@link #updateStatusLabel()}), damit
+     *  eine Sensorauswahl nie ins Leere läuft, weil die Firmware sie mangels Verbindung gar nicht
+     *  erst mitbekommen könnte. */
+    private JMenuItem configSensorItem;
+
+    /** Menüeinträge für die Y-Achsen-Steuerung zur Synchronisation mit automatischen Wechseln. */
+    private JRadioButtonMenuItem yAxisShared;
+    private JRadioButtonMenuItem yAxisDual;
+
     /** Referenz auf ein bereits geöffnetes Terminal-Fenster. */
     private Terminal terminalWindow;
 
@@ -88,6 +98,12 @@ public class GUI extends JFrame {
 
     /** Aktuelle Trigger-Konfiguration (siehe {@link TriggerDialog}), Standard: manueller Start. */
     private TriggerDialog.Config triggerConfig = new TriggerDialog.Config();
+
+    /** {@code true}, wenn Kanal B (sofern aktiv) über eine eigene, unabhängig skalierte zweite
+     *  Y-Achse dargestellt wird, statt sich - wie im Standardfall - dieselbe Achse mit Kanal A zu
+     *  teilen (siehe Menü "Ansicht" -&gt; "Y-Achsen" sowie {@link ChartPanel#setDualYAxisMode}).
+     *  Wirkt sich nur auf Achsenbeschriftung/-skalierung aus, nicht auf Fit, Zoom oder Chi². */
+    private boolean dualYAxisMode = false;
 
     /** {@code true}, nachdem Start gedrückt wurde, solange im Schwellenwert-Modus noch auf die
      *  Trigger-Bedingung gewartet wird - es wird noch nichts aufgezeichnet (siehe {@link #recording}). */
@@ -116,6 +132,11 @@ public class GUI extends JFrame {
         initMenuBar();
         initToolBar();
         initMainArea();
+
+        // Anfangszustand von Start/Stop, Sensor-Menüpunkt etc. korrekt setzen (siehe
+        // #updateStatusLabel), statt bis zur ersten Verbindungsänderung auf die in initToolBar()
+        // gesetzten Platzhalterwerte angewiesen zu sein.
+        updateStatusLabel();
 
         // Läuft dauerhaft, nicht nur während einer Aufzeichnung - siehe ingestSample.
         DeviceConnection.getInstance().addLineListener(this::handleIncomingLine);
@@ -167,13 +188,29 @@ public class GUI extends JFrame {
 
         // --- Sensor Menü ---
         JMenu menuSensor = new JMenu("Sensor");
+        menuSensor.addMenuListener(new javax.swing.event.MenuListener() {
+            @Override
+            public void menuSelected(javax.swing.event.MenuEvent e) {
+                updateStatusLabel();
+            }
+
+            @Override
+            public void menuDeselected(javax.swing.event.MenuEvent e) {
+            }
+
+            @Override
+            public void menuCanceled(javax.swing.event.MenuEvent e) {
+            }
+        });
 
         JMenuItem connectionItem = new JMenuItem("Verbindung (Bluetooth)...");
         connectionItem.addActionListener(e -> openConnectionDialog());
         menuSensor.add(connectionItem);
 
-        JMenuItem configSensorItem = new JMenuItem("Sensor konfigurieren...");
+        configSensorItem = new JMenuItem("Sensor konfigurieren...");
         configSensorItem.addActionListener(e -> openSensorConfigDialog());
+        configSensorItem.setEnabled(DeviceConnection.getInstance().isConnected());
+        configSensorItem.setToolTipText("Erst mit dem ESP32 verbinden, dann Sensoren auswählen.");
         menuSensor.add(configSensorItem);
 
         // --- Terminal Menü ---
@@ -215,6 +252,23 @@ public class GUI extends JFrame {
         menuView.add(showPoints);
         menuView.add(menuLineMode);
 
+        // --- Y-Achsen Untermenü ---
+        JMenu menuYAxis = new JMenu("Y-Achsen");
+        ButtonGroup yAxisGroup = new ButtonGroup();
+
+        yAxisShared = new JRadioButtonMenuItem("Eine gemeinsame Y-Achse", true);
+        yAxisShared.addActionListener(e -> setDualYAxisMode(false));
+        yAxisGroup.add(yAxisShared);
+        menuYAxis.add(yAxisShared);
+
+        yAxisDual = new JRadioButtonMenuItem("Zwei unabhängige Y-Achsen (je Kanal skaliert)");
+        yAxisDual.addActionListener(e -> setDualYAxisMode(true));
+        yAxisGroup.add(yAxisDual);
+        menuYAxis.add(yAxisDual);
+
+        menuView.addSeparator();
+        menuView.add(menuYAxis);
+
         // --- Funktions-Fit Menü ---
         JMenu menuFit = new JMenu("Funktions-Fit");
         ButtonGroup fitButtonGroup = new ButtonGroup();
@@ -255,17 +309,14 @@ public class GUI extends JFrame {
 
         JLabel portLabel = new JLabel(" COM-Port: ");
 
-        // ComboBox erstellen und direkt mit den echten Ports füllen
         JComboBox<String> portSelector = new JComboBox<>();
         portSelector.setEditable(true);
         portSelector.setMaximumSize(new Dimension(140, 25));
 
-        // Initiale Ports laden
         for (String name : DeviceConnection.getInstance().listPortNames()) {
             portSelector.addItem(name);
         }
 
-        // Kleiner Refresh-Button, falls das Gerät erst später eingesteckt wird
         JButton btnRefreshPorts = new JButton("↻");
         btnRefreshPorts.setToolTipText("Ports aktualisieren");
         btnRefreshPorts.setFocusPainted(false);
@@ -277,23 +328,19 @@ public class GUI extends JFrame {
             }
         });
 
-        // Verbinden/Trennen Button
         JButton connectButton = new JButton(DeviceConnection.getInstance().isConnected() ? "Trennen" : "Verbinden");
         connectButton.setFocusPainted(false);
         connectButton.setMargin(new Insets(2, 8, 2, 8));
 
         connectButton.addActionListener(e -> {
             if (DeviceConnection.getInstance().isConnected()) {
-                // Trennen
                 DeviceConnection.getInstance().disconnect();
                 connectButton.setText("Verbinden");
             } else {
-                // Verbinden
                 Object selectedItem = portSelector.getSelectedItem();
                 if (selectedItem != null) {
                     String portName = selectedItem.toString().trim();
                     if (!portName.isEmpty()) {
-                        // Wir nutzen fix 115200 Baud, genau wie das Terminal als Standardwert hat
                         boolean success = DeviceConnection.getInstance().connect(portName, 115200);
                         if (success) {
                             connectButton.setText("Trennen");
@@ -308,7 +355,6 @@ public class GUI extends JFrame {
             }
             updateStatusLabel();
         });
-
 
         menuFit.add(itemNone);
         menuFit.add(menuPoly);
@@ -326,12 +372,11 @@ public class GUI extends JFrame {
         menuBar.add(Box.createHorizontalGlue());
         menuBar.add(portLabel);
         menuBar.add(portSelector);
-        menuBar.add(Box.createRigidArea(new Dimension(5, 0))); // Abstand
+        menuBar.add(Box.createRigidArea(new Dimension(5, 0)));
         menuBar.add(btnRefreshPorts);
-        menuBar.add(Box.createRigidArea(new Dimension(5, 0))); // Abstand
+        menuBar.add(Box.createRigidArea(new Dimension(5, 0)));
         menuBar.add(connectButton);
-        menuBar.add(Box.createRigidArea(new Dimension(15, 0))); // Abstand zum rechten Rand
-
+        menuBar.add(Box.createRigidArea(new Dimension(15, 0)));
 
         setJMenuBar(menuBar);
     }
@@ -356,6 +401,8 @@ public class GUI extends JFrame {
         btnStop = new JButton("Stop");
         btnStart.addActionListener(e -> startMeasurement());
         btnStop.addActionListener(e -> stopMeasurement());
+        btnStart.setEnabled(false);
+        btnStop.setEnabled(false);
 
         btnZoomIn = new JButton(" + ");
         btnZoomIn.setFont(new Font("SansSerif", Font.BOLD, 14));
@@ -421,8 +468,6 @@ public class GUI extends JFrame {
         add(mainSplitPane, BorderLayout.CENTER);
     }
 
-    /** Baut Tabellenmodell, {@link JTable} und {@link JScrollPane} für einen Kanal und richtet
-     *  automatisches Scrollen zur zuletzt eingefügten Zeile ein. */
     private void initChannelTable(Channel ch) {
         ch.tableModel = createTableModel();
         ch.table = new JTable(ch.tableModel);
@@ -548,6 +593,13 @@ public class GUI extends JFrame {
     }
 
     private void openSensorConfigDialog() {
+        if (!DeviceConnection.getInstance().isConnected()) {
+            JOptionPane.showMessageDialog(this,
+                    "Bitte zuerst über 'Sensor \u2192 Verbindung (Bluetooth)...' bzw. den COM-Port oben rechts mit dem ESP32 verbinden.",
+                    "Keine Verbindung", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
         Sensor previousA = channelA.sensor;
         Sensor previousB = channelB.sensor;
 
@@ -568,23 +620,14 @@ public class GUI extends JFrame {
             sampleRateHz = dialog.getSampleRate();
             updateTableLayout();
             applySampleRateToFirmware();
-            // Die Sensorauswahl selbst wurde schon live an die Firmware gesendet (siehe
-            // pushSensorSelectionToFirmware), kein erneutes SET nötig.
         } else {
-            // Abgebrochen: eine im Dialog probeweise gewählte Sensorauswahl wieder rückgängig machen.
             pushSensorSelectionToFirmware('A', previousA);
             pushSensorSelectionToFirmware('B', previousB);
         }
+
+        updateStatusLabel();
     }
 
-    /**
-     * Sorgt dafür, dass die Firmware Daten sendet, damit die Live-Anzeige im Sensor-
-     * Konfigurationsdialog auch außerhalb einer laufenden Aufzeichnung aktuelle Werte zeigt.
-     * Läuft bereits eine Aufzeichnung, passiert nichts (dann fließen ohnehin schon Daten).
-     *
-     * @return {@code true}, wenn dafür extra gestartet wurde und beim Schließen des Dialogs
-     *         wieder gestoppt werden muss
-     */
     private boolean ensureLiveDataFlowing() {
         if (!DeviceConnection.getInstance().isConnected() || recording) {
             return false;
@@ -593,11 +636,6 @@ public class GUI extends JFrame {
         return true;
     }
 
-    /** Teilt der Firmware sofort mit, welchen Sensortyp ein Kanal abtasten soll, und übernimmt
-     *  die Auswahl zugleich lokal - wird schon bei jeder Auswahl im Dialog aufgerufen, nicht
-     *  erst nach "Übernehmen" (siehe {@link SensorConfigDialog.SensorSelectionListener}), sonst
-     *  würde {@link #ingestSample} ankommende Live-Werte noch mit dem alten Sensorprofil
-     *  dekodieren. Bricht der Nutzer ab, macht {@link #openSensorConfigDialog()} dies rückgängig. */
     private void pushSensorSelectionToFirmware(char channelId, Sensor sensor) {
         Channel ch = channel(channelId);
         if (ch.sensor != sensor) ch.tareOffset = 0.0;
@@ -609,8 +647,6 @@ public class GUI extends JFrame {
         DeviceConnection.getInstance().sendLine("SET," + channelId + "," + sensor.getFirmwareTypeName());
     }
 
-    /** Übernimmt den aktuell angezeigten Live-Wert eines Kanals als neuen (kumulativen)
-     *  Tara-Offset. Ohne bereits vorliegenden Live-Wert passiert nichts. */
     private void onTareRequested(char channelId) {
         Channel ch = channel(channelId);
         if (ch.latestValue != null) ch.tareOffset += ch.latestValue;
@@ -625,7 +661,6 @@ public class GUI extends JFrame {
     }
 
     private void startMeasurement() {
-        // 1. Prüfung: Ist eine verbindung da? (USB/COM-Port)
         if (!DeviceConnection.getInstance().isConnected()) {
             JOptionPane.showMessageDialog(
                     this,
@@ -636,7 +671,6 @@ public class GUI extends JFrame {
             return;
         }
 
-        // 2. Prüfung: Ist auf mindestens einem Kanal ein Sensor ausgewählt?
         boolean isSensorASelected = channelA.sensor != null && channelA.sensor != SensorRegistry.NO_SENSOR;
         boolean isSensorBSelected = channelB.sensor != null && channelB.sensor != SensorRegistry.NO_SENSOR;
 
@@ -690,13 +724,18 @@ public class GUI extends JFrame {
         DeviceConnection.getInstance().sendLine("STOP");
     }
 
-    /** Setzt den Text und die Farbe der Statusanzeige passend zu Verbindung und Messzustand -
-     *  zentrale Stelle, damit die Anzeige nie einen Zustand behauptet, der nicht (mehr) zutrifft
-     *  (z. B. "Bereit", obwohl gar keine Verbindung besteht). */
     private void updateStatusLabel() {
+        boolean connected = DeviceConnection.getInstance().isConnected();
+
+        if (configSensorItem != null) {
+            configSensorItem.setEnabled(connected);
+        }
+
+        updateActionAvailability(connected);
+
         if (lblTriggerStatus == null) return;
 
-        if (!DeviceConnection.getInstance().isConnected()) {
+        if (!connected) {
             lblTriggerStatus.setText("Nicht verbunden");
             lblTriggerStatus.setForeground(Color.LIGHT_GRAY);
         } else if (waitingForTrigger) {
@@ -711,10 +750,42 @@ public class GUI extends JFrame {
         }
     }
 
-    /** Verarbeitet eine von der Firmware empfangene Datenzeile ("D,millis,Kanal,Slot,Rohwert"). */
+    private void updateActionAvailability(boolean connected) {
+        if (btnStart == null || btnStop == null) return;
+
+        boolean hasAnySensor = hasSensor(channelA) || hasSensor(channelB);
+        boolean triggerChannelReady = !triggerConfig.thresholdMode
+                || channel(triggerConfig.channel).sensor != SensorRegistry.NO_SENSOR;
+        boolean alreadyRunning = recording || waitingForTrigger;
+
+        boolean canStart = connected && hasAnySensor && triggerChannelReady && !alreadyRunning;
+        btnStart.setEnabled(canStart);
+        btnStart.setToolTipText(startButtonTooltip(connected, hasAnySensor, triggerChannelReady, alreadyRunning));
+
+        boolean canStop = alreadyRunning;
+        btnStop.setEnabled(canStop);
+        btnStop.setToolTipText(canStop ? "Laufende Messung stoppen" : "Es läuft aktuell keine Messung.");
+    }
+
+    private String startButtonTooltip(boolean connected, boolean hasAnySensor, boolean triggerChannelReady, boolean alreadyRunning) {
+        if (!connected) {
+            return "Erst mit dem ESP32 verbinden.";
+        }
+        if (!hasAnySensor) {
+            return "Erst unter 'Sensor \u2192 Sensor konfigurieren...' mindestens einen Sensor auswählen.";
+        }
+        if (!triggerChannelReady) {
+            return "Für den gewählten Trigger-Kanal (" + triggerConfig.channel + ") ist kein Sensor konfiguriert.";
+        }
+        if (alreadyRunning) {
+            return "Es läuft bereits eine Messung.";
+        }
+        return "Messung starten";
+    }
+
     private void handleIncomingLine(String line) {
         if (!line.startsWith("D,")) {
-            return; // Status-/Diagnosemeldungen ("#...") und alles andere ignorieren
+            return;
         }
 
         String[] parts = line.split(",");
@@ -730,20 +801,9 @@ public class GUI extends JFrame {
                 ingestSample(channel(channelId), slot, rawValue, millis);
             }
         } catch (NumberFormatException e) {
-            // Defekte/unvollständige Zeilen stumm verwerfen
         }
     }
 
-    /**
-     * Dekodiert einen Rohwert für den gegebenen Kanal, zieht dessen Tara-Offset ab und
-     * aktualisiert den Live-Wert. Solange auf den Trigger gewartet wird ({@link #waitingForTrigger}),
-     * fließt der Wert nur in den Vorlauf-Puffer und die Flankenprüfung (siehe
-     * {@link #checkTriggerCondition}); erst nach dem Auslösen bzw. im manuellen Modus landet er
-     * in der Tabelle des Kanals. Ist eine maximale Messdauer konfiguriert
-     * ({@link TriggerDialog.Config#maxDurationMs}), wird die Aufzeichnung automatisch gestoppt,
-     * sobald die seit {@link #measurementStartMillis} verstrichene Zeit sie erreicht (siehe
-     * {@link #stopMeasurementDueToDurationLimit}).
-     */
     private void ingestSample(Channel ch, int slot, long rawValue, long millis) {
         Sensor sensor = ch.sensor;
         if (sensor == null || sensor == SensorRegistry.NO_SENSOR) {
@@ -752,7 +812,7 @@ public class GUI extends JFrame {
 
         List<Sensor.Quantity> quantities = sensor.getQuantities();
         if (quantities.isEmpty() || quantities.getFirst().slot != slot) {
-            return; // Slot gehört nicht zur Messgröße dieses Profils
+            return;
         }
 
         double rawDecoded = sensor.decode(slot, rawValue);
@@ -782,18 +842,12 @@ public class GUI extends JFrame {
         }
     }
 
-    /** Stoppt eine laufende Aufzeichnung, weil die in {@link TriggerDialog.Config#maxDurationMs}
-     *  konfigurierte maximale Messdauer erreicht wurde. Nutzt {@link #stopMeasurement()} für die
-     *  eigentliche Stopp-Logik, überschreibt danach aber die Statusanzeige mit einem passenden
-     *  Hinweis statt des generischen "Bereit". */
     private void stopMeasurementDueToDurationLimit() {
         stopMeasurement();
         lblTriggerStatus.setText("Maximale Messdauer erreicht - Aufnahme gestoppt");
         lblTriggerStatus.setForeground(Theme.POINT);
     }
 
-    /** Hält die letzten {@link TriggerDialog.Config#preTriggerMs} Millisekunden Messwerte eines
-     *  Kanals vor, damit {@link #fireTrigger} den Vorlauf beider Kanäle nachtragen kann. */
     private void bufferForPreTrigger(Channel ch, long millis, double value) {
         if (triggerConfig.preTriggerMs <= 0) return;
 
@@ -804,15 +858,12 @@ public class GUI extends JFrame {
         }
     }
 
-    /** Prüft, ob der neue Wert des Trigger-Kanals die konfigurierte Schwelle in der gewünschten
-     *  Richtung überschreitet (Vorzeichenwechsel zwischen vorherigem und aktuellem Wert), und
-     *  löst in diesem Fall {@link #fireTrigger} aus. Samples anderer Kanäle werden ignoriert. */
     private void checkTriggerCondition(Channel ch, long millis, double value) {
         if (ch.id != triggerConfig.channel) return;
 
         Double previous = ch.lastValueForEdge;
         ch.lastValueForEdge = value;
-        if (previous == null) return; // erster Wert nach dem Scharfstellen: noch keine Flanke möglich
+        if (previous == null) return;
 
         double threshold = triggerConfig.threshold;
         boolean crossed = triggerConfig.risingEdge
@@ -824,9 +875,6 @@ public class GUI extends JFrame {
         }
     }
 
-    /** Löst die Aufzeichnung aus: setzt den Zeitnullpunkt auf {@code preTriggerMs} vor dem
-     *  Trigger-Zeitpunkt und trägt die zwischenzeitlich gepufferten Vorlauf-Samples beider
-     *  Kanäle in ihre Tabellen nach, bevor live weiter aufgezeichnet wird. */
     private void fireTrigger(long triggerMillis) {
         waitingForTrigger = false;
         recording = true;
@@ -838,8 +886,6 @@ public class GUI extends JFrame {
         updateStatusLabel();
     }
 
-    /** Trägt die im Vorlauf-Puffer gesammelten Samples eines Kanals in dessen Tabelle nach,
-     *  soweit sie nach {@link #measurementStartMillis} liegen, und leert den Puffer danach. */
     private void backfillPreTriggerData(Channel ch) {
         for (double[] sample : ch.preTriggerBuffer) {
             long sampleMillis = (long) sample[0];
@@ -850,8 +896,6 @@ public class GUI extends JFrame {
         ch.preTriggerBuffer.clear();
     }
 
-    /** Sendet die für beide Kanäle gemeinsam geltende Abtastrate ({@link #sampleRateHz}) an die
-     *  Firmware (Obergrenze 1000 Hz, siehe {@code phylog_firmware.ino}). */
     private void applySampleRateToFirmware() {
         if (!DeviceConnection.getInstance().isConnected() || sampleRateHz <= 0) {
             return;
@@ -865,6 +909,7 @@ public class GUI extends JFrame {
 
         if (dialog.isApplied()) {
             triggerConfig = dialog.getConfig();
+            updateStatusLabel();
         }
     }
 
@@ -873,7 +918,10 @@ public class GUI extends JFrame {
 
         configureTableModel(channelA);
         configureTableModel(channelB);
-        updateChartUnits();
+
+        // Wenn 2 Sensoren ausgewählt sind, wird standardmäßig der Modus mit zwei Y-Achsen gesetzt.
+        boolean shouldBeDual = hasSensor(channelA) && hasSensor(channelB);
+        setDualYAxisMode(shouldBeDual);
 
         channelA.scrollPane.setBorder(BorderFactory.createTitledBorder(
                 BorderFactory.createLineBorder(Theme.BORDER),
@@ -897,13 +945,10 @@ public class GUI extends JFrame {
         tableContainerPanel.repaint();
     }
 
-    /** @return {@code true}, wenn der Kanal einen echten (nicht "Kein Sensor") Sensor gewählt hat. */
     private boolean hasSensor(Channel ch) {
         return ch.sensor != null && ch.sensor != SensorRegistry.NO_SENSOR;
     }
 
-    /** Setzt den Spaltenkopf für die Messgröße eines Kanals und leert dabei die Tabelle, da alte
-     *  Zeilen unter einer neuen Spaltenbedeutung keinen Sinn mehr ergeben würden. */
     private void configureTableModel(Channel ch) {
         List<Sensor.Quantity> quantities = ch.sensor.getQuantities();
         ch.tableModel.setRowCount(0);
@@ -911,23 +956,44 @@ public class GUI extends JFrame {
         ch.tableModel.setColumnIdentifiers(new Object[]{"Zeit (s)", header});
     }
 
-    /** Setzt die Achsenbeschriftung: bei nur einem aktiven Kanal zeigt die Y-Achse dessen
-     *  Messgröße, bei zwei aktiven Kanälen bleibt sie generisch ("Messwerte"), da eine einzelne
-     *  Achse nicht zwei Einheiten gerecht werden kann - welche Einheit zu welchem Kanal gehört,
-     *  zeigt stattdessen die Legende (siehe {@link ChartPanel#setMainLabel}). */
+    private void setDualYAxisMode(boolean dualYAxisMode) {
+        this.dualYAxisMode = dualYAxisMode;
+        if (chartPanel != null) {
+            chartPanel.setDualYAxisMode(dualYAxisMode);
+        }
+
+        // Synchronisiere die Menü-RadioButtons, falls der Modus geändert wurde
+        if (dualYAxisMode && yAxisDual != null) {
+            yAxisDual.setSelected(true);
+        } else if (!dualYAxisMode && yAxisShared != null) {
+            yAxisShared.setSelected(true);
+        }
+
+        updateChartUnits();
+    }
+
     private void updateChartUnits() {
         if (chartPanel == null) return;
 
         List<Sensor.Quantity> quantitiesA = channelA.sensor.getQuantities();
         boolean hasSecondSensor = hasSensor(channelB);
+        boolean useSpecificAxisLabels = dualYAxisMode && hasSecondSensor;
 
-        String axisLabel = hasSecondSensor
+        String axisLabel = (hasSecondSensor && !useSpecificAxisLabels)
                 ? "Messwerte"
                 : (quantitiesA.isEmpty() ? "Messwert" : quantitiesA.get(0).getColumnHeader());
         chartPanel.setUnits("s", axisLabel);
 
         String labelA = quantitiesA.isEmpty() ? "Kanal A" : "Kanal A: " + quantitiesA.get(0).getColumnHeader();
         chartPanel.setMainLabel(labelA);
+
+        if (hasSecondSensor) {
+            List<Sensor.Quantity> quantitiesB = channelB.sensor.getQuantities();
+            String secondaryLabel = quantitiesB.isEmpty()
+                    ? channelB.sensor.getName()
+                    : quantitiesB.get(0).getColumnHeader();
+            chartPanel.setSecondaryUnits(secondaryLabel);
+        }
     }
 
     private DefaultTableModel createTableModel() {
@@ -939,8 +1005,6 @@ public class GUI extends JFrame {
         };
     }
 
-    /** Zeigt Kanal A immer, Kanal B (falls ein Sensor gewählt ist) zusätzlich in eigener Farbe
-     *  im selben Diagramm. */
     private void updateChartData() {
         if (chartPanel == null) return;
 
@@ -957,10 +1021,6 @@ public class GUI extends JFrame {
         chartPanel.repaint();
     }
 
-    /** Exportiert Kanal A und/oder Kanal B als CSV, je nachdem welche(r) Kanal Messwerte enthält.
-     *  Haben beide Daten, entstehen zwei separate Dateien (Suffix "_KanalA"/"_KanalB"), da eine
-     *  gemeinsame Datei bei unterschiedlichen Sensoren/Zeilenzahlen keine sinnvolle gemeinsame
-     *  Tabellenstruktur hätte. */
     private void exportCsv() {
         boolean hasDataA = channelA.tableModel.getRowCount() > 0;
         boolean hasDataB = channelB.tableModel.getRowCount() > 0;
@@ -1000,7 +1060,6 @@ public class GUI extends JFrame {
         }
     }
 
-    /** Hängt {@code suffix} vor die Dateiendung an (z. B. "messung.csv" -> "messung_KanalA.csv"). */
     private File withSuffix(File base, String suffix) {
         String path = base.getAbsolutePath();
         int dot = path.lastIndexOf('.');
@@ -1009,7 +1068,6 @@ public class GUI extends JFrame {
         return new File(withoutExt + "_" + suffix + ext);
     }
 
-    /** Schreibt ein einzelnes Tabellenmodell Semikolon-getrennt in {@code file}. */
     private void writeCsv(File file, DefaultTableModel model) throws IOException {
         try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
             int columnCount = model.getColumnCount();
