@@ -4,9 +4,9 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.List;
 
-/** Zeigt Details zur Anpassungsgüte (reduziertes Chi²) als kompakte Karten statt eines
- *  einzelnen HTML-Textblocks: Kennzahlen, Formel, eine an den echten Bewertungsschwellen
- *  ausgerichtete Farbskala und - falls vorhanden - Hinweise sowie die Fit-Beschreibung. */
+/**
+ * Dialog zur visuellen Aufbereitung der Anpassungsgüte (reduziertes Chi²) mittels Informationskarten.
+ */
 public class ChiSquareInfoDialog extends JDialog {
 
     private static final Color CARD_BG = new Color(45, 45, 45);
@@ -14,16 +14,27 @@ public class ChiSquareInfoDialog extends JDialog {
     private static final int CARD_ARC = 12;
     private static final int CONTENT_WIDTH = 420;
 
+    /**
+     * Erstellt den Dialog mit Standard-Fehlermodus.
+     *
+     * @param ownerWindow        Übergeordnetes Fenster.
+     * @param reducedChiSquare   Berechnetes reduziertes Chi².
+     * @param degreesOfFreedom   Anzahl der Freiheitsgrade.
+     * @param fitDescription     Beschreibung der gefitteten Funktion.
+     */
     public ChiSquareInfoDialog(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom,
                                ChartPanel.FitDescription fitDescription) {
         this(ownerWindow, reducedChiSquare, degreesOfFreedom, fitDescription, ChartPanel.SigmaMode.CONSTANT);
     }
 
     /**
-     * @param sigmaMode aktuell in {@link ChartPanel} gewählter {@link ChartPanel.SigmaMode} -
-     *                  bei {@link ChartPanel.SigmaMode#RESIDUAL_GLOBAL} wird ein zusätzlicher
-     *                  Hinweis eingeblendet, da chi²_red dort durch die Art der Sigma-Schätzung
-     *                  rechnerisch immer nahe 1 liegt (siehe {@code ChartPanel.calculateChiSquare}).
+     * Erstellt den Dialog unter Berücksichtigung des gewählten Sigma-Modus.
+     *
+     * @param ownerWindow        Übergeordnetes Fenster.
+     * @param reducedChiSquare   Berechnetes reduziertes Chi².
+     * @param degreesOfFreedom   Anzahl der Freiheitsgrade.
+     * @param fitDescription     Beschreibung der gefitteten Funktion.
+     * @param sigmaMode          Aktuell gewählter Modus für Fehlergrenzen.
      */
     public ChiSquareInfoDialog(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom,
                                ChartPanel.FitDescription fitDescription, ChartPanel.SigmaMode sigmaMode) {
@@ -31,6 +42,9 @@ public class ChiSquareInfoDialog extends JDialog {
         initUI(ownerWindow, reducedChiSquare, degreesOfFreedom, fitDescription, sigmaMode);
     }
 
+    /**
+     * Initialisiert die Benutzeroberfläche und baut das Karten-Layout auf.
+     */
     private void initUI(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom,
                         ChartPanel.FitDescription fitDescription, ChartPanel.SigmaMode sigmaMode) {
         setLayout(new BorderLayout());
@@ -88,6 +102,9 @@ public class ChiSquareInfoDialog extends JDialog {
         setLocationRelativeTo(ownerWindow);
     }
 
+    /**
+     * Wandelt eine Chi-Bewertung in lesbaren Text um.
+     */
     private String ratingText(ChartPanel.ChiRating rating) {
         return switch (rating) {
             case OVERFIT -> "Zu niedrig (Überanpassung)";
@@ -97,7 +114,9 @@ public class ChiSquareInfoDialog extends JDialog {
         };
     }
 
-    /** @return Hinweistext für alles außer {@code GOOD}, sonst {@code null} (keine Hinweise nötig). */
+    /**
+     * Erzeugt Hinweistexte zur Verbesserung der Modellgüte basierend auf der Bewertung.
+     */
     private String tipText(ChartPanel.ChiRating rating) {
         return switch (rating) {
             case OVERFIT -> "Die Fehlerbalken sind möglicherweise überschätzt, oder das Modell passt sich an das Rauschen an.";
@@ -107,6 +126,9 @@ public class ChiSquareInfoDialog extends JDialog {
         };
     }
 
+    /**
+     * Baut den Kopfbereich des Dialogs auf.
+     */
     private JPanel buildHeader() {
         JPanel header = new JPanel();
         header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
@@ -129,8 +151,9 @@ public class ChiSquareInfoDialog extends JDialog {
         return header;
     }
 
-    /** Drei nebeneinanderliegende Kennzahl-Karten (Wert, Freiheitsgrade, Bewertung) statt eines
-     *  einzelnen HTML-Textblocks - macht die drei wichtigsten Zahlen auf einen Blick erfassbar. */
+    /**
+     * Baut die Reihe aus drei Kennzahl-Karten auf.
+     */
     private JPanel buildStatRow(double reducedChiSquare, int degreesOfFreedom, String ratingText, Color ratingColor) {
         JPanel row = new JPanel(new GridLayout(1, 3, 10, 0));
         row.setOpaque(false);
@@ -144,6 +167,9 @@ public class ChiSquareInfoDialog extends JDialog {
         return row;
     }
 
+    /**
+     * Baut eine einzelne Kennzahl-Karte mit Beschriftung und Wert auf.
+     */
     private JPanel buildStatCard(String caption, String value, Color valueColor) {
         RoundedPanel card = new RoundedPanel(CARD_BG, CARD_ARC);
         card.setLayout(new BorderLayout(0, 4));
@@ -153,8 +179,6 @@ public class ChiSquareInfoDialog extends JDialog {
         captionLabel.setFont(new Font("SansSerif", Font.PLAIN, 9));
         captionLabel.setForeground(MUTED_TEXT);
 
-        // HTML statt Plain-Text, damit lange Bewertungstexte (z. B. "Schlecht (Unteranpassung)")
-        // in der schmalen Karte umbrechen, statt über den Kartenrand hinauszulaufen.
         JLabel valueLabel = new JLabel("<html><div style='text-align:center;width:110px;'>" + value + "</div></html>");
         valueLabel.setFont(new Font("SansSerif", Font.BOLD, 13));
         valueLabel.setForeground(valueColor);
@@ -166,6 +190,9 @@ public class ChiSquareInfoDialog extends JDialog {
         return card;
     }
 
+    /**
+     * Baut die Karte zur Darstellung der mathematischen Formel auf.
+     */
     private JPanel buildFormulaCard() {
         RoundedPanel card = new RoundedPanel(CARD_BG, CARD_ARC);
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
@@ -184,18 +211,13 @@ public class ChiSquareInfoDialog extends JDialog {
         return card;
     }
 
-    /**
-     * Farbskala, deren Bandgrenzen exakt den Schwellenwerten aus
-     * {@link ChartPanel#rateChiSquare} entsprechen (0.8 / 1.5 / 3.0), statt wie zuvor einem
-     * frei gewählten optischen Verlauf, der nicht immer zu den tatsächlichen Zonen passte.
-     */
-    /** Referenz-Skala für Balken und Beschriftung (0..4) - bewusst FEST, nicht vom aktuellen
-     *  Chi²-Wert abhängig: Farbverlauf und Zahlen sollen immer an derselben Stelle stehen, nur
-     *  der Marker bewegt sich. Werte über 4.0 lassen den Marker einfach am rechten Rand stehen. */
     private static final double BAR_REFERENCE_SCALE = 4.0;
 
+    /**
+     * Erstellt die animierte Farbskala mit Marker zur visuellen Einordnung.
+     */
     private JComponent buildScaleBar(double reducedChiSquare) {
-        double[] markerValue = {0.0}; // von der Slide-in-Animation hochgezählt, siehe unten
+        double[] markerValue = {0.0};
 
         JPanel panel = new JPanel() {
             @Override
@@ -209,8 +231,6 @@ public class ChiSquareInfoDialog extends JDialog {
                 int barHeight = 14;
                 int barY = 4;
 
-                // Fester Farbverlauf Gelb→Grün→Rot - ändert sich NIE mit dem Wert, exakt wie
-                // vor der Karten-Überarbeitung: nur der Marker unten bewegt sich.
                 g2.setPaint(new GradientPaint(0, 0, new Color(241, 196, 15), w * 0.35f, 0, new Color(46, 204, 113)));
                 g2.fillRoundRect(0, barY, (int) (w * 0.5f), barHeight, 6, 6);
                 g2.setPaint(new GradientPaint(w * 0.35f, 0, new Color(46, 204, 113), w, 0, new Color(231, 76, 60)));
@@ -249,7 +269,6 @@ public class ChiSquareInfoDialog extends JDialog {
 
                     final long startTime = System.nanoTime();
 
-                    // Tatsächliches Animationsziel niemals über die Skala hinaus
                     final double targetValue =
                             Math.min(reducedChiSquare, BAR_REFERENCE_SCALE);
 
@@ -287,10 +306,16 @@ public class ChiSquareInfoDialog extends JDialog {
         return panel;
     }
 
+    /**
+     * Sinus-basierte Easing-Funktion für die Weichheit der Marker-Animation.
+     */
     private double easeInOutSine(double t) {
         return -(Math.cos(Math.PI * t) - 1) / 2;
     }
 
+    /**
+     * Zeichnet zentrierten Skalentext an der angegebenen X-Position.
+     */
     private void drawCenteredTick(Graphics2D g2, int x, String text, int panelWidth, int y) {
         FontMetrics fm = g2.getFontMetrics();
         int textWidth = fm.stringWidth(text);
@@ -298,6 +323,9 @@ public class ChiSquareInfoDialog extends JDialog {
         g2.drawString(text, drawX, y);
     }
 
+    /**
+     * Baut eine Hinweis-Karte mit Akzentstreifen auf.
+     */
     private JPanel buildTipCard(String tipHtml, Color accentColor) {
         JPanel wrapper = new JPanel(new BorderLayout());
         wrapper.setOpaque(false);
@@ -322,8 +350,9 @@ public class ChiSquareInfoDialog extends JDialog {
         return wrapper;
     }
 
-    /** Baut den Abschnitt "Gefittete Funktion": Gleichung plus physikalisch interpretierbare
-     *  Kenngrößen (Steigung, Amplitude, Periodendauer, ...), siehe {@link ChartPanel.FitDescription}. */
+    /**
+     * Baut den Detailbereich für die gefittete Funktion auf.
+     */
     private JPanel buildFitDescriptionPanel(ChartPanel.FitDescription fitDescription) {
         RoundedPanel panel = new RoundedPanel(CARD_BG, CARD_ARC);
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
@@ -364,8 +393,9 @@ public class ChiSquareInfoDialog extends JDialog {
         return panel;
     }
 
-    /** Einfaches, abgerundetes Karten-Panel in einer einheitlichen Hintergrundfarbe - ersetzt
-     *  die zuvor uneinheitliche Mischung aus Linienrahmen und einer einzelnen dunklen Fläche. */
+    /**
+     * Panel-Komponente mit abgerundeten Ecken und Hintergrundfarbe.
+     */
     private static class RoundedPanel extends JPanel {
         private final Color background;
         private final int arc;

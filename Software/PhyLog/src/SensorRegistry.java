@@ -1,8 +1,11 @@
 import java.util.List;
 
-/** Verwaltet alle verfügbaren Sensor-Implementierungen. */
+/**
+ * Verwaltet alle verfügbaren Sensor-Implementierungen.
+ */
 public class SensorRegistry {
 
+    /** Instanz für "kein Sensor gewählt". */
     public static final Sensor NO_SENSOR = new NoSensor();
 
     private static final List<Sensor> REGISTERED_SENSORS = List.of(
@@ -14,12 +17,21 @@ public class SensorRegistry {
             new MicrophoneSensor()
     );
 
-    /** @return unveränderliche Liste aller verfügbaren Sensoren. */
+    /**
+     * Gibt alle registrierten Sensoren zurück.
+     *
+     * @return Unveränderliche Liste aller Sensoren.
+     */
     public static List<Sensor> getAvailableSensors() {
         return REGISTERED_SENSORS;
     }
 
-    /** Sucht einen registrierten Sensor anhand eines Einheiten-Strings, oder {@code null}. */
+    /**
+     * Sucht einen Sensor anhand seiner Einheit.
+     *
+     * @param unitStr Der zu suchende Einheiten-String.
+     * @return Passender {@link Sensor} oder {@code null}.
+     */
     public static Sensor findByUnit(String unitStr) {
         for (Sensor s : REGISTERED_SENSORS) {
             if (s != NO_SENSOR && s.matchesUnit(unitStr)) {

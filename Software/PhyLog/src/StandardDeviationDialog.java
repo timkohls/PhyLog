@@ -2,23 +2,7 @@ import javax.swing.*;
 import java.awt.*;
 
 /**
- * Dialog zum Einstellen der Messunsicherheit sigma, die {@link ChartPanel} für Chi²-Berechnung
- * und Toleranzband verwendet. Bietet neben dem bisherigen konstanten, manuell eingegebenen Wert
- * zwei automatische Alternativen an (siehe {@link ChartPanel.SigmaMode}):
- * <ul>
- *   <li><b>Konstant</b>: ein einziger, vom Nutzer eingegebener Wert für alle Punkte
- *       (bisheriges Verhalten).</li>
- *   <li><b>Automatisch, global</b>: sigma wird aus der Streuung der Messwerte um den aktuellen
- *       Fit geschätzt (empirische Standardabweichung der Residuen) - sinnvoll, wenn die
- *       tatsächliche Messunsicherheit nicht bekannt ist, aber gaußverteiltes Rauschen
- *       angenommen werden kann.</li>
- *   <li><b>Automatisch, lokal</b>: wie global, aber je Punkt aus dessen nächsten Nachbarn
- *       geschätzt (Nearest-Neighbour) - passt Toleranzband und Chi² an ungleichmäßig verteiltes
- *       Rauschen entlang der Messreihe an, statt eine einzige Streuung für den gesamten
- *       Datensatz anzunehmen.</li>
- * </ul>
- * Beide automatischen Modi setzen einen aktiven Funktions-Fit voraus; ohne Fit verwendet
- * {@link ChartPanel} intern den konstanten Wert als Rückfallebene (siehe dortige Dokumentation).
+ * Dialog zur Konfiguration der Messunsicherheit (Standardabweichung/Sigma).
  */
 public class StandardDeviationDialog extends JDialog {
 
@@ -34,11 +18,12 @@ public class StandardDeviationDialog extends JDialog {
     private int localSigmaNeighbors;
 
     /**
-     * @param parent            Eigentümerfenster
-     * @param currentVal        aktuell geltender konstanter Wert (auch Rückfallebene für die
-     *                          automatischen Modi ohne aktiven Fit)
-     * @param currentMode       aktuell geltender {@link ChartPanel.SigmaMode}
-     * @param currentNeighbors  aktuell geltende Nachbarn-Anzahl für den lokalen Modus
+     * Erstellt den Dialog zur Einstellung der Standardabweichung.
+     *
+     * @param parent           Das übergeordnete Fenster.
+     * @param currentVal       Aktuell geltender konstanter Wert.
+     * @param currentMode      Aktuell geltender {@link ChartPanel.SigmaMode}.
+     * @param currentNeighbors Aktuelle Anzahl an Nachbarn für den lokalen Modus.
      */
     public StandardDeviationDialog(JFrame parent, double currentVal, ChartPanel.SigmaMode currentMode, int currentNeighbors) {
         super(parent, "Standardabweichung einstellen", true);
@@ -129,20 +114,29 @@ public class StandardDeviationDialog extends JDialog {
         add(btnPanel, BorderLayout.SOUTH);
     }
 
+    /**
+     * Erstellt ein formatiertes Hinweis-Label.
+     *
+     * @param text Der Hinweistext.
+     * @return Das Hinweis-Label.
+     */
     private JLabel hintLabel(String text) {
         JLabel label = new JLabel("<html><div style='width:380px;'>" + text + "</div></html>");
         label.setFont(label.getFont().deriveFont(Font.PLAIN, 11f));
         return label;
     }
 
-    /** Aktiviert Wertfeld bzw. Nachbarn-Spinner nur passend zum gewählten Modus. */
+    /**
+     * Aktiviert oder deaktiviert Eingabefelder passend zum gewählten Modus.
+     */
     private void updateFieldStates() {
         tfValue.setEnabled(rbConstant.isSelected());
         spNeighbors.setEnabled(rbAutoLocal.isSelected());
     }
 
-    /** Validiert den konstanten Wert (immer, da er auch als Rückfallebene der automatischen
-     *  Modi ohne aktiven Fit dient) und übernimmt bei Erfolg Modus, Wert und Nachbarn-Anzahl. */
+    /**
+     * Validiert die Eingaben und schließt den Dialog bei Erfolg.
+     */
     private void tryApplyAndClose() {
         double val;
         try {
@@ -166,22 +160,38 @@ public class StandardDeviationDialog extends JDialog {
         dispose();
     }
 
-    /** @return {@code true}, wenn über "Übernehmen" mit gültigem Wert bestätigt wurde */
+    /**
+     * Gibt zurück, ob die Eingaben bestätigt wurden.
+     *
+     * @return {@code true}, wenn mit "Übernehmen" bestätigt wurde.
+     */
     public boolean isConfirmed() {
         return confirmed;
     }
 
-    /** @return der bestätigte konstante Wert bzw. dessen Rückfallebene (nur gültig, wenn {@link #isConfirmed()}) */
+    /**
+     * Gibt den eingestellten konstanten Sigma-Wert bzw. die Rückfallebene zurück.
+     *
+     * @return Der Sigma-Wert.
+     */
     public double getStandardDeviation() {
         return standardDeviation;
     }
 
-    /** @return der bestätigte {@link ChartPanel.SigmaMode} (nur gültig, wenn {@link #isConfirmed()}) */
+    /**
+     * Gibt den gewählten Sigma-Berechnungsmodus zurück.
+     *
+     * @return Der {@link ChartPanel.SigmaMode}.
+     */
     public ChartPanel.SigmaMode getSigmaMode() {
         return sigmaMode;
     }
 
-    /** @return die bestätigte Nachbarn-Anzahl für den lokalen Modus (nur gültig, wenn {@link #isConfirmed()}) */
+    /**
+     * Gibt die Anzahl der Nachbarn für den lokalen Modus zurück.
+     *
+     * @return Die Anzahl der Nachbarn.
+     */
     public int getLocalSigmaNeighbors() {
         return localSigmaNeighbors;
     }

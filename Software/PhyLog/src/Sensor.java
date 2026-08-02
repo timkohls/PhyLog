@@ -3,29 +3,46 @@ import java.util.function.DoubleConsumer;
 import java.util.function.DoubleSupplier;
 
 /**
- * Basisklasse aller Sensoren: Name, Einheit(en) und Umrechnung eines rohen Firmware-Werts
- * (Slot + Rohwert) in eine physikalische Größe.
+ * Basisklasse aller Sensoren zur Dekodierung von Rohwerten in physikalische Größen.
  */
 public abstract class Sensor {
     private final String name;
     private final String unit;
     private final List<String> unitAliases;
 
+    /**
+     * Erstellt ein neues Sensor-Profil.
+     *
+     * @param name        Name des Sensors.
+     * @param unit        Primäre Einheit.
+     * @param unitAliases Alternative Bezeichnungen der Einheit.
+     */
     public Sensor(String name, String unit, List<String> unitAliases) {
         this.name = name;
         this.unit = unit;
         this.unitAliases = unitAliases;
     }
 
+    /**
+     * @return Der Name des Sensors.
+     */
     public String getName() {
         return name;
     }
 
+    /**
+     * @return Die primäre Einheit.
+     */
     public String getUnit() {
         return unit;
     }
 
-    /** Prüft, ob {@code unitStr} der Einheit oder einem Alias dieses Sensors entspricht. */
+    /**
+     * Prüft, ob der String der Einheit oder einem Alias entspricht.
+     *
+     * @param unitStr Zu prüfende Einheit.
+     * @return {@code true}, falls passend.
+     */
     public boolean matchesUnit(String unitStr) {
         if (unitStr == null) return false;
         String clean = unitStr.trim().toUpperCase();
@@ -33,21 +50,29 @@ public abstract class Sensor {
         return unitAliases.stream().anyMatch(a -> a.equalsIgnoreCase(clean));
     }
 
-    /** Dekodiert einen Rohwert der Firmware anhand der Slot-Nummer in eine physikalische Größe. */
+    /**
+     * Dekodiert einen Rohwert der Firmware in eine physikalische Größe.
+     *
+     * @param slot     Firmware-Slot-Nummer.
+     * @param rawValue Rohwert der Firmware.
+     * @return Der dekodierte Messwert.
+     */
     public abstract double decode(int slot, long rawValue);
 
-    /** Bezeichner, den die Firmware für diesen Sensor beim {@code SET}-Kommando erwartet. */
+    /**
+     * @return Firmware-Typbezeichnung für den Sensor.
+     */
     public abstract String getFirmwareTypeName();
 
-    /** Messgröße(n) dieses Sensorprofils (aktuell jeweils genau eine, siehe {@code NoSensor}). */
+    /**
+     * @return Liste der Messgrößen dieses Sensors.
+     */
     public abstract List<Quantity> getQuantities();
 
     /**
-     * Kalibrierwerte, die dieser Sensor über {@code CalibrationDialog} anpassbar macht - leer
-     * per Default. Sensoren mit einem Umrechnungsfaktor oder einer Empfindlichkeit (z. B.
-     * {@code HX711Sensor}, {@code MicrophoneSensor}) überschreiben das, statt einen eigenen
-     * Dialog zu bauen - so profitiert jeder künftige Sensor mit Kalibrierbedarf vom selben,
-     * generischen Dialog.
+     * Liefert die anpassbaren Kalibrierparameter (Standard: leere Liste).
+     *
+     * @return Liste der {@link CalibrationParameter}.
      */
     public List<CalibrationParameter> getCalibrationParameters() {
         return List.of();
@@ -59,9 +84,7 @@ public abstract class Sensor {
     }
 
     /**
-     * Ein einzelner, benannter Kalibrierwert eines Sensors (z. B. Kalibrierfaktor,
-     * Empfindlichkeit). get()/set() binden direkt an das interne Feld des Sensors, ohne dass
-     * die aufrufende UI dessen konkreten Typ kennen muss.
+     * Ein benannter Kalibrierwert eines Sensors (z. B. Faktor oder Empfindlichkeit).
      */
     public static final class CalibrationParameter {
         public final String label;
@@ -69,6 +92,14 @@ public abstract class Sensor {
         private final DoubleSupplier getter;
         private final DoubleConsumer setter;
 
+        /**
+         * Erstellt einen neuen Kalibrierparameter.
+         *
+         * @param label  Beschriftung.
+         * @param unit   Einheit des Parameters.
+         * @param getter Funktion zum Auslesen.
+         * @param setter Funktion zum Setzen.
+         */
         public CalibrationParameter(String label, String unit, DoubleSupplier getter, DoubleConsumer setter) {
             this.label = label;
             this.unit = unit;
@@ -76,28 +107,45 @@ public abstract class Sensor {
             this.setter = setter;
         }
 
+        /**
+         * @return Liest den aktuellen Kalibrierwert aus.
+         */
         public double get() {
             return getter.getAsDouble();
         }
 
+        /**
+         * @param value Setzt den neuen Kalibrierwert.
+         */
         public void set(double value) {
             setter.accept(value);
         }
     }
 
-    /** Eine benannte Messgröße eines Sensorprofils, z. B. "Spannung (V)"; dient als Spaltenkopf. */
+    /**
+     * Eine benannte Messgröße (z. B. für Tabellenspalten).
+     */
     public static final class Quantity {
         public final String label;
         public final String unit;
-        /** Firmware-Slot, aus dem dieser Wert dekodiert wird. */
         public final int slot;
 
+        /**
+         * Erstellt eine Messgröße.
+         *
+         * @param label Beschriftung.
+         * @param unit  Einheit.
+         * @param slot  Firmware-Slot.
+         */
         public Quantity(String label, String unit, int slot) {
             this.label = label;
             this.unit = unit;
             this.slot = slot;
         }
 
+        /**
+         * @return Formatierter Spaltenkopf (z. B. "Spannung (V)").
+         */
         public String getColumnHeader() {
             return unit.isEmpty() ? label : label + " (" + unit + ")";
         }

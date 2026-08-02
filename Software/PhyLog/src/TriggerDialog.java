@@ -2,24 +2,25 @@ import javax.swing.*;
 import java.awt.*;
 
 /**
- * Dialog zur Konfiguration eines schwellenwertbasierten Mess-Triggers: Kanal, Modus, Flanke,
- * Schwellenwert, Vorlaufzeit und maximale Messdauer. Das Ergebnis wird als {@link Config}
- * zurückgegeben, das {@code GUI} nach {@link #isApplied()} über {@link #getConfig()} abholt und
- * tatsächlich auswertet (siehe {@code GUI.startMeasurement}/{@code GUI.ingestSample}).
+ * Dialog zur Konfiguration von Mess-Triggern und Messdauer.
  */
 public class TriggerDialog extends JDialog {
 
-    /** Ergebnis einer Trigger-Konfiguration, unabhängig von der Dialog-UI. */
+    /**
+     * Datenhaltung für Trigger-Konfigurationseinstellungen.
+     */
     public static final class Config {
+        /** Messkanal ('A' oder 'B'). */
         public char channel = 'A';
+        /** Modus: {@code true} für Schwellenwert, {@code false} für manuell. */
         public boolean thresholdMode = false;
+        /** Flanke: {@code true} für steigend, {@code false} für fallend. */
         public boolean risingEdge = true;
+        /** Schwellenwert in Volt. */
         public double threshold = 2.5;
+        /** Vorlaufzeit vor dem Trigger in Millisekunden. */
         public int preTriggerMs = 100;
-        /** Maximale Messdauer in Millisekunden ab Aufnahmebeginn (bzw. ab dem um die
-         *  Vorlaufzeit vorverlegten Zeitnullpunkt bei getriggerten Messungen), nach der die
-         *  Aufnahme automatisch gestoppt wird. {@code 0} = keine Begrenzung. Gilt unabhängig
-         *  vom Trigger-Modus, also auch bei manuellem Start. */
+        /** Maximale Messdauer in ms (0 = unbegrenzt). */
         public int maxDurationMs = 0;
     }
 
@@ -33,7 +34,12 @@ public class TriggerDialog extends JDialog {
 
     private boolean applied = false;
 
-    /** @param current aktuell geltende Konfiguration, wird als Startauswahl vorbelegt */
+    /**
+     * Erstellt den Trigger-Dialog.
+     *
+     * @param parent  Das übergeordnete Fenster.
+     * @param current Aktuelle Konfiguration als Startwert.
+     */
     public TriggerDialog(JFrame parent, Config current) {
         super(parent, "Trigger konfigurieren", true);
         setSize(400, 340);
@@ -113,7 +119,9 @@ public class TriggerDialog extends JDialog {
         add(buttonPanel, BorderLayout.SOUTH);
     }
 
-    /** Aktiviert Kanal/Flanke/Schwellenwert/Vorlaufzeit nur im Schwellenwert-Modus. */
+    /**
+     * Aktiviert oder deaktiviert Eingabefelder basierend auf dem gewählten Trigger-Modus.
+     */
     private void updateFieldStates() {
         boolean isThreshold = cbTriggerMode.getSelectedIndex() == 1;
         cbChannel.setEnabled(isThreshold);
@@ -122,12 +130,20 @@ public class TriggerDialog extends JDialog {
         spPreTrigger.setEnabled(isThreshold);
     }
 
-    /** @return {@code true}, wenn der Dialog über "Übernehmen" geschlossen wurde */
+    /**
+     * Gibt zurück, ob die Konfiguration übernommen wurde.
+     *
+     * @return {@code true}, wenn der Dialog mit "Übernehmen" bestätigt wurde.
+     */
     public boolean isApplied() {
         return applied;
     }
 
-    /** @return die im Dialog gewählte Konfiguration (nur sinnvoll, wenn {@link #isApplied()}) */
+    /**
+     * Liest die im Dialog eingestellten Werte aus.
+     *
+     * @return Die erstelle {@link Config}.
+     */
     public Config getConfig() {
         Config cfg = new Config();
         cfg.channel = (cbChannel.getSelectedIndex() == 1) ? 'B' : 'A';

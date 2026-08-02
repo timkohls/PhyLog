@@ -4,37 +4,47 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 
 /**
- * Zweispaltiger Sensor-Konfigurationsdialog für Kanal A und B. Beide Kanäle sind unabhängig
- * wählbar, auch mit demselben Sensortyp auf beiden Kanälen gleichzeitig.
- *
- * <p>Ist eine {@link LiveSource} für einen Kanal angegeben, zeigt die Zeile "Offset / Tara"
- * fortlaufend den aktuellen Live-Messwert an. Die "Nullen"-Schaltfläche übernimmt ihn nicht nur
- * zur Anzeige, sondern meldet den Tara-Wunsch über {@link TareRequestListener} zurück, damit der
- * aufrufende Code (siehe {@code GUI}) den Live-Wert ab sofort tatsächlich als 0 behandelt. Ohne
- * verfügbaren Live-Wert bleiben Anzeige und Schaltfläche deaktiviert, statt einen falschen
- * Platzhalterwert vorzutäuschen.</p>
+ * Dialog zur Konfiguration der Sensoren und der Abtastrate für Kanal A und B.
  */
 public class SensorConfigDialog extends JDialog {
 
-    /** Liefert den aktuellen Live-Messwert eines Kanals, oder {@code null} falls (noch) keiner vorliegt. */
+    /**
+     * Schnittstelle zum Abfragen des aktuellen Live-Messwerts eines Kanals.
+     */
     @FunctionalInterface
     public interface LiveSource {
+        /**
+         * Liest den aktuellen Messwert aus.
+         *
+         * @return Der Messwert oder {@code null}, falls nicht verfügbar.
+         */
         Double poll();
     }
 
-    /** Wird sofort bei jeder Sensor-Auswahl im Dialog aufgerufen (nicht erst bei "Übernehmen"),
-     *  damit die Firmware rechtzeitig weiß, welchen Sensor sie abtasten soll - sonst kämen für
-     *  einen frisch gewählten, noch nicht angewendeten Sensor niemals Live-Daten an. */
+    /**
+     * Listener für sofortige Benachrichtigungen bei Änderung der Sensorauswahl.
+     */
     @FunctionalInterface
     public interface SensorSelectionListener {
+        /**
+         * Wird aufgerufen, wenn ein Sensor für einen Kanal ausgewählt wurde.
+         *
+         * @param channel Der betroffene Kanal ('A' oder 'B').
+         * @param sensor  Der neu ausgewählte {@link Sensor}.
+         */
         void onSensorSelected(char channel, Sensor sensor);
     }
 
-    /** Wird beim Klick auf "Nullen" aufgerufen, damit der aufrufende Code den aktuellen
-     *  Live-Wert des Kanals tatsächlich als neuen Tara-Offset übernimmt - der Dialog selbst
-     *  kennt keine dekodierten Rohwerte, nur was ihm über {@link LiveSource} gemeldet wird. */
+    /**
+     * Listener für Anforderungen zum Nullen (Tarieren) eines Kanals.
+     */
     @FunctionalInterface
     public interface TareRequestListener {
+        /**
+         * Wird aufgerufen, wenn der Nutzer den Nullung-Button betätigt.
+         *
+         * @param channel Der zu tarierende Kanal ('A' oder 'B').
+         */
         void onTareRequested(char channel);
     }
 
@@ -56,7 +66,9 @@ public class SensorConfigDialog extends JDialog {
     private final TareRequestListener tareListener;
     private Timer liveUpdateTimer;
 
-    /** Bündelt alle UI-Komponenten eines Kanals (A oder B). */
+    /**
+     * Bündelt die UI-Komponenten eines einzelnen Sensorkanals.
+     */
     private static class Channel {
         JComboBox<Sensor> comboSensor;
         JLabel lblUnit;
@@ -67,15 +79,16 @@ public class SensorConfigDialog extends JDialog {
     }
 
     /**
-     * @param owner               Eigentümerfenster (für Modalität und Positionierung)
-     * @param current1            aktuell aktiver Sensor auf Kanal A (oder {@link SensorRegistry#NO_SENSOR})
-     * @param current2            aktuell aktiver Sensor auf Kanal B
-     * @param currentSampleRateHz aktuell geltende, für beide Kanäle gemeinsame Abtastrate in Hz
-     * @param live1               liefert den Live-Messwert von Kanal A, oder {@code null} ohne Live-Anbindung
-     * @param live2               liefert den Live-Messwert von Kanal B, oder {@code null} ohne Live-Anbindung
-     * @param selectionListener   wird bei jeder Sensor-Auswahl sofort benachrichtigt (siehe Klassenkommentar)
-     * @param tareListener        wird beim Klick auf "Nullen" benachrichtigt, damit der Tara-Offset
-     *                            tatsächlich angewendet wird (siehe Klassenkommentar)
+     * Erstellt den Dialog zur Sensorkonfiguration.
+     *
+     * @param owner               Eigentümerfenster.
+     * @param current1            Aktueller Sensor auf Kanal A.
+     * @param current2            Aktueller Sensor auf Kanal B.
+     * @param currentSampleRateHz Aktuell eingestellte Abtastrate in Hz.
+     * @param live1               Quelle für Live-Werte von Kanal A.
+     * @param live2               Quelle für Live-Werte von Kanal B.
+     * @param selectionListener   Listener für Sensoränderungen.
+     * @param tareListener        Listener für Tara-Anfragen.
      */
     public SensorConfigDialog(Frame owner, Sensor current1, Sensor current2, int currentSampleRateHz,
                               LiveSource live1, LiveSource live2,
@@ -115,6 +128,9 @@ public class SensorConfigDialog extends JDialog {
         });
     }
 
+    /**
+     * Baut das Panel für die Steuerung eines einzelnen Kanals auf.
+     */
     private JPanel buildChannelPanel(Channel ch, char channelId, String title, Sensor[] availableSensors, Sensor current) {
         JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createTitledBorder(title));
@@ -163,7 +179,9 @@ public class SensorConfigDialog extends JDialog {
         return panel;
     }
 
-    /** Baut die Zeile mit der für beide Kanäle gemeinsam geltenden Abtastrate. */
+    /**
+     * Baut das Auswahlpanel für die gemeinsame Abtastrate auf.
+     */
     private JPanel buildSharedRatePanel(int currentSampleRateHz) {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER));
         panel.setBorder(BorderFactory.createEmptyBorder(0, 15, 0, 15));
@@ -176,8 +194,9 @@ public class SensorConfigDialog extends JDialog {
         return panel;
     }
 
-    /** Wählt in {@link #comboSampleRate} den zu {@code hz} passenden Eintrag, oder belässt es
-     *  beim Standardwert, falls {@code hz} keinem Listeneintrag entspricht. */
+    /**
+     * Wählt die angegebene Abtastrate im ComboBox-Feld aus.
+     */
     private void selectSampleRate(int hz) {
         for (String rate : SAMPLE_RATES) {
             if (parseRate(rate) == hz) {
@@ -187,6 +206,9 @@ public class SensorConfigDialog extends JDialog {
         }
     }
 
+    /**
+     * Baut die Buttons "Übernehmen" und "Abbrechen" auf.
+     */
     private JPanel buildButtonPanel() {
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         JButton btnOk = new JButton("Übernehmen");
@@ -205,23 +227,34 @@ public class SensorConfigDialog extends JDialog {
         return buttonPanel;
     }
 
+    /**
+     * Startet den Timer für regelmäßige Live-Anzeigen-Updates.
+     */
     private void startLiveUpdates() {
         liveUpdateTimer = new Timer(LIVE_REFRESH_MS, e -> updateChannelStates());
         liveUpdateTimer.start();
     }
 
+    /**
+     * Stoppt den Timer für Live-Updates.
+     */
     private void stopLiveUpdates() {
         if (liveUpdateTimer != null) {
             liveUpdateTimer.stop();
         }
     }
 
-    /** Aktualisiert Einheit, Aktivierung und Live-Anzeige beider Kanäle in einem Schritt. */
+    /**
+     * Aktualisiert Status und Live-Werte aller Kanäle.
+     */
     private void updateChannelStates() {
         updateChannel(channelA, live1);
         updateChannel(channelB, live2);
     }
 
+    /**
+     * Aktualisiert Status und Anzeigen eines einzelnen Kanals.
+     */
     private void updateChannel(Channel ch, LiveSource source) {
         Sensor sensor = (Sensor) ch.comboSensor.getSelectedItem();
         boolean active = (sensor != null && sensor != SensorRegistry.NO_SENSOR);
@@ -235,6 +268,9 @@ public class SensorConfigDialog extends JDialog {
         ch.btnTara.setEnabled(liveValue != null);
     }
 
+    /**
+     * Erstellt Standard-Layoutbedingungen für Formularelemente.
+     */
     private GridBagConstraints createGbc() {
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(4, 4, 4, 4);
@@ -242,6 +278,9 @@ public class SensorConfigDialog extends JDialog {
         return gbc;
     }
 
+    /**
+     * Fügt eine Zeile mit Label und Komponente zum Formular hinzu.
+     */
     private void addFormRow(JPanel panel, GridBagConstraints gbc, int row, String label, Component comp) {
         gbc.gridx = 0;
         gbc.gridy = row;
@@ -253,6 +292,9 @@ public class SensorConfigDialog extends JDialog {
         panel.add(comp, gbc);
     }
 
+    /**
+     * Fügt eine Zeile für die Tara-Verwaltung zum Formular hinzu.
+     */
     private void addTaraRow(JPanel panel, GridBagConstraints gbc, int row, String label,
                             JTextField textField, JLabel liveLabel, JButton button) {
         gbc.gridx = 0;
@@ -270,23 +312,45 @@ public class SensorConfigDialog extends JDialog {
         panel.add(rowPanel, gbc);
     }
 
+    /**
+     * Gibt zurück, ob die Einstellungen angewendet wurden.
+     *
+     * @return {@code true}, wenn "Übernehmen" geklickt wurde.
+     */
     public boolean isApplied() {
         return applied;
     }
 
+    /**
+     * Gibt den für Kanal A gewählten Sensor zurück.
+     *
+     * @return Gewählter {@link Sensor} für Kanal A.
+     */
     public Sensor getSelectedSensorA() {
         return selectedSensor1;
     }
 
+    /**
+     * Gibt den für Kanal B gewählten Sensor zurück.
+     *
+     * @return Gewählter {@link Sensor} für Kanal B.
+     */
     public Sensor getSelectedSensorB() {
         return selectedSensor2;
     }
 
-    /** @return die für beide Kanäle gemeinsam gewählte Abtastrate in Hz (z. B. 50 aus "50 Hz"). */
+    /**
+     * Gibt die ausgewählte Abtastrate in Hz zurück.
+     *
+     * @return Abtastrate in Hz.
+     */
     public int getSampleRate() {
         return parseRate((String) comboSampleRate.getSelectedItem());
     }
 
+    /**
+     * Parst die Zahlenwert-Abtastrate aus dem Auswahltext.
+     */
     private int parseRate(String rateText) {
         if (rateText == null) return 0;
         try {

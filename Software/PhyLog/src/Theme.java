@@ -3,24 +3,27 @@ import com.formdev.flatlaf.FlatDarkLaf;
 import javax.swing.*;
 import java.awt.*;
 
-/** Zentrale Farbpalette und Look-and-Feel-Konfiguration für PhyLog. */
+/**
+ * Farbpalette und Look-and-Feel-Konfiguration der Anwendung.
+ */
 public class Theme {
 
     /** Fensterhintergrund. */
     public static final Color BG = new Color(37, 37, 37);
-    /** Hintergrund von Panels/Karten. */
+    /** Panel- und Karten-Hintergrund. */
     public static final Color PANEL = new Color(48, 48, 48);
-    /** Rahmen- und Trennlinienfarbe. */
+    /** Rahmen- und Trennlinien. */
     public static final Color BORDER = new Color(68, 68, 68);
     /** Standard-Textfarbe. */
     public static final Color TEXT = new Color(235, 235, 235);
-    /** Akzentfarbe für interaktive Elemente und Fit-Kurven. */
+    /** Akzentfarbe für Interaktionen und Fit-Kurven. */
     public static final Color ACCENT = new Color(82, 140, 255);
-    /** Farbe für einzelne Messpunkte im Diagramm. */
+    /** Farbe für Messpunkte im Diagramm. */
     public static final Color POINT = new Color(255, 170, 90);
 
-    /** Initialisiert FlatLaf (Dark) und setzt die UIManager-Defaults auf diese Palette. Vor dem
-     *  ersten Swing-Fenster aufzurufen (siehe {@link Main#main}). */
+    /**
+     * Initialisiert das Dark-Theme und setzt die UI-Defaults.
+     */
     public static void setup() {
         FlatDarkLaf.setup();
 

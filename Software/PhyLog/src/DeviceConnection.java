@@ -10,19 +10,15 @@ import java.util.List;
 import java.util.function.Consumer;
 
 /**
- * Zentrale, geteilte serielle Verbindung zum ESP32. {@link Terminal} und {@link GUI} sprechen
- * beide über diese eine Instanz mit der Hardware, statt je einen eigenen {@link SerialPort} zu
- * öffnen - zwei gleichzeitig geöffnete Verbindungen zum selben COM-Port würden sich gegenseitig
- * blockieren.
- *
- * <p>Übernimmt außerdem das Zeilen-Buffering: eingehende Daten kommen in beliebig geschnittenen
- * Chunks an, Listener werden erst benachrichtigt, sobald eine vollständige, mit '\n'
- * abgeschlossene Zeile zusammengesetzt wurde.</p>
+ * Singleton zur Verwaltung der seriellen Verbindung zum ESP32 und Pufferung von Zeilen.
  */
 public class DeviceConnection {
 
     private static final DeviceConnection INSTANCE = new DeviceConnection();
 
+    /**
+     * @return Die globale Instanz der Verbindung.
+     */
     public static DeviceConnection getInstance() {
         return INSTANCE;
     }
@@ -34,7 +30,9 @@ public class DeviceConnection {
     private DeviceConnection() {
     }
 
-    /** @return die Systemnamen aller aktuell verfügbaren seriellen Ports (z. B. "COM5"). */
+    /**
+     * @return Liste der Namen aller verfügbaren COM-Ports.
+     */
     public List<String> listPortNames() {
         List<String> names = new ArrayList<>();
         for (SerialPort port : SerialPort.getCommPorts()) {
@@ -43,12 +41,20 @@ public class DeviceConnection {
         return names;
     }
 
+    /**
+     * @return {@code true}, wenn eine serielle Verbindung aktiv ist.
+     */
     public boolean isConnected() {
         return activePort != null && activePort.isOpen();
     }
 
-    /** Öffnet den angegebenen Port (schließt zuvor einen ggf. offenen anderen Port).
-     *  @return {@code true}, wenn das Öffnen erfolgreich war */
+    /**
+     * Öffnet den angegebenen seriellen Port.
+     *
+     * @param portName Name des Ports (z. B. "COM5").
+     * @param baud     Baudrate.
+     * @return {@code true}, wenn die Verbindung erfolgreich hergestellt wurde.
+     */
     public boolean connect(String portName, int baud) {
         if (isConnected()) {
             disconnect();
@@ -79,8 +85,6 @@ public class DeviceConnection {
                 int read = activePort.readBytes(chunk, chunk.length);
                 if (read > 0) {
                     String text = new String(chunk, 0, read, StandardCharsets.UTF_8);
-                    // Empfang läuft im Hintergrund-Thread von jSerialComm - Swing darf nur
-                    // vom Event-Dispatch-Thread aus angefasst werden.
                     SwingUtilities.invokeLater(() -> feed(text));
                 }
             }
@@ -89,7 +93,9 @@ public class DeviceConnection {
         return true;
     }
 
-    /** Schließt die aktuelle Verbindung, falls eine offen ist. */
+    /**
+     * Schließt den aktuell geöffneten Port.
+     */
     public void disconnect() {
         if (activePort != null) {
             activePort.closePort();
@@ -97,17 +103,29 @@ public class DeviceConnection {
         }
     }
 
-    /** Registriert einen Listener, der für jede vollständige empfangene Zeile aufgerufen wird
-     *  (ohne abschließenden Zeilenumbruch). */
+    /**
+     * Registriert einen Listener für empfangene Datenzeilen.
+     *
+     * @param listener Callback für vollständige Zeilen.
+     */
     public void addLineListener(Consumer<String> listener) {
         lineListeners.add(listener);
     }
 
+    /**
+     * Entfernt einen registrierten Datenzeilen-Listener.
+     *
+     * @param listener Zu entfernender Callback.
+     */
     public void removeLineListener(Consumer<String> listener) {
         lineListeners.remove(listener);
     }
 
-    /** Sendet eine Befehlszeile (mit angehängtem Newline) an den verbundenen Port. */
+    /**
+     * Sendet einen Befehl inklusive Zeilenumbruch an das Gerät.
+     *
+     * @param command Zu sendender Text.
+     */
     public void sendLine(String command) {
         if (!isConnected()) return;
         try {
@@ -115,11 +133,12 @@ public class DeviceConnection {
             out.write((command + "\n").getBytes(StandardCharsets.UTF_8));
             out.flush();
         } catch (Exception ignored) {
-            // Sendefehler bewusst verschluckt - Aufrufer prüfen ggf. vorher isConnected().
         }
     }
 
-    /** Puffert eingehenden Text und gibt jede vollständige Zeile an alle Listener weiter. */
+    /**
+     * Fügt Text zum Puffer hinzu und verteilt vollständige Zeilen an Listener.
+     */
     private void feed(String chunk) {
         receiveBuffer.append(chunk);
 

@@ -6,9 +6,7 @@ import java.awt.event.WindowEvent;
 import java.util.function.Consumer;
 
 /**
- * Serielles Terminal-Fenster für die ESP32-Firmware (PING, START, STOP, RATE,&lt;hz&gt;).
- * Nutzt die geteilte {@link DeviceConnection}, damit dieselbe Verbindung auch vom Hauptfenster
- * ({@link GUI}) für Start/Stop der Live-Messung verwendet werden kann.
+ * Serielles Terminal-Fenster zur Kommunikation mit der Hardware.
  */
 public class Terminal extends JFrame {
 
@@ -20,6 +18,9 @@ public class Terminal extends JFrame {
 
     private final Consumer<String> lineListener = this::appendLog;
 
+    /**
+     * Erstellt das Terminal-Fenster und initialisiert die UI.
+     */
     public Terminal() {
         super("Terminal");
         setSize(560, 440);
@@ -48,6 +49,11 @@ public class Terminal extends JFrame {
         });
     }
 
+    /**
+     * Baut das Panel für Portauswahl, Baudrate und Verbindungsaufbau auf.
+     *
+     * @return Das Steuerungspanel.
+     */
     private JPanel buildConnectionPanel() {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         panel.setBorder(new EmptyBorder(8, 8, 0, 8));
@@ -73,6 +79,11 @@ public class Terminal extends JFrame {
         return panel;
     }
 
+    /**
+     * Baut den Scrollbereich für die Log-Ausgabe auf.
+     *
+     * @return Die ScrollPane mit Textbereich.
+     */
     private JScrollPane buildLogPanel() {
         txtLog = new JTextArea();
         txtLog.setEditable(false);
@@ -85,7 +96,11 @@ public class Terminal extends JFrame {
         return scrollPane;
     }
 
-    /** Vier Quick Befehle. */
+    /**
+     * Baut das Panel für Befehlseingabe und Quick-Buttons auf.
+     *
+     * @return Das Eingabepanel.
+     */
     private JPanel buildCommandPanel() {
         JPanel outer = new JPanel(new BorderLayout(8, 8));
         outer.setBorder(new EmptyBorder(0, 8, 8, 8));
@@ -114,12 +129,21 @@ public class Terminal extends JFrame {
         return outer;
     }
 
+    /**
+     * Erstellt einen Button zum Senden eines vordefinierten Befehls.
+     *
+     * @param command Der zu sendende Befehl textuell.
+     * @return Der fertig konfigurierte Button.
+     */
     private JButton quickButton(String command) {
         JButton button = new JButton(command);
         button.addActionListener(e -> sendLine(command));
         return button;
     }
 
+    /**
+     * Aktualisiert die Liste der verfügbaren seriellen Ports.
+     */
     private void refreshPorts() {
         comboPort.removeAllItems();
         for (String name : DeviceConnection.getInstance().listPortNames()) {
@@ -127,6 +151,9 @@ public class Terminal extends JFrame {
         }
     }
 
+    /**
+     * Öffnet oder schließt die serielle Verbindung je nach Zustand.
+     */
     private void toggleConnection() {
         if (DeviceConnection.getInstance().isConnected()) {
             disconnect();
@@ -135,6 +162,9 @@ public class Terminal extends JFrame {
         }
     }
 
+    /**
+     * Stellt die Verbindung zum ausgewählten Port her.
+     */
     private void connect() {
         String portName = (String) comboPort.getSelectedItem();
         if (portName == null) {
@@ -158,12 +188,18 @@ public class Terminal extends JFrame {
         }
     }
 
+    /**
+     * Trennt die serielle Verbindung.
+     */
     private void disconnect() {
         DeviceConnection.getInstance().disconnect();
         appendLog("# Verbindung getrennt.");
         btnConnect.setText("Verbinden");
     }
 
+    /**
+     * Liest den Text aus dem Eingabefeld und sendet ihn.
+     */
     private void sendCurrentCommand() {
         String command = txtCommand.getText();
         if (!command.isEmpty()) {
@@ -172,6 +208,11 @@ public class Terminal extends JFrame {
         }
     }
 
+    /**
+     * Sendet eine Befehlszeile an das Gerät und gibt sie im Log aus.
+     *
+     * @param command Der zu sendende Befehl.
+     */
     private void sendLine(String command) {
         if (!DeviceConnection.getInstance().isConnected()) {
             appendLog("# Nicht verbunden - zuerst einen Port auswählen und 'Verbinden' klicken.");
@@ -181,6 +222,11 @@ public class Terminal extends JFrame {
         appendLog("> " + command);
     }
 
+    /**
+     * Fügt eine Zeile zum Text-Log hinzu und scrollt automatisch nach unten.
+     *
+     * @param text Der auszugebende Text.
+     */
     private void appendLog(String text) {
         txtLog.append(text.endsWith("\n") ? text : text + "\n");
         txtLog.setCaretPosition(txtLog.getDocument().getLength());
