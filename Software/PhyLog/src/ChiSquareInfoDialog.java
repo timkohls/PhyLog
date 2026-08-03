@@ -161,7 +161,7 @@ public class ChiSquareInfoDialog extends JDialog {
         row.setMaximumSize(new Dimension(CONTENT_WIDTH, 76));
         row.setPreferredSize(new Dimension(CONTENT_WIDTH, 76));
 
-        row.add(buildStatCard("\u03C7\u00B2_RED", String.format("%.3f", reducedChiSquare), Theme.POINT));
+        row.add(buildStatCard("\u03C7\u00B2_RED", String.format("%.3f", reducedChiSquare), Theme.POINT_A));
         row.add(buildStatCard("FREIHEITSGRADE", String.valueOf(degreesOfFreedom), Theme.TEXT));
         row.add(buildStatCard("BEWERTUNG", ratingText, ratingColor));
         return row;

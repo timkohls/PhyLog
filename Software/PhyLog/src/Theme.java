@@ -19,7 +19,8 @@ public class Theme {
     /** Akzentfarbe für Interaktionen und Fit-Kurven. */
     public static final Color ACCENT = new Color(82, 140, 255);
     /** Farbe für Messpunkte im Diagramm. */
-    public static final Color POINT = new Color(255, 170, 90);
+    public static final Color POINT_A = new Color(255, 170, 90);
+    public static final Color POINT_B = new Color(46, 204, 113);
 
     /**
      * Initialisiert das Dark-Theme und setzt die UI-Defaults.

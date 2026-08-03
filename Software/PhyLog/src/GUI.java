@@ -30,9 +30,6 @@ public class GUI extends JFrame {
     private static final int DEFAULT_WIDTH = 1280;
     private static final int DEFAULT_HEIGHT = 720;
 
-    /** Farbe, in der Kanal B im Diagramm dargestellt wird (Kanal A nutzt {@link Theme#POINT}). */
-    private static final Color CHANNEL_B_COLOR = new Color(46, 204, 113);
-
     /**
      * Bündelt alles, was pro Messkanal (A oder B) getrennt gehalten werden muss: Tabelle,
      * aktiver Sensor, letzter Live-Wert, Tara-Offset sowie den kurzen Ringpuffer für den
@@ -740,7 +737,7 @@ public class GUI extends JFrame {
             lblTriggerStatus.setForeground(Color.LIGHT_GRAY);
         } else if (waitingForTrigger) {
             lblTriggerStatus.setText("Warte auf Trigger (Kanal " + triggerConfig.channel + ") …");
-            lblTriggerStatus.setForeground(Theme.POINT);
+            lblTriggerStatus.setForeground(Theme.POINT_A);
         } else if (recording) {
             lblTriggerStatus.setText(triggerConfig.thresholdMode ? "Aufnahme läuft (getriggert)" : "Aufnahme läuft");
             lblTriggerStatus.setForeground(new Color(46, 204, 113));
@@ -845,7 +842,7 @@ public class GUI extends JFrame {
     private void stopMeasurementDueToDurationLimit() {
         stopMeasurement();
         lblTriggerStatus.setText("Maximale Messdauer erreicht - Aufnahme gestoppt");
-        lblTriggerStatus.setForeground(Theme.POINT);
+        lblTriggerStatus.setForeground(Theme.POINT_A);
     }
 
     private void bufferForPreTrigger(Channel ch, long millis, double value) {
@@ -1014,7 +1011,7 @@ public class GUI extends JFrame {
         if (hasSensor(channelB)) {
             List<Sensor.Quantity> quantitiesB = channelB.sensor.getQuantities();
             String labelB = "Kanal B: " + (quantitiesB.isEmpty() ? channelB.sensor.getName() : quantitiesB.get(0).getColumnHeader());
-            extras.add(new ChartPanel.Series(labelB, CHANNEL_B_COLOR, extractDataFromTable(channelB.tableModel, 1)));
+            extras.add(new ChartPanel.Series(labelB, Theme.POINT_B, extractDataFromTable(channelB.tableModel, 1)));
         }
         chartPanel.setExtraSeries(extras);
 

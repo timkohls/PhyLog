@@ -914,7 +914,7 @@ public class ChartPanel extends JPanel {
         List<String> labels = new ArrayList<>();
         List<Color> colors = new ArrayList<>();
         labels.add(mainLabel);
-        colors.add(Theme.POINT);
+        colors.add(Theme.POINT_A);
         for (Series series : extraSeries) {
             labels.add(series.label);
             colors.add(series.color);
@@ -1108,7 +1108,7 @@ public class ChartPanel extends JPanel {
         // gleichzeitig genutzt werden (aktive zweite Achse, siehe #hasSecondaryAxis) - bei nur
         // einem aktiven Sensor bleibt sie wie bisher neutral weiß, da es dort nichts von Kanal B
         // abzugrenzen gibt.
-        Color primaryAxisColor = geo.hasSecondaryAxis ? Theme.POINT : Theme.TEXT;
+        Color primaryAxisColor = geo.hasSecondaryAxis ? Theme.POINT_A : Theme.TEXT;
         // Sehr schwache, nur angedeutete Variante der jeweiligen Achsenfarbe für die
         // horizontalen Gitterlinien (siehe unten) - dezent statt dominant.
         Color primaryGridColor = withAlpha(primaryAxisColor, 40);
@@ -1244,7 +1244,7 @@ public class ChartPanel extends JPanel {
      * @param points bereits in Bildschirmkoordinaten projizierte Messpunkte
      */
     private void drawConnectingLine(Graphics2D g2, List<Point2DDouble> points) {
-        g2.setColor(Theme.POINT.darker());
+        g2.setColor(Theme.POINT_A.darker());
         g2.setStroke(new BasicStroke(1.5f));
         g2.draw(buildLinePath(points));
     }
@@ -1344,7 +1344,7 @@ public class ChartPanel extends JPanel {
         for (Point2DDouble pt : points) {
             if (pt.x >= geo.padding && pt.x <= rightEdge
                     && pt.y >= geo.padding && pt.y <= geo.height - geo.padding) {
-                g2.setColor(Theme.POINT);
+                g2.setColor(Theme.POINT_A);
                 g2.fill(new Ellipse2D.Double(pt.x - pointSize / 2, pt.y - pointSize / 2, pointSize, pointSize));
             }
         }
