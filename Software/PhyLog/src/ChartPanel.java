@@ -8,15 +8,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Zeichnet ein Zeit/Messwert-Diagramm und übernimmt zugleich die Ausgleichsrechnung
- * (lineare/polynomiale, exponentielle und sinusförmige Regression) sowie die Berechnung
- * des reduzierten Chi-Quadrats als Gütemaß für den aktuell gewählten Fit.
+ * Zeichnet ein Zeit/Messwert-Diagramm mit Zoom, Freihand-Auswahl und Fadenkreuz, und legt bei
+ * Bedarf eine Fit-Kurve samt Chi²-Gütebewertung darüber. Die eigentliche Ausgleichsrechnung
+ * übernimmt {@link CurveFitting}, die Bewertung über das reduzierte Chi-Quadrat und die
+ * Sigma-Schätzung {@link GoodnessOfFit} - diese Klasse fügt beides nur noch zur Anzeige
+ * zusammen und cached die (teuren) Ergebnisse.
  *
  * <p>Diese Klasse kennt keine Sensoren oder Hardware. Sie bekommt ausschließlich fertige
  * (Zeit, Messwert)-Paare über {@link #setData(List)} übergeben - unabhängig davon, ob diese
- * aus einer CSV-Datei importiert oder (perspektivisch) live von einem angeschlossenen Sensor
- * geliefert wurden. Sobald die echte Sensor-Anbindung existiert, muss hier nichts geändert
- * werden; es genügt, {@link #setData(List)} regelmäßig mit neuen Messwerten aufzurufen.</p>
+ * aus einer CSV-Datei importiert oder live von einem angeschlossenen Sensor geliefert wurden.</p>
  *
  * <p>Interaktion: Ziehen mit der linken Maustaste zoomt auf einen Ausschnitt (Rubber-Band-
  * Auswahl), Ziehen mit der rechten Maustaste ermöglicht eine Freihand-Auswahl von Messpunkten,
@@ -45,96 +45,13 @@ public class ChartPanel extends JPanel {
         EXPONENTIAL
     }
 
-    /**
-     * Wie die Messunsicherheit sigma bestimmt wird, die in Chi²-Berechnung und Toleranzband
-     * eingeht (siehe {@link StandardDeviationDialog}). Die automatischen Modi setzen einen
-     * aktiven Fit voraus - ist keiner aktiv (bzw. schlägt die Regression fehl), fällt
-     * {@link #ensureSigmaComputed} auf den konstanten Wert {@link #standardDeviation} zurück.
-     */
-    public enum SigmaMode {
-        /** Ein einziger, manuell eingegebener Wert für alle Punkte (bisheriges Verhalten). */
-        CONSTANT,
-        /** Ein einziger Wert, aus der Streuung aller Punkte um den aktuellen Fit geschätzt
-         *  (empirische Standardabweichung der Residuen unter Annahme gaußverteilten Rauschens). */
-        RESIDUAL_GLOBAL,
-        /** Ortsabhängiger Wert je Punkt, aus der Streuung der {@link #localSigmaNeighbors}
-         *  nächsten Nachbarn um den Fit geschätzt - passt sich ungleichmäßig verteiltem Rauschen
-         *  entlang der Messreihe an. */
-        RESIDUAL_LOCAL
-    }
+    /** Wie die Messpunkte einer Kurve verbunden werden: gar nicht, gerade (Polylinie) oder als
+     *  glatte Spline (Catmull-Rom) durch alle Punkte - siehe {@link #setLineMode}. */
+    public enum LineMode { NONE, STRAIGHT, SPLINE }
 
-    /**
-     * Bewertungsklassen für das reduzierte Chi-Quadrat.
-     * Einzige Quelle der Wahrheit für die Schwellenwerte - {@link ChiSquareInfoDialog}
-     * fragt ausschließlich hier ab, damit Diagramm-Overlay und Detail-Dialog niemals
-     * unterschiedliche Grenzwerte verwenden können.
-     */
-    public enum ChiRating {
-        /** &lt; {@link #CHI_OVERFIT_THRESHOLD}: Fehler wahrscheinlich überschätzt / Überanpassung. */
-        OVERFIT,
-        /** Zwischen {@link #CHI_OVERFIT_THRESHOLD} und {@link #CHI_GOOD_THRESHOLD}: guter Fit. */
-        GOOD,
-        /** Zwischen {@link #CHI_GOOD_THRESHOLD} und {@link #CHI_MODERATE_THRESHOLD}: mäßiger Fit. */
-        MODERATE,
-        /** &gt; {@link #CHI_MODERATE_THRESHOLD}: Modell passt schlecht (Unteranpassung). */
-        UNDERFIT
-    }
-
-    public static final double CHI_OVERFIT_THRESHOLD = 0.8;
-    public static final double CHI_GOOD_THRESHOLD = 1.5;
-    public static final double CHI_MODERATE_THRESHOLD = 3.0;
-
-    /**
-     * Ordnet einen reduzierten Chi-Quadrat-Wert einer {@link ChiRating} zu.
-     *
-     * @param reducedChiSquare der reduzierte Chi-Quadrat-Wert (chi^2 / Freiheitsgrade)
-     * @return die zugehörige Bewertungsklasse
-     */
-    public static ChiRating rateChiSquare(double reducedChiSquare) {
-        if (reducedChiSquare < CHI_OVERFIT_THRESHOLD) return ChiRating.OVERFIT;
-        if (reducedChiSquare <= CHI_GOOD_THRESHOLD) return ChiRating.GOOD;
-        if (reducedChiSquare <= CHI_MODERATE_THRESHOLD) return ChiRating.MODERATE;
-        return ChiRating.UNDERFIT;
-    }
-
-    /**
-     * Liefert die Anzeigefarbe für einen reduzierten Chi-Quadrat-Wert, konsistent mit
-     * {@link #rateChiSquare(double)}.
-     *
-     * @param reducedChiSquare der reduzierte Chi-Quadrat-Wert
-     * @return Grün für einen guten Fit, Gelb für Über-/mäßige Anpassung, Rot für Unteranpassung
-     */
-    public static Color getChiSquareColor(double reducedChiSquare) {
-        switch (rateChiSquare(reducedChiSquare)) {
-            case OVERFIT:
-                return new Color(241, 196, 15);  // Gelb / Warnung
-            case GOOD:
-                return new Color(46, 204, 113);  // Grün
-            case MODERATE:
-                return new Color(241, 196, 15);  // Gelb
-            case UNDERFIT:
-            default:
-                return new Color(231, 76, 60);   // Rot
-        }
-    }
-
-    /** Unveränderte, zuletzt über {@link #setData(List)} gesetzte Messdaten (Hauptgröße - einzige,
-     *  die Zoom, Freihand-Auswahl, Fit und Chi² einbezieht). Wird von Zoom/Freihand-Auswahl NIE
-     *  verändert - siehe {@link #viewMinX} für den eigentlichen Zoom-Zustand. */
-    private List<double[]> originalData = new ArrayList<>();
-    /** Auf das aktuelle Zoom-/Auswahlfenster eingeschränkte Teilmenge von {@link #originalData}
-     *  (siehe {@link #recomputeDisplayData()}) - diese, nicht {@link #originalData}, geht in
-     *  Achsenbereich, Fit und Chi² ein, damit "näher heranzoomen" auch die Anpassung auf den
-     *  sichtbaren Bereich eingrenzt (siehe Hinweistext in {@link ChiSquareInfoDialog}). */
-    private List<double[]> displayData = new ArrayList<>();
-
-    /** Aktuelles Zoom-/Auswahlfenster (Rubber-Band- oder Freihand-Auswahl), {@code null} = kein
-     *  Fenster gesetzt, es wird der volle Datenbereich verwendet. Anders als früher wird dabei
-     *  nie ein Datenpunkt aus {@link #originalData} gelöscht: {@link #recomputeDisplayData()}
-     *  leitet {@link #displayData} bei jeder Änderung (neue Messwerte, neues Fenster, Reset)
-     *  frisch aus {@link #originalData} ab, das Fenster bleibt bis zum expliziten Zurücksetzen
-     *  erhalten und übersteht so auch eintreffende Live-Messwerte. */
-    private Double viewMinX = null, viewMaxX = null, viewMinY = null, viewMaxY = null;
+    /** Höhe der Chi²-Anzeige-Box (siehe {@link #drawChiSquareOverlay}) - als Konstante geteilt,
+     *  falls andere Stellen sie einmal mit einbeziehen müssen. */
+    private static final int CHI_OVERLAY_HEIGHT = 26;
 
     /** Eine zusätzlich eingezeichnete Messgröße (z. B. Kanal B neben der Hauptgröße Kanal A),
      *  rein zur gleichzeitigen visuellen Darstellung - siehe {@link #setExtraSeries}. */
@@ -148,214 +65,6 @@ public class ChartPanel extends JPanel {
             this.color = color;
             this.data = (data != null) ? data : new ArrayList<>();
         }
-    }
-
-    /** Wie die Messpunkte einer Kurve verbunden werden: gar nicht, gerade (Polylinie) oder als
-     *  glatte Spline (Catmull-Rom) durch alle Punkte - siehe {@link #setLineMode}. */
-    public enum LineMode { NONE, STRAIGHT, SPLINE }
-
-    /** Zusätzliche, gleichzeitig dargestellte Kurven (siehe {@link Series}). Nehmen nicht an
-     *  Zoom, Freihand-Auswahl, Fit oder Chi² teil - das bleibt der Hauptgröße vorbehalten. */
-    private List<Series> extraSeries = new ArrayList<>();
-
-    private String xUnit = "s";
-    private String yUnit = "Messwert";
-    /** Bezeichnung der Hauptmessgröße (Kanal A) für die Legende - unabhängig vom Achsentitel,
-     *  damit dieser bei zwei Kanälen generisch bleiben kann (siehe {@link #setUnits}). */
-    private String mainLabel = "Kanal A";
-
-    /** Beschriftung der (optionalen) zweiten Y-Achse für Kanal B, nur relevant, solange
-     *  {@link #dualYAxisMode} aktiv ist und eine Extra-Serie mit Daten existiert - siehe
-     *  {@link #setSecondaryUnits}. */
-    private String secondaryYUnit = "Messwert";
-
-    private boolean showPoints = true;
-    private LineMode lineMode = LineMode.NONE;
-    private FitMode fitMode = FitMode.NONE;
-    private int polynomialDegree = 2;
-
-    /**
-     * {@code true}, wenn Kanal B (falls aktiv, siehe {@link #extraSeries}) über eine eigene,
-     * unabhängig skalierte zweite Y-Achse dargestellt wird, statt sich - wie im bisherigen,
-     * weiterhin verfügbaren Standardverhalten - dieselbe Achse mit Kanal A zu teilen. Betrifft
-     * ausschließlich die Darstellung: Zoom, Freihand-Auswahl, Fit und Chi² bleiben unabhängig
-     * davon exklusiv an Kanal A (die Hauptgröße) gebunden, siehe {@link #computeSecondaryRange}.
-     */
-    private boolean dualYAxisMode = false;
-
-    private double zoomFactor = 1.0;
-    private Point mousePoint = null;
-
-    private Point dragStart = null;
-    private Point dragEnd = null;
-    private List<Point> freehandPoints = new ArrayList<>();
-    private boolean isRightButtonDragging = false;
-    private boolean rightClickTriggered = false;
-
-    /** Klickfläche des kleinen "i"-Symbols neben der Chi²-Anzeige, wird bei jedem Zeichnen aktualisiert. */
-    private Rectangle infoButtonBounds = new Rectangle();
-    private double currentReducedChiSquare = 0.0;
-    private int currentDegreesOfFreedom = 1;
-
-    /** Angenommene (konstante) Standardabweichung der Messwerte, geht als sigma in Chi^2 ein.
-     *  Dient außerdem als Rückfallebene für {@link SigmaMode#RESIDUAL_GLOBAL}/{@link SigmaMode#RESIDUAL_LOCAL},
-     *  solange kein Fit aktiv ist (siehe {@link #ensureSigmaComputed}). */
-    private double standardDeviation = 1.0;
-
-    /** Wie sigma bestimmt wird (siehe {@link SigmaMode}). */
-    private SigmaMode sigmaMode = SigmaMode.CONSTANT;
-    /** Anzahl der je Punkt einbezogenen Nachbarn für {@link SigmaMode#RESIDUAL_LOCAL}. */
-    private int localSigmaNeighbors = 8;
-    /** {@code true}, wenn die aus Residuen abgeleiteten Sigma-Werte neu berechnet werden müssen
-     *  (siehe {@link #ensureSigmaComputed}) - analog zu {@link #fitDirty}, aber unabhängig davon
-     *  auch bei einem reinen Moduswechsel gesetzt. */
-    private boolean sigmaCacheDirty = true;
-    /** Zwischengespeicherter globaler Sigma-Wert für {@link SigmaMode#RESIDUAL_GLOBAL}. */
-    private double cachedGlobalSigma = standardDeviation;
-    /** Zwischengespeicherte, je Punkt in {@link #displayData} passende Sigma-Werte für
-     *  {@link SigmaMode#RESIDUAL_LOCAL}, {@code null} in den anderen Modi. */
-    private double[] cachedLocalSigmas = null;
-
-    // --- Fit-Cache ---
-    // Die komplette Regression (inkl. der iterativen Sinus-Anpassung) ist teuer und muss nicht
-    // bei jedem repaint() neu berechnet werden - z. B. nicht nur wegen einer Mausbewegung fürs
-    // Fadenkreuz. Es wird nur neu gefittet, wenn sich Daten, Fit-Typ oder Polynomgrad tatsächlich
-    // geändert haben. Die Standardabweichung beeinflusst nur Chi^2, nicht die Kurvenparameter
-    // selbst, und löst deshalb bewusst KEINEN Refit aus.
-    private boolean fitDirty = true;
-    private FitResult cachedFit = null;
-    private FitMode cachedFitModeUsed = null;
-    private int cachedDegreeUsed = -1;
-
-    /** Ergebnis einer Regression: die angepasste Funktion, Anzahl freier Parameter, sowie eine
-     *  für Menschen lesbare Beschreibung der Funktion und ihrer physikalisch interpretierbaren
-     *  Parameter (siehe {@link FitDescription}). */
-    private static class FitResult {
-        final FunctionEvaluator func;
-        final int paramCount;
-        final FitDescription description;
-
-        FitResult(FunctionEvaluator func, int paramCount, FitDescription description) {
-            this.func = func;
-            this.paramCount = paramCount;
-            this.description = description;
-        }
-    }
-
-    /** Textuelle Beschreibung einer gefitteten Funktion: die Gleichung mit den konkret
-     *  ermittelten Koeffizienten sowie eine Liste physikalisch interpretierbarer Kenngrößen
-     *  (z. B. Steigung, Amplitude, Periodendauer), zur Anzeige in {@link ChiSquareInfoDialog}. */
-    static final class FitDescription {
-        final String equation;
-        final List<String> parameterLines;
-
-        FitDescription(String equation, List<String> parameterLines) {
-            this.equation = equation;
-            this.parameterLines = parameterLines;
-        }
-    }
-
-    /** Beschreibung des zuletzt gezeichneten Fits (siehe {@link #drawCachedFitIfPresent}),
-     *  {@code null} solange kein Fit aktiv/berechenbar ist. */
-    private FitDescription currentFitDescription = null;
-
-    private static final char[] SUPERSCRIPT_DIGITS =
-            {'\u2070', '\u00b9', '\u00b2', '\u00b3', '\u2074', '\u2075', '\u2076', '\u2077', '\u2078', '\u2079'};
-
-    /** Formatiert eine Zahl mit 4 Nachkommastellen für die Fit-Parameter-Anzeige. */
-    private static String fmt(double v) {
-        return String.format("%.4f", v);
-    }
-
-    /** Wandelt eine Zehnerpotenz in Unicode-Hochstellungsziffern um (z. B. 12 -&gt; "¹²"). */
-    private static String superscript(int n) {
-        StringBuilder sb = new StringBuilder();
-        for (char c : String.valueOf(n).toCharArray()) {
-            sb.append(SUPERSCRIPT_DIGITS[c - '0']);
-        }
-        return sb.toString();
-    }
-
-    /** Binomialkoeffizient "n über k" (für kleine, hier vorkommende n ausreichend genau als double). */
-    private static double binomial(int n, int k) {
-        double result = 1;
-        for (int i = 0; i < k; i++) {
-            result = result * (n - i) / (i + 1);
-        }
-        return result;
-    }
-
-    /**
-     * Wandelt die um {@code meanX} zentrierten Fit-Koeffizienten (Basis (x-meanX)^i, wie sie
-     * {@link #computePolynomialFit} zur besseren Kondition verwendet) per Binomialentwicklung in
-     * Standard-Koeffizienten der Basis x^j um. So lässt sich die gefittete Funktion als
-     * gewöhnliches Polynom in x anzeigen, statt in der internen, für den Nutzer bedeutungslosen
-     * (x-meanX)-Basis.
-     */
-    private static double[] toStandardCoefficients(double[] centered, double meanX) {
-        int n = centered.length - 1;
-        double[] standard = new double[n + 1];
-        for (int j = 0; j <= n; j++) {
-            double sum = 0;
-            double negMeanXPow = 1.0; // (-meanX)^(i-j), startet bei i=j mit Exponent 0
-            for (int i = j; i <= n; i++) {
-                sum += centered[i] * binomial(i, j) * negMeanXPow;
-                negMeanXPow *= -meanX;
-            }
-            standard[j] = sum;
-        }
-        return standard;
-    }
-
-    /** Baut die Gleichung eines Polynoms als String, {@code a[j]} = Koeffizient von x^j. */
-    private static String buildPolynomialEquation(double[] a) {
-        int degree = a.length - 1;
-        StringBuilder sb = new StringBuilder("f(x) = ");
-        for (int power = degree; power >= 0; power--) {
-            double coeff = a[power];
-            String varPart = (power == 0) ? "" : (power == 1) ? "\u00b7x" : "\u00b7x" + superscript(power);
-            if (power == degree) {
-                sb.append(coeff < 0 ? "-" : "").append(fmt(Math.abs(coeff))).append(varPart);
-            } else {
-                sb.append(coeff < 0 ? " - " : " + ").append(fmt(Math.abs(coeff))).append(varPart);
-            }
-        }
-        return sb.toString();
-    }
-
-    /**
-     * Baut die für den Chi²-Dialog angezeigte Beschreibung eines Polynom-/linearen Fits: die
-     * Gleichung in Standardform, plus physikalisch interpretierbare Kenngrößen (Steigung,
-     * y-Achsenabschnitt bzw. bei Grad 2 zusätzlich Krümmung und Scheitelpunkt).
-     */
-    private FitDescription buildPolynomialDescription(double[] standardCoeffs) {
-        int degree = standardCoeffs.length - 1;
-        String equation = buildPolynomialEquation(standardCoeffs);
-        List<String> params = new ArrayList<>();
-
-        if (degree == 1) {
-            params.add("Steigung m = " + fmt(standardCoeffs[1]) + " " + yUnit + "/" + xUnit);
-            params.add("y-Achsenabschnitt b = " + fmt(standardCoeffs[0]) + " " + yUnit);
-        } else if (degree == 2) {
-            double a2 = standardCoeffs[2], a1 = standardCoeffs[1], a0 = standardCoeffs[0];
-            params.add("Krümmung a = " + fmt(a2) + " " + yUnit + "/" + xUnit + "\u00b2");
-            params.add("Steigung bei x=0 (b) = " + fmt(a1) + " " + yUnit + "/" + xUnit);
-            params.add("y-Achsenabschnitt c = " + fmt(a0) + " " + yUnit);
-            if (Math.abs(a2) > 1e-12) {
-                double xVertex = -a1 / (2 * a2);
-                double yVertex = a0 - (a1 * a1) / (4 * a2);
-                params.add("Scheitelpunkt: x = " + fmt(xVertex) + " " + xUnit + ", f(x) = " + fmt(yVertex) + " " + yUnit);
-            }
-        } else {
-            for (int power = degree; power >= 0; power--) {
-                String label = (power == 0) ? "Konstantes Glied a0"
-                        : (power == 1) ? "Koeffizient von x (a1)"
-                        : "Koeffizient von x" + superscript(power) + " (a" + power + ")";
-                params.add(label + " = " + fmt(standardCoeffs[power]));
-            }
-        }
-
-        return new FitDescription(equation, params);
     }
 
     /**
@@ -396,6 +105,110 @@ public class ChartPanel extends JPanel {
             this.rangeY2 = rangeY2;
         }
     }
+
+    /** Einfacher (double-x, double-y)-Bildschirmpunkt, um Rundungsfehler bei kleinen Panels zu vermeiden. */
+    private static class Point2DDouble {
+        double x, y;
+        Point2DDouble(double x, double y) { this.x = x; this.y = y; }
+    }
+
+    /** Unveränderte, zuletzt über {@link #setData(List)} gesetzte Messdaten (Hauptgröße - einzige,
+     *  die Zoom, Freihand-Auswahl, Fit und Chi² einbezieht). Wird von Zoom/Freihand-Auswahl NIE
+     *  verändert - siehe {@link #viewMinX} für den eigentlichen Zoom-Zustand. */
+    private List<double[]> originalData = new ArrayList<>();
+    /** Auf das aktuelle Zoom-/Auswahlfenster eingeschränkte Teilmenge von {@link #originalData}
+     *  (siehe {@link #recomputeDisplayData()}) - diese, nicht {@link #originalData}, geht in
+     *  Achsenbereich, Fit und Chi² ein, damit "näher heranzoomen" auch die Anpassung auf den
+     *  sichtbaren Bereich eingrenzt (siehe Hinweistext in {@link ChiSquareInfoDialog}). */
+    private List<double[]> displayData = new ArrayList<>();
+
+    /** Aktuelles Zoom-/Auswahlfenster (Rubber-Band- oder Freihand-Auswahl), {@code null} = kein
+     *  Fenster gesetzt, es wird der volle Datenbereich verwendet. Anders als früher wird dabei
+     *  nie ein Datenpunkt aus {@link #originalData} gelöscht: {@link #recomputeDisplayData()}
+     *  leitet {@link #displayData} bei jeder Änderung (neue Messwerte, neues Fenster, Reset)
+     *  frisch aus {@link #originalData} ab, das Fenster bleibt bis zum expliziten Zurücksetzen
+     *  erhalten und übersteht so auch eintreffende Live-Messwerte. */
+    private Double viewMinX = null, viewMaxX = null, viewMinY = null, viewMaxY = null;
+
+    /** Zusätzliche, gleichzeitig dargestellte Kurven (siehe {@link Series}). Nehmen nicht an
+     *  Zoom, Freihand-Auswahl, Fit oder Chi² teil - das bleibt der Hauptgröße vorbehalten. */
+    private List<Series> extraSeries = new ArrayList<>();
+
+    private String xUnit = "s";
+    private String yUnit = "Messwert";
+    /** Bezeichnung der Hauptmessgröße (Kanal A) für die Legende - unabhängig vom Achsentitel,
+     *  damit dieser bei zwei Kanälen generisch bleiben kann (siehe {@link #setUnits}). */
+    private String mainLabel = "Kanal A";
+
+    /** Beschriftung der (optionalen) zweiten Y-Achse für Kanal B, nur relevant, solange
+     *  {@link #dualYAxisMode} aktiv ist und eine Extra-Serie mit Daten existiert - siehe
+     *  {@link #setSecondaryUnits}. */
+    private String secondaryYUnit = "Messwert";
+
+    private boolean showPoints = true;
+    private LineMode lineMode = LineMode.NONE;
+    private FitMode fitMode = FitMode.NONE;
+    private int polynomialDegree = 2;
+
+    /**
+     * {@code true}, wenn Kanal B (falls aktiv, siehe {@link #extraSeries}) über eine eigene,
+     * unabhängig skalierte zweite Y-Achse dargestellt wird, statt sich - wie im bisherigen,
+     * weiterhin verfügbaren Standardverhalten - dieselbe Achse mit Kanal A zu teilen. Betrifft
+     * ausschließlich die Darstellung: Zoom, Freihand-Auswahl, Fit und Chi² bleiben unabhängig
+     * davon exklusiv an Kanal A (die Hauptgröße) gebunden, siehe {@link #computeSecondaryRange}.
+     * Ist diese zweite Achse aktiv, zeigen ihre farbig markierten Achsentitel bereits an, welche
+     * Farbe zu welchem Kanal gehört - die separate Farb-Legende (siehe {@link #drawLegend}) wäre
+     * dann redundant und bleibt ausgeblendet, solange nur eine gemeinsame Achse genutzt wird.
+     */
+    private boolean dualYAxisMode = false;
+
+    private double zoomFactor = 1.0;
+    private Point mousePoint = null;
+
+    private Point dragStart = null;
+    private Point dragEnd = null;
+    private final List<Point> freehandPoints = new ArrayList<>();
+    private boolean isRightButtonDragging = false;
+    private boolean rightClickTriggered = false;
+
+    /** Klickfläche des kleinen "i"-Symbols neben der Chi²-Anzeige, wird bei jedem Zeichnen aktualisiert. */
+    private Rectangle infoButtonBounds = new Rectangle();
+    private double currentReducedChiSquare = 0.0;
+    private int currentDegreesOfFreedom = 1;
+
+    /** Angenommene (konstante) Standardabweichung der Messwerte, geht als sigma in Chi^2 ein.
+     *  Dient außerdem als Rückfallebene für {@link GoodnessOfFit.SigmaMode#RESIDUAL_GLOBAL}/
+     *  {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL}, solange kein Fit aktiv ist. */
+    private double standardDeviation = 1.0;
+
+    /** Wie sigma bestimmt wird (siehe {@link GoodnessOfFit.SigmaMode}). */
+    private GoodnessOfFit.SigmaMode sigmaMode = GoodnessOfFit.SigmaMode.CONSTANT;
+    /** Anzahl der je Punkt einbezogenen Nachbarn für {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL}. */
+    private int localSigmaNeighbors = 8;
+    /** {@code true}, wenn die aus Residuen abgeleiteten Sigma-Werte neu berechnet werden müssen
+     *  (siehe {@link #ensureSigmaComputed}) - analog zu {@link #fitDirty}, aber unabhängig davon
+     *  auch bei einem reinen Moduswechsel gesetzt. */
+    private boolean sigmaCacheDirty = true;
+    /** Zwischengespeicherter globaler Sigma-Wert für {@link GoodnessOfFit.SigmaMode#RESIDUAL_GLOBAL}. */
+    private double cachedGlobalSigma = standardDeviation;
+    /** Zwischengespeicherte, je Punkt in {@link #displayData} passende Sigma-Werte für
+     *  {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL}, {@code null} in den anderen Modi. */
+    private double[] cachedLocalSigmas = null;
+
+    // --- Fit-Cache ---
+    // Die komplette Regression (inkl. der iterativen Sinus-Anpassung) ist teuer und muss nicht
+    // bei jedem repaint() neu berechnet werden - z. B. nicht nur wegen einer Mausbewegung fürs
+    // Fadenkreuz. Es wird nur neu gefittet, wenn sich Daten, Fit-Typ oder Polynomgrad tatsächlich
+    // geändert haben. Die Standardabweichung beeinflusst nur Chi^2, nicht die Kurvenparameter
+    // selbst, und löst deshalb bewusst KEINEN Refit aus.
+    private boolean fitDirty = true;
+    private CurveFitting.FitResult cachedFit = null;
+    private FitMode cachedFitModeUsed = null;
+    private int cachedDegreeUsed = -1;
+
+    /** Beschreibung des zuletzt gezeichneten Fits (siehe {@link #drawCachedFitIfPresent}),
+     *  {@code null} solange kein Fit aktiv/berechenbar ist. */
+    private CurveFitting.FitDescription currentFitDescription = null;
 
     /**
      * Erstellt das leere Diagramm-Panel und registriert die Maus-Interaktion für Zoom,
@@ -610,10 +423,10 @@ public class ChartPanel extends JPanel {
     }
 
     /**
-     * Legt den konstanten Sigma-Wert fest, der bei {@link SigmaMode#CONSTANT} direkt verwendet
-     * wird und in den automatischen Modi als Rückfallebene ohne aktiven Fit dient. Beeinflusst
-     * nur Chi²/Toleranzband (sigma steht als Faktor in der Summe), nicht die Kurvenparameter
-     * selbst - löst deshalb bewusst KEINEN Refit aus, nur ein repaint().
+     * Legt den konstanten Sigma-Wert fest, der bei {@link GoodnessOfFit.SigmaMode#CONSTANT} direkt
+     * verwendet wird und in den automatischen Modi als Rückfallebene ohne aktiven Fit dient.
+     * Beeinflusst nur Chi²/Toleranzband (sigma steht als Faktor in der Summe), nicht die
+     * Kurvenparameter selbst - löst deshalb bewusst KEINEN Refit aus, nur ein repaint().
      *
      * @param standardDeviation neue Standardabweichung, wird auf mindestens 1e-6 begrenzt
      */
@@ -627,23 +440,23 @@ public class ChartPanel extends JPanel {
     public int getPolynomialDegree() { return polynomialDegree; }
 
     /**
-     * Legt fest, wie sigma bestimmt wird (siehe {@link SigmaMode}). Markiert den Sigma-Cache
-     * als veraltet, damit ein automatischer Modus beim nächsten Zeichnen aus dem aktuellen Fit
-     * neu geschätzt wird - löst bewusst keinen Refit aus, da sich die Kurvenparameter dadurch
-     * nicht ändern.
+     * Legt fest, wie sigma bestimmt wird (siehe {@link GoodnessOfFit.SigmaMode}). Markiert den
+     * Sigma-Cache als veraltet, damit ein automatischer Modus beim nächsten Zeichnen aus dem
+     * aktuellen Fit neu geschätzt wird - löst bewusst keinen Refit aus, da sich die
+     * Kurvenparameter dadurch nicht ändern.
      *
-     * @param sigmaMode der gewünschte Modus, {@code null} fällt auf {@link SigmaMode#CONSTANT} zurück
+     * @param sigmaMode der gewünschte Modus, {@code null} fällt auf {@link GoodnessOfFit.SigmaMode#CONSTANT} zurück
      */
-    public void setSigmaMode(SigmaMode sigmaMode) {
-        this.sigmaMode = (sigmaMode != null) ? sigmaMode : SigmaMode.CONSTANT;
+    public void setSigmaMode(GoodnessOfFit.SigmaMode sigmaMode) {
+        this.sigmaMode = (sigmaMode != null) ? sigmaMode : GoodnessOfFit.SigmaMode.CONSTANT;
         sigmaCacheDirty = true;
         repaint();
     }
 
-    public SigmaMode getSigmaMode() { return sigmaMode; }
+    public GoodnessOfFit.SigmaMode getSigmaMode() { return sigmaMode; }
 
     /**
-     * Legt die Anzahl der je Punkt einbezogenen Nachbarn für {@link SigmaMode#RESIDUAL_LOCAL}
+     * Legt die Anzahl der je Punkt einbezogenen Nachbarn für {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL}
      * fest (mindestens 2) und markiert den Sigma-Cache als veraltet.
      *
      * @param neighbors gewünschte Nachbarn-Anzahl
@@ -681,8 +494,6 @@ public class ChartPanel extends JPanel {
         repaint();
     }
 
-    /** Wertet eine per linker Maustaste gezogene Rubber-Band-Auswahl als neues Zoom-Fenster aus.
-     *  {@link #originalData} bleibt dabei unangetastet - siehe {@link #recomputeDisplayData()}. */
     /** Wertet ein per linker Maustaste gezogenes Rechteck aus: die Bounding-Box wird zum neuen
      *  Zoom-Fenster (siehe {@link #viewMinX}). Die Pixel-zu-Daten-Umrechnung nutzt dieselbe
      *  Geometrie wie das Zeichnen selbst ({@link #computePlotGeometry}), damit die Auswahl exakt
@@ -820,15 +631,15 @@ public class ChartPanel extends JPanel {
 
         drawExtraSeries(g2, geo);
 
-        // Legende (Kanal-Einheiten) hat jetzt Vorrang oben rechts; die Chi²-Anzeige rutscht
-        // darunter - bzw. bleibt oben in der Ecke, wenn ohnehin keine Legende gezeichnet wird
-        // (nur ein Kanal aktiv, siehe legendHeight()).
+        // Legende (Kanal-Einheiten) hat, sofern sichtbar (siehe #legendVisible), Vorrang oben
+        // rechts; die Chi²-Anzeige rutscht darunter - bzw. bleibt oben in der Ecke, wenn keine
+        // Legende gezeichnet wird.
         int legendTopY = geo.padding + 6;
         drawLegend(g2, geo, legendTopY);
 
         if (fitMode != FitMode.NONE) {
             int chiOverlayY = legendTopY;
-            if (!extraSeries.isEmpty()) {
+            if (legendVisible()) {
                 chiOverlayY += legendHeight() + 6;
             }
             drawChiSquareOverlay(g2, geo.width, geo.rightPadding, chiOverlayY);
@@ -889,24 +700,33 @@ public class ChartPanel extends JPanel {
     }
 
     /**
-     * Zeichnet eine kleine Legende (Farbe → Messgröße) oben rechts im Plot, sofern mehr als
-     * eine Größe gleichzeitig dargestellt wird (Hauptgröße + mind. eine Extra-Kurve).
-     *
-     * @param topY Obere Kante der Legende in Bildschirmkoordinaten - liegt unterhalb der Chi²-
-     *             Anzeige, falls diese sichtbar ist (siehe {@link #paintComponent}), damit sich
-     *             beide Overlays nicht gegenseitig verdecken.
+     * Ob die Farb-Legende (Hauptgröße + Extra-Kurven) gezeichnet werden soll: nur, wenn
+     * tatsächlich mehr als eine Größe gleichzeitig dargestellt wird UND die Achsen sich eine
+     * gemeinsame Skala teilen ({@link #dualYAxisMode} = false). Mit aktiver zweiter Y-Achse
+     * zeigen deren farbig markierte Achsentitel bereits an, welche Farbe zu welchem Kanal
+     * gehört (siehe {@link #drawGridAndAxes}) - die Legende wäre dort nur redundant.
      */
-    /** Höhe der Legendenbox in Pixeln, oder 0 ohne Legende (keine Zusatzserien) - gemeinsam von
-     *  {@link #drawLegend} und {@link #paintComponent} genutzt, damit Chi²-Anzeige und Legende
-     *  nie überlappen, unabhängig davon, welche der beiden oben steht. */
+    private boolean legendVisible() {
+        return !extraSeries.isEmpty() && !dualYAxisMode;
+    }
+
+    /** Höhe der Legendenbox in Pixeln, oder 0 ohne sichtbare Legende (siehe {@link #legendVisible()})
+     *  - gemeinsam von {@link #drawLegend} und {@link #paintComponent} genutzt, damit Chi²-Anzeige
+     *  und Legende nie überlappen, unabhängig davon, welche der beiden oben steht. */
     private int legendHeight() {
-        if (extraSeries.isEmpty()) return 0;
+        if (!legendVisible()) return 0;
         int rowHeight = 16;
         return (1 + extraSeries.size()) * rowHeight + 8;
     }
 
+    /**
+     * Zeichnet eine kleine Legende (Farbe → Messgröße) oben rechts im Plot, sofern
+     * {@link #legendVisible()} das verlangt.
+     *
+     * @param topY Obere Kante der Legende in Bildschirmkoordinaten
+     */
     private void drawLegend(Graphics2D g2, PlotGeometry geo, int topY) {
-        if (extraSeries.isEmpty()) return;
+        if (!legendVisible()) return;
 
         g2.setFont(new Font("SansSerif", Font.PLAIN, 11));
         FontMetrics fm = g2.getFontMetrics();
@@ -1093,9 +913,6 @@ public class ChartPanel extends JPanel {
     /**
      * Zeichnet das Hintergrundgitter, die Achsenlinien, die Tick-Beschriftungen und die
      * Achsentitel ("Zeit (Einheit)" / Messwert-Einheit).
-     *
-     * @param g2  Ziel-Grafikkontext
-     * @param geo aktuelle Plot-Geometrie
      */
     private void drawGridAndAxes(Graphics2D g2, PlotGeometry geo) {
         int padding = geo.padding;
@@ -1209,24 +1026,14 @@ public class ChartPanel extends JPanel {
         return (extraSeries != null && !extraSeries.isEmpty()) ? extraSeries.get(0).color : Theme.TEXT;
     }
 
-    /**
-     * Zeigt den Platzhaltertext an, solange keine Messdaten vorliegen.
-     *
-     * @param g2  Ziel-Grafikkontext
-     * @param geo aktuelle Plot-Geometrie
-     */
+    /** Zeigt den Platzhaltertext an, solange keine Messdaten vorliegen. */
     private void drawEmptyDataMessage(Graphics2D g2, PlotGeometry geo) {
         g2.setColor(Theme.TEXT);
         g2.setFont(new Font("SansSerif", Font.PLAIN, 12));
         g2.drawString("Keine Messdaten vorhanden", geo.width / 2 - 70, geo.height / 2);
     }
 
-    /**
-     * Projiziert alle Punkte aus {@link #displayData} (Datenraum) in Bildschirmkoordinaten.
-     *
-     * @param geo aktuelle Plot-Geometrie
-     * @return Bildschirmpunkte in derselben Reihenfolge wie {@link #displayData}
-     */
+    /** Projiziert alle Punkte aus {@link #displayData} (Datenraum) in Bildschirmkoordinaten. */
     private List<Point2DDouble> projectDataToScreen(PlotGeometry geo) {
         List<Point2DDouble> points = new ArrayList<>();
         for (double[] point : displayData) {
@@ -1237,12 +1044,7 @@ public class ChartPanel extends JPanel {
         return points;
     }
 
-    /**
-     * Zeichnet die (optionale) Verbindungslinie zwischen aufeinanderfolgenden Messpunkten.
-     *
-     * @param g2     Ziel-Grafikkontext
-     * @param points bereits in Bildschirmkoordinaten projizierte Messpunkte
-     */
+    /** Zeichnet die (optionale) Verbindungslinie zwischen aufeinanderfolgenden Messpunkten. */
     private void drawConnectingLine(Graphics2D g2, List<Point2DDouble> points) {
         g2.setColor(Theme.POINT_A.darker());
         g2.setStroke(new BasicStroke(1.5f));
@@ -1288,9 +1090,6 @@ public class ChartPanel extends JPanel {
      * beschränkt auf die Plotfläche (Clip wird davor gesetzt und danach wiederhergestellt).
      * Ruft bei Bedarf {@link #ensureFitComputed(FitMode, int)} auf, um den zwischengespeicherten
      * Fit auf dem neuesten Stand zu halten, und aktualisiert anschließend Chi².
-     *
-     * @param g2  Ziel-Grafikkontext
-     * @param geo aktuelle Plot-Geometrie
      */
     private void drawFitOverlayClipped(Graphics2D g2, PlotGeometry geo) {
         currentFitDescription = null;
@@ -1318,26 +1117,17 @@ public class ChartPanel extends JPanel {
      * Berechnet Chi² für den zwischengespeicherten Fit neu (billig, hängt von der aktuellen
      * Standardabweichung ab) und zeichnet die Fit-Kurve samt Toleranzband, sofern ein
      * gültiger Fit vorliegt.
-     *
-     * @param g2  Ziel-Grafikkontext
-     * @param geo aktuelle Plot-Geometrie
      */
     private void drawCachedFitIfPresent(Graphics2D g2, PlotGeometry geo) {
         if (cachedFit == null) return;
         ensureSigmaComputed(cachedFit);
-        calculateChiSquare(cachedFit.func, cachedFit.paramCount);
+        calculateChiSquare(cachedFit.function, cachedFit.parameterCount);
         currentFitDescription = cachedFit.description;
-        drawFunctionPathWithTolerance(g2, cachedFit.func, geo.minX, geo.visibleMaxX, geo.minY,
+        drawFunctionPathWithTolerance(g2, cachedFit.function, geo.minX, geo.visibleMaxX, geo.minY,
                 geo.rangeX, geo.rangeY, geo.padding, geo.height, geo.plotWidth, geo.plotHeight, Theme.ACCENT);
     }
 
-    /**
-     * Zeichnet alle sichtbaren Messpunkte als kleine Kreise.
-     *
-     * @param g2     Ziel-Grafikkontext
-     * @param geo    aktuelle Plot-Geometrie
-     * @param points bereits in Bildschirmkoordinaten projizierte Messpunkte
-     */
+    /** Zeichnet alle sichtbaren Messpunkte als kleine Kreise. */
     private void drawDataPoints(Graphics2D g2, PlotGeometry geo, List<Point2DDouble> points) {
         double pointSize = 7;
         int rightEdge = geo.width - geo.rightPadding;
@@ -1350,12 +1140,8 @@ public class ChartPanel extends JPanel {
         }
     }
 
-    /**
-     * Zeichnet das halbtransparente Auswahlrechteck während einer laufenden
-     * Rubber-Band-Zoom-Auswahl (falls der Nutzer gerade zieht).
-     *
-     * @param g2 Ziel-Grafikkontext
-     */
+    /** Zeichnet das halbtransparente Auswahlrechteck während einer laufenden
+     *  Rubber-Band-Zoom-Auswahl (falls der Nutzer gerade zieht). */
     private void drawSelectionRectangle(Graphics2D g2) {
         if (dragStart == null || dragEnd == null) return;
 
@@ -1387,23 +1173,17 @@ public class ChartPanel extends JPanel {
         g2.draw(path);
     }
 
+    /** Fittet neu, sofern Daten, Fit-Typ oder Polynomgrad sich seit dem letzten Aufruf geändert
+     *  haben (siehe {@link #fitDirty}); delegiert die eigentliche Regression an {@link CurveFitting}. */
     private void ensureFitComputed(FitMode mode, int degree) {
         if (!fitDirty && cachedFit != null && cachedFitModeUsed == mode && cachedDegreeUsed == degree) return;
 
-        switch (mode) {
-            case LINEAR:
-            case POLYNOMIAL:
-                cachedFit = computePolynomialFit(degree);
-                break;
-            case SINUS:
-                cachedFit = computeSinusFit();
-                break;
-            case EXPONENTIAL:
-                cachedFit = computeExpFit();
-                break;
-            default:
-                cachedFit = null;
-        }
+        cachedFit = switch (mode) {
+            case LINEAR, POLYNOMIAL -> CurveFitting.fitPolynomial(displayData, degree, xUnit, yUnit);
+            case SINUS -> CurveFitting.fitSinus(displayData, xUnit, yUnit);
+            case EXPONENTIAL -> CurveFitting.fitExponential(displayData, xUnit, yUnit);
+            default -> null;
+        };
 
         cachedFitModeUsed = mode;
         cachedDegreeUsed = degree;
@@ -1414,24 +1194,16 @@ public class ChartPanel extends JPanel {
      * Zeichnet die kleine Chi²-Anzeige mit farbigem Status-Icon oben rechts im Plot und
      * merkt sich dessen Klickfläche in {@link #infoButtonBounds} für {@link #showChiSquareInfoDialog()}.
      *
-     * @param g2           Ziel-Grafikkontext
-     * @param width        Panelbreite
-     * @param rightPadding rechter Innenabstand des Plots (siehe {@link PlotGeometry#rightPadding}
-     *                     - bei aktiver zweiter Y-Achse größer als der übrige Innenabstand)
-     * @param topY         obere Kante der Box - liegt unterhalb der Legende, falls diese sichtbar
-     *                     ist (siehe {@link #paintComponent}), sonst direkt oben in der Ecke
+     * @param topY obere Kante der Box - liegt unterhalb der Legende, falls diese sichtbar ist
+     *             (siehe {@link #paintComponent}), sonst direkt oben in der Ecke
      */
-    /** Höhe der Chi²-Anzeige-Box (siehe {@link #drawChiSquareOverlay}) - als Konstante geteilt,
-     *  falls andere Stellen sie einmal mit einbeziehen müssen. */
-    private static final int CHI_OVERLAY_HEIGHT = 26;
-
     private void drawChiSquareOverlay(Graphics2D g2, int width, int rightPadding, int topY) {
         // Bei SigmaMode.RESIDUAL_GLOBAL liegt sigma per Konstruktion so, dass chi²_red hier
-        // rechnerisch (fast) immer exakt 1 ergibt (siehe Javadoc von calculateChiSquare) - das
+        // rechnerisch (fast) immer exakt 1 ergibt (siehe Javadoc von GoodnessOfFit) - das
         // ist kein Fehler, sondern lässt sich ohne den Hinweis leicht als "kaputte Anzeige"
         // missverstehen. Der Klick auf das "i"-Symbol erklärt es zusätzlich ausführlich.
         String chiText = String.format("χ²_red = %.4f", currentReducedChiSquare);
-        if (sigmaMode == SigmaMode.RESIDUAL_GLOBAL) {
+        if (sigmaMode == GoodnessOfFit.SigmaMode.RESIDUAL_GLOBAL) {
             chiText += "  (per Definition \u2248 1)";
         }
         g2.setFont(new Font("SansSerif", Font.BOLD, 12));
@@ -1445,7 +1217,7 @@ public class ChartPanel extends JPanel {
         int boxX = width - rightPadding - totalWidth - 5;
         int boxY = topY;
 
-        Color statusColor = getChiSquareColor(currentReducedChiSquare);
+        Color statusColor = GoodnessOfFit.colorFor(currentReducedChiSquare);
 
         g2.setColor(Theme.PANEL);
         g2.fillRoundRect(boxX, boxY, totalWidth, boxHeight, 8, 8);
@@ -1471,20 +1243,15 @@ public class ChartPanel extends JPanel {
      * Zeichnet einen kleinen, rechtsbündigen Hinweis unterhalb der Chi²-Anzeige, dass sich Fit
      * und Chi² ausschließlich auf Kanal A beziehen - nur sichtbar, solange mindestens eine
      * Extra-Serie (Kanal B) gleichzeitig dargestellt wird (siehe {@link #paintComponent}).
-     * Ohne diesen Hinweis könnte man leicht annehmen, der Fit gelte für beide Kanäle.
-     *
-     * @param g2   Ziel-Grafikkontext
-     * @param geo  aktuelle Plot-Geometrie
-     * @param topY obere Kante des Hinweistexts, direkt unterhalb der Chi²-Box
      */
     private void drawFitScopeNote(Graphics2D g2, PlotGeometry geo, int topY) {
-        String note = "Fit gilt nur für Kanal A";
+        String note = "Fit & \u03c7\u00b2 beziehen sich nur auf " + mainLabel;
         g2.setFont(new Font("SansSerif", Font.ITALIC, 10));
         FontMetrics fm = g2.getFontMetrics();
         int textWidth = fm.stringWidth(note);
-        int boxX = geo.width - geo.rightPadding - textWidth - 5;
+        int boxX = geo.width - geo.rightPadding - textWidth - 11;
 
-        g2.setColor(Theme.TEXT);
+        g2.setColor(Theme.MUTED);
         g2.drawString(note, boxX, topY + 10);
     }
 
@@ -1495,44 +1262,14 @@ public class ChartPanel extends JPanel {
         dialog.setVisible(true);
     }
 
-    /**
-     * Berechnet das reduzierte Chi-Quadrat für eine gegebene Fit-Funktion:
-     * chi²_red = (1 / DOF) * Summe((y_i - f(x_i))² / sigma_i²), DOF = n - Parameteranzahl.
-     * Sigma_i stammt je nach {@link #sigmaMode} entweder vom konstanten Wert, vom einmalig
-     * global geschätzten Wert, oder individuell je Punkt (siehe {@link #sigmaForDataPoint}).
-     * Aktualisiert {@link #currentReducedChiSquare} und {@link #currentDegreesOfFreedom}.
-     *
-     * <p>Hinweis: Bei {@link SigmaMode#RESIDUAL_GLOBAL} liegt chi²_red durch die Art der
-     * Schätzung (sigma wird ja gerade so gewählt, dass die Residuen im Mittel genau sigma
-     * entsprechen) rechnerisch immer nahe 1 - dort dient die Anzeige eher der Kontrolle, dass
-     * die Schätzung funktioniert hat, als einer echten Gütebewertung. Bei
-     * {@link SigmaMode#RESIDUAL_LOCAL} bleibt chi²_red dagegen aussagekräftig, da sigma_i aus
-     * den Nachbarn, nicht aus dem Punkt selbst geschätzt wird.</p>
-     *
-     * @param func           die angepasste Funktion
-     * @param parameterCount Anzahl der freien Parameter des Modells (für die Freiheitsgrade)
-     */
-    private void calculateChiSquare(FunctionEvaluator func, int parameterCount) {
-        int n = displayData.size();
-        int dof = n - parameterCount;
-
-        if (dof <= 0) {
-            this.currentReducedChiSquare = 0.0;
-            this.currentDegreesOfFreedom = 1;
-            return;
-        }
-
-        double sumChiSq = 0;
-        for (int i = 0; i < n; i++) {
-            double[] pt = displayData.get(i);
-            double yExp = func.eval(pt[0]);
-            double diff = pt[1] - yExp;
-            double sigma = sigmaForDataPoint(i);
-            sumChiSq += (diff * diff) / (sigma * sigma);
-        }
-
-        this.currentDegreesOfFreedom = dof;
-        this.currentReducedChiSquare = sumChiSq / dof;
+    /** Aktualisiert {@link #currentReducedChiSquare} und {@link #currentDegreesOfFreedom} über
+     *  {@link GoodnessOfFit#calculateReducedChiSquare}, mit je Punkt passendem Sigma aus
+     *  {@link #sigmaForDataPoint}. */
+    private void calculateChiSquare(CurveFitting.FunctionEvaluator func, int parameterCount) {
+        GoodnessOfFit.ChiSquareResult result =
+                GoodnessOfFit.calculateReducedChiSquare(displayData, func, parameterCount, this::sigmaForDataPoint);
+        this.currentReducedChiSquare = result.reducedChiSquare;
+        this.currentDegreesOfFreedom = result.degreesOfFreedom;
     }
 
     /**
@@ -1551,470 +1288,36 @@ public class ChartPanel extends JPanel {
 
     /**
      * Liefert die Standardabweichung an einer beliebigen X-Stelle (nicht notwendigerweise ein
-     * Messpunkt) für das Toleranzband der Fit-Kurve - im lokalen Modus zwischen den beiden
-     * benachbarten Messpunkten linear interpoliert (siehe {@link #interpolateLocalSigma}).
+     * Messpunkt) für das Toleranzband der Fit-Kurve - im lokalen Modus über
+     * {@link GoodnessOfFit#interpolateLocalSigma} zwischen den benachbarten Messpunkten interpoliert.
      */
     private double sigmaForToleranceBand(double x) {
         return switch (sigmaMode) {
             case RESIDUAL_GLOBAL -> cachedGlobalSigma;
-            case RESIDUAL_LOCAL -> interpolateLocalSigma(x);
+            case RESIDUAL_LOCAL -> GoodnessOfFit.interpolateLocalSigma(displayData, cachedLocalSigmas, x, standardDeviation);
             default -> standardDeviation;
         };
     }
 
     /**
-     * Berechnet, falls {@link #sigmaCacheDirty}, die aus den Fit-Residuen abgeleiteten
-     * Sigma-Werte für {@link SigmaMode#RESIDUAL_GLOBAL}/{@link SigmaMode#RESIDUAL_LOCAL} neu.
-     * Für {@link SigmaMode#CONSTANT} sowie ohne gültigen Fit passiert nichts weiter, als dass
-     * die Rückfallebene {@link #standardDeviation} verwendet wird (siehe
-     * {@link #sigmaForDataPoint}/{@link #sigmaForToleranceBand}).
-     *
-     * <p>Grundidee: Ohne bekannte Messunsicherheit lässt sich sigma aus der tatsächlichen
-     * Streuung der Messwerte um den aktuellen Fit schätzen - unter der (für viele Messungen
-     * plausiblen) Annahme gaußverteilten Rauschens ist die empirische Standardabweichung der
-     * Residuen genau dieser Schätzer. Bei {@link SigmaMode#RESIDUAL_GLOBAL} geschieht das einmal
-     * für den gesamten sichtbaren Datensatz; bei {@link SigmaMode#RESIDUAL_LOCAL} lokal je Punkt
-     * aus dessen {@link #localSigmaNeighbors} nächsten Nachbarn (siehe {@link #localWindowStdDev}),
-     * sodass sich Toleranzband und Chi² an ungleichmäßig verteiltes Rauschen entlang der
-     * Messreihe anpassen, statt eine einzige Streuung für den gesamten Datensatz anzunehmen.</p>
+     * Aktualisiert, falls {@link #sigmaCacheDirty}, die aus den Fit-Residuen abgeleiteten
+     * Sigma-Werte über {@link GoodnessOfFit#estimateSigma}. Für {@link GoodnessOfFit.SigmaMode#CONSTANT}
+     * sowie ohne gültigen Fit passiert nichts weiter, als dass die Rückfallebene
+     * {@link #standardDeviation} verwendet wird (siehe {@link #sigmaForDataPoint}/{@link #sigmaForToleranceBand}).
      *
      * @param fit der aktuell zwischengespeicherte Fit, oder {@code null} ohne aktiven Fit
      */
-    private void ensureSigmaComputed(FitResult fit) {
+    private void ensureSigmaComputed(CurveFitting.FitResult fit) {
         if (!sigmaCacheDirty) return;
         sigmaCacheDirty = false;
 
-        int n = displayData.size();
-        if (fit == null || n == 0 || sigmaMode == SigmaMode.CONSTANT) {
-            cachedGlobalSigma = standardDeviation;
-            cachedLocalSigmas = null;
-            return;
-        }
+        CurveFitting.FunctionEvaluator func = (fit != null) ? fit.function : null;
+        int paramCount = (fit != null) ? fit.parameterCount : 0;
+        GoodnessOfFit.SigmaEstimate estimate =
+                GoodnessOfFit.estimateSigma(displayData, func, paramCount, sigmaMode, localSigmaNeighbors, standardDeviation);
 
-        double[] residuals = new double[n];
-        for (int i = 0; i < n; i++) {
-            double[] pt = displayData.get(i);
-            residuals[i] = pt[1] - fit.func.eval(pt[0]);
-        }
-
-        if (sigmaMode == SigmaMode.RESIDUAL_GLOBAL) {
-            int dof = Math.max(1, n - fit.paramCount);
-            double sumSq = 0;
-            for (double r : residuals) sumSq += r * r;
-            cachedGlobalSigma = Math.max(1e-6, Math.sqrt(sumSq / dof));
-            cachedLocalSigmas = null;
-        } else { // RESIDUAL_LOCAL
-            int k = Math.max(1, Math.min(localSigmaNeighbors, n - 1));
-            cachedLocalSigmas = new double[n];
-            for (int i = 0; i < n; i++) {
-                cachedLocalSigmas[i] = Math.max(1e-6, localWindowStdDev(residuals, i, k));
-            }
-        }
-    }
-
-    /**
-     * Mittlere quadratische Residuenstreuung im Index-Fenster um Punkt {@code i} (siehe
-     * {@link #ensureSigmaComputed}). Da {@link #displayData} zeitlich aufsteigend sortiert ist
-     * (bzw. beim Zoomen/Filtern diese Reihenfolge erhält), entsprechen benachbarte Indizes den
-     * in X nächstgelegenen Nachbarn - deutlich günstiger als eine echte Abstandssuche und für
-     * annähernd gleichmäßig abgetastete Messreihen äquivalent dazu.
-     *
-     * @param residuals Residuen aller Punkte (y_i - f(x_i))
-     * @param i         Index des Punkts, für den sigma geschätzt wird
-     * @param k         gewünschte Anzahl einbezogener Nachbarn
-     */
-    private double localWindowStdDev(double[] residuals, int i, int k) {
-        int n = residuals.length;
-        int half = Math.max(1, k / 2);
-        int lo = Math.max(0, i - half);
-        int hi = Math.min(n - 1, i + half);
-        while (hi - lo + 1 < Math.min(k + 1, n)) {
-            if (lo > 0) lo--;
-            else if (hi < n - 1) hi++;
-            else break;
-        }
-
-        double sumSq = 0;
-        int count = 0;
-        for (int j = lo; j <= hi; j++) {
-            sumSq += residuals[j] * residuals[j];
-            count++;
-        }
-        return Math.sqrt(sumSq / count);
-    }
-
-    /**
-     * Lineare Interpolation von {@link #cachedLocalSigmas} zwischen den beiden {@link #displayData}-
-     * Punkten, die {@code x} einschließen - für Stellen zwischen echten Messpunkten (z. B. beim
-     * Zeichnen des Toleranzbands mit seinen 400 Zwischenschritten, siehe
-     * {@link #drawFunctionPathWithTolerance}). Außerhalb des Datenbereichs wird der jeweilige
-     * Randwert fortgeschrieben.
-     */
-    private double interpolateLocalSigma(double x) {
-        if (cachedLocalSigmas == null || displayData.isEmpty()) return standardDeviation;
-        int n = displayData.size();
-        if (n == 1) return cachedLocalSigmas[0];
-
-        if (x <= displayData.get(0)[0]) return cachedLocalSigmas[0];
-        if (x >= displayData.get(n - 1)[0]) return cachedLocalSigmas[n - 1];
-
-        int lo = 0, hi = n - 1;
-        while (hi - lo > 1) {
-            int mid = (lo + hi) / 2;
-            if (displayData.get(mid)[0] <= x) lo = mid; else hi = mid;
-        }
-
-        double x0 = displayData.get(lo)[0], x1 = displayData.get(hi)[0];
-        double s0 = cachedLocalSigmas[lo], s1 = cachedLocalSigmas[hi];
-        if (x1 == x0) return s0;
-        double t = (x - x0) / (x1 - x0);
-        return s0 + t * (s1 - s0);
-    }
-
-    /**
-     * Führt eine polynomiale Ausgleichsrechnung (kleinste Quadrate) über {@link #displayData}
-     * durch. Die X-Werte werden vor dem Aufstellen der Normalgleichungen um ihren Mittelwert
-     * zentriert, was die Kondition des Gleichungssystems deutlich verbessert (insbesondere bei
-     * höheren Polynomgraden).
-     *
-     * @param degree Polynomgrad (1 = linear)
-     * @return das Fit-Ergebnis, oder {@code null} falls das Gleichungssystem singulär ist
-     */
-    private FitResult computePolynomialFit(int degree) {
-        int n = displayData.size();
-        int m = degree + 1;
-
-        double meanX = 0;
-        for (double[] pt : displayData) meanX += pt[0];
-        meanX /= n;
-
-        double[][] A = new double[m][m];
-        double[] B = new double[m];
-
-        for (double[] pt : displayData) {
-            double xCentered = pt[0] - meanX;
-            double y = pt[1];
-
-            double[] xPowers = new double[2 * m];
-            xPowers[0] = 1.0;
-            for (int k = 1; k < 2 * m; k++) xPowers[k] = xPowers[k - 1] * xCentered;
-
-            for (int row = 0; row < m; row++) {
-                for (int col = 0; col < m; col++) A[row][col] += xPowers[row + col];
-                B[row] += y * xPowers[row];
-            }
-        }
-
-        double[] coeffCentered = solveGaussian(A, B);
-        if (coeffCentered == null) return null;
-
-        final double finalMeanX = meanX;
-        FunctionEvaluator func = x -> {
-            double xc = x - finalMeanX;
-            double val = 0;
-            double p = 1.0;
-            for (int i = 0; i < coeffCentered.length; i++) {
-                val += coeffCentered[i] * p;
-                p *= xc;
-            }
-            return val;
-        };
-
-        double[] standardCoeffs = toStandardCoefficients(coeffCentered, meanX);
-        return new FitResult(func, m, buildPolynomialDescription(standardCoeffs));
-    }
-
-    /**
-     * Führt eine exponentielle Ausgleichsrechnung f(x) = a * exp(b*x) durch, indem der Fit im
-     * logarithmierten Raum (ln(y) = ln(a) + b*x) linear gelöst wird. Punkte mit y &lt;= 0 werden
-     * übersprungen, da der Logarithmus dort nicht definiert ist.
-     *
-     * <p>Hinweis: Dies minimiert die Fehlerquadrate im logarithmischen Raum, nicht im
-     * Originalraum - ein Standard-Vorgehen, das große y-Werte gegenüber einem echten
-     * nichtlinearen Fit tendenziell unterschätzt gewichtet. Für die meisten praktischen Zwecke
-     * ausreichend genau.</p>
-     *
-     * @return das Fit-Ergebnis, oder {@code null} bei weniger als 2 positiven Messwerten
-     */
-    private FitResult computeExpFit() {
-        double meanX = 0;
-        int count = 0;
-        for (double[] pt : displayData) {
-            if (pt[1] > 0) {
-                meanX += pt[0];
-                count++;
-            }
-        }
-        if (count < 2) return null;
-        meanX /= count;
-
-        double sumX = 0, sumLnY = 0, sumXLnY = 0, sumX2 = 0;
-
-        for (double[] pt : displayData) {
-            if (pt[1] > 0) {
-                double xc = pt[0] - meanX;
-                double lnY = Math.log(pt[1]);
-                sumX += xc;
-                sumLnY += lnY;
-                sumXLnY += xc * lnY;
-                sumX2 += xc * xc;
-            }
-        }
-
-        double denom = (count * sumX2 - sumX * sumX);
-        if (Math.abs(denom) <= 1e-9) return null;
-
-        double b = (count * sumXLnY - sumX * sumLnY) / denom;
-        double a = Math.exp((sumLnY - b * sumX) / count);
-
-        final double finalMeanX = meanX;
-        FunctionEvaluator func = x -> a * Math.exp(b * (x - finalMeanX));
-
-        double y0 = a * Math.exp(-b * meanX); // Wert bei x=0 - "a" selbst bezieht sich wegen der
-        // Zentrierung auf x=meanX, nicht auf x=0
-        String equation = "f(x) = " + fmt(y0) + " \u00b7 e^(" + fmt(b) + "\u00b7x)";
-        List<String> params = new ArrayList<>();
-        params.add("Wert bei x=0: f(0) = " + fmt(y0) + " " + yUnit);
-        params.add("Wachstumsrate b = " + fmt(b) + " 1/" + xUnit + (b < 0 ? " (Zerfall)" : " (Wachstum)"));
-        if (Math.abs(b) > 1e-12) {
-            double halfOrDoubleTime = Math.log(2) / Math.abs(b);
-            params.add((b < 0 ? "Halbwertszeit" : "Verdopplungszeit") + " = " + fmt(halfOrDoubleTime) + " " + xUnit);
-        }
-
-        return new FitResult(func, 2, new FitDescription(equation, params));
-    }
-
-    /**
-     * Schätzt Startwerte für eine sinusförmige Anpassung (Amplitude aus dem Wertebereich,
-     * Offset aus dem Mittelwert, Kreisfrequenz aus dem Abstand der Nulldurchgänge, Phase aus
-     * dem ersten Datenpunkt) und verfeinert sie anschließend nichtlinear über
-     * {@link #refineSinusFit(List, double, double, double, double)}.
-     *
-     * @return das Fit-Ergebnis (4 Parameter: Amplitude, Kreisfrequenz, Phase, Offset),
-     *         oder {@code null} bei weniger als 4 Datenpunkten
-     */
-    private FitResult computeSinusFit() {
-        if (displayData.size() < 4) return null;
-
-        double minYVal = Double.MAX_VALUE;
-        double maxYVal = -Double.MAX_VALUE;
-        double sumY = 0;
-
-        for (double[] pt : displayData) {
-            sumY += pt[1];
-            if (pt[1] < minYVal) minYVal = pt[1];
-            if (pt[1] > maxYVal) maxYVal = pt[1];
-        }
-        double offset = sumY / displayData.size();
-        double amplitude = (maxYVal - minYVal) / 2.0;
-
-        double minX = Double.MAX_VALUE, maxX = -Double.MAX_VALUE;
-        for (double[] pt : displayData) {
-            if (pt[0] < minX) minX = pt[0];
-            if (pt[0] > maxX) maxX = pt[0];
-        }
-
-        int zeroCrossings = 0;
-        double firstCrossingX = 0, lastCrossingX = 0;
-
-        for (int i = 0; i < displayData.size() - 1; i++) {
-            double y1 = displayData.get(i)[1] - offset;
-            double y2 = displayData.get(i + 1)[1] - offset;
-
-            if (y1 * y2 < 0) {
-                double x1 = displayData.get(i)[0];
-                double x2 = displayData.get(i + 1)[0];
-                double xCross = x1 + (0 - y1) * (x2 - x1) / (y2 - y1);
-
-                if (zeroCrossings == 0) firstCrossingX = xCross;
-                lastCrossingX = xCross;
-                zeroCrossings++;
-            }
-        }
-
-        double omega;
-        if (zeroCrossings >= 2 && lastCrossingX > firstCrossingX) {
-            double halfPeriods = zeroCrossings - 1;
-            double totalDist = lastCrossingX - firstCrossingX;
-            double period = (2.0 * totalDist) / halfPeriods;
-            omega = (2 * Math.PI) / period;
-        } else {
-            omega = (2 * Math.PI) / Math.max(0.001, (maxX - minX));
-        }
-
-        double firstX = displayData.get(0)[0];
-        double firstYNorm = (displayData.get(0)[1] - offset) / (amplitude > 0 ? amplitude : 1.0);
-        firstYNorm = Math.max(-1.0, Math.min(1.0, firstYNorm));
-        double phi = Math.asin(firstYNorm) - omega * firstX;
-
-        double[] params = refineSinusFit(displayData, amplitude, omega, phi, offset);
-        double finalA = params[0];
-        double finalW = params[1];
-        double finalPhi = params[2];
-        double finalC = params[3];
-
-        FunctionEvaluator func = x -> finalA * Math.sin(finalW * x + finalPhi) + finalC;
-
-        String equation = "f(x) = " + fmt(finalA) + " \u00b7 sin(" + fmt(finalW) + "\u00b7x + " + fmt(finalPhi) + ") + " + fmt(finalC);
-        List<String> paramLines = new ArrayList<>();
-        paramLines.add("Amplitude A = " + fmt(Math.abs(finalA)) + " " + yUnit);
-        paramLines.add("Kreisfrequenz \u03c9 = " + fmt(finalW) + " rad/" + xUnit);
-        paramLines.add("Frequenz f = " + fmt(Math.abs(finalW) / (2 * Math.PI)) + " Hz");
-        if (Math.abs(finalW) > 1e-12) {
-            paramLines.add("Periodendauer T = " + fmt(2 * Math.PI / Math.abs(finalW)) + " " + xUnit);
-        }
-        paramLines.add("Phase \u03c6 = " + fmt(finalPhi) + " rad");
-        paramLines.add("Offset (Mittelwert) = " + fmt(finalC) + " " + yUnit);
-
-        return new FitResult(func, 4, new FitDescription(equation, paramLines));
-    }
-
-    /**
-     * Nichtlineare Ausgleichsrechnung für die Sinus-Anpassung mittels gedämpftem Gauss-Newton
-     * (Levenberg-Marquardt-artig): Ein Schritt wird nur übernommen, wenn er die
-     * Fehlerquadratsumme tatsächlich verringert; andernfalls wird der Dämpfungsfaktor lambda
-     * erhöht (kleinerer, vorsichtigerer Schritt), statt bei einem ungünstigen Startwert zu
-     * divergieren.
-     *
-     * @param data Datenpunkte, auf die gefittet wird
-     * @param A    Startwert der Amplitude
-     * @param w    Startwert der Kreisfrequenz
-     * @param phi  Startwert der Phase
-     * @param C    Startwert des Offsets
-     * @return die verfeinerten Parameter {A, w, phi, C}
-     */
-    private double[] refineSinusFit(List<double[]> data, double A, double w, double phi, double C) {
-        double[] p = new double[]{A, w, phi, C};
-        int maxIter = 50;
-        double lambda = 1e-3;
-        double prevCost = sinusCost(data, p);
-
-        for (int iter = 0; iter < maxIter; iter++) {
-            double[][] J = new double[data.size()][4];
-            double[] r = new double[data.size()];
-
-            for (int i = 0; i < data.size(); i++) {
-                double x = data.get(i)[0];
-                double y = data.get(i)[1];
-
-                double arg = p[1] * x + p[2];
-                double sinVal = Math.sin(arg);
-                double cosVal = Math.cos(arg);
-
-                double yModel = p[0] * sinVal + p[3];
-                r[i] = y - yModel;
-
-                J[i][0] = sinVal;
-                J[i][1] = p[0] * x * cosVal;
-                J[i][2] = p[0] * cosVal;
-                J[i][3] = 1.0;
-            }
-
-            double[][] JTJ = new double[4][4];
-            double[] JTr = new double[4];
-
-            for (int i = 0; i < data.size(); i++) {
-                for (int row = 0; row < 4; row++) {
-                    for (int col = 0; col < 4; col++) JTJ[row][col] += J[i][row] * J[i][col];
-                    JTr[row] += J[i][row] * r[i];
-                }
-            }
-
-            double[][] JTJdamped = new double[4][4];
-            for (int row = 0; row < 4; row++) {
-                System.arraycopy(JTJ[row], 0, JTJdamped[row], 0, 4);
-                JTJdamped[row][row] += lambda * JTJ[row][row];
-            }
-
-            double[] dp = solveGaussian(JTJdamped, JTr);
-            if (dp == null) {
-                lambda *= 10;
-                if (lambda > 1e8) break;
-                continue;
-            }
-
-            double[] pTrial = new double[]{p[0] + dp[0], p[1] + dp[1], p[2] + dp[2], p[3] + dp[3]};
-            double trialCost = sinusCost(data, pTrial);
-
-            if (trialCost < prevCost) {
-                boolean converged = Math.abs(dp[0]) < 1e-8 && Math.abs(dp[1]) < 1e-8
-                        && Math.abs(dp[2]) < 1e-8 && Math.abs(dp[3]) < 1e-8;
-                p = pTrial;
-                prevCost = trialCost;
-                lambda = Math.max(lambda / 10.0, 1e-10);
-                if (converged) break;
-            } else {
-                lambda *= 10;
-                if (lambda > 1e8) break;
-            }
-        }
-
-        return p;
-    }
-
-    /**
-     * Berechnet die Fehlerquadratsumme (nicht durch sigma normiert) der Sinus-Anpassung für
-     * einen gegebenen Parametersatz. Wird nur intern in {@link #refineSinusFit} zur
-     * Konvergenzprüfung verwendet.
-     *
-     * @param data Datenpunkte
-     * @param p    Parameter {A, w, phi, C}
-     * @return Summe der quadrierten Residuen
-     */
-    private double sinusCost(List<double[]> data, double[] p) {
-        double sum = 0;
-        for (double[] pt : data) {
-            double yModel = p[0] * Math.sin(p[1] * pt[0] + p[2]) + p[3];
-            double diff = pt[1] - yModel;
-            sum += diff * diff;
-        }
-        return sum;
-    }
-
-    /**
-     * Löst ein lineares Gleichungssystem A*x = B mittels Gauß-Elimination mit Spaltenpivot.
-     *
-     * @param A quadratische Koeffizientenmatrix (wird nicht verändert)
-     * @param B rechte Seite
-     * @return Lösungsvektor x, oder {@code null} wenn A (numerisch) singulär ist
-     */
-    private double[] solveGaussian(double[][] A, double[] B) {
-        int n = B.length;
-        double[][] M = new double[n][n + 1];
-
-        for (int i = 0; i < n; i++) {
-            System.arraycopy(A[i], 0, M[i], 0, n);
-            M[i][n] = B[i];
-        }
-
-        for (int p = 0; p < n; p++) {
-            int max = p;
-            for (int i = p + 1; i < n; i++) {
-                if (Math.abs(M[i][p]) > Math.abs(M[max][p])) max = i;
-            }
-
-            double[] temp = M[p]; M[p] = M[max]; M[max] = temp;
-
-            if (Math.abs(M[p][p]) < 1e-12) return null;
-
-            for (int i = p + 1; i < n; i++) {
-                double alpha = M[i][p] / M[p][p];
-                for (int j = p; j <= n; j++) M[i][j] -= alpha * M[p][j];
-            }
-        }
-
-        double[] x = new double[n];
-        for (int i = n - 1; i >= 0; i--) {
-            double sum = 0.0;
-            for (int j = i + 1; j < n; j++) sum += M[i][j] * x[j];
-            x[i] = (M[i][n] - sum) / M[i][i];
-        }
-        return x;
-    }
-
-    /** Funktionaler Typ für eine angepasste Modellfunktion f(x), unabhängig vom konkreten Fit-Typ. */
-    private interface FunctionEvaluator {
-        double eval(double x);
+        cachedGlobalSigma = estimate.globalSigma;
+        cachedLocalSigmas = estimate.localSigmas;
     }
 
     /**
@@ -2023,21 +1326,8 @@ public class ChartPanel extends JPanel {
      * {@link #sigmaMode} entweder vom konstanten Wert, vom global geschätzten Wert, oder
      * ortsabhängig aus {@link #sigmaForToleranceBand(double)} - im letzten Fall ändert sich
      * die Bandbreite dadurch sichtbar entlang der X-Achse.
-     *
-     * @param g2       Ziel-Grafikkontext
-     * @param func     die zu zeichnende Modellfunktion
-     * @param minX     kleinster darzustellender X-Wert (Datenraum)
-     * @param maxX     größter darzustellender X-Wert (Datenraum)
-     * @param minY     kleinster Y-Wert des sichtbaren Bereichs (Datenraum)
-     * @param rangeX   Breite des sichtbaren X-Bereichs (Datenraum)
-     * @param rangeY   Höhe des sichtbaren Y-Bereichs (Datenraum)
-     * @param padding  Innenabstand des Plots (Pixel)
-     * @param height   Panelhöhe (Pixel)
-     * @param plotWidth  Breite der Plotfläche (Pixel)
-     * @param plotHeight Höhe der Plotfläche (Pixel)
-     * @param color    Farbe der Kurve (das Toleranzband wird in derselben Farbe, aber transparent, gefüllt)
      */
-    private void drawFunctionPathWithTolerance(Graphics2D g2, FunctionEvaluator func, double minX, double maxX, double minY,
+    private void drawFunctionPathWithTolerance(Graphics2D g2, CurveFitting.FunctionEvaluator func, double minX, double maxX, double minY,
                                                double rangeX, double rangeY, int padding, int height, int plotWidth, int plotHeight, Color color) {
         int steps = 400;
         double stepSize = (maxX - minX) / steps;
@@ -2095,9 +1385,6 @@ public class ChartPanel extends JPanel {
      * {@link #dualYAxisMode}), zeigt die Koordinatenbox zusätzlich den Y-Wert auf dieser Achse
      * an derselben Bildschirmhöhe an - die beiden Kurven haben an dieser Stelle ja i. A.
      * unterschiedliche tatsächliche Werte.
-     *
-     * @param g2  Ziel-Grafikkontext
-     * @param geo aktuelle Plot-Geometrie
      */
     private void drawCrosshair(Graphics2D g2, PlotGeometry geo) {
         if (mousePoint == null) return;
@@ -2140,11 +1427,5 @@ public class ChartPanel extends JPanel {
         g2.drawRect(boxX, boxY - 12, strWidth + 8, 16);
         g2.setColor(Theme.TEXT);
         g2.drawString(coordStr, boxX + 4, boxY);
-    }
-
-    /** Einfacher (double-x, double-y)-Bildschirmpunkt, um Rundungsfehler bei kleinen Panels zu vermeiden. */
-    private static class Point2DDouble {
-        double x, y;
-        Point2DDouble(double x, double y) { this.x = x; this.y = y; }
     }
 }

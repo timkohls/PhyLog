@@ -14,7 +14,7 @@ public class StandardDeviationDialog extends JDialog {
 
     private boolean confirmed = false;
     private double standardDeviation;
-    private ChartPanel.SigmaMode sigmaMode;
+    private GoodnessOfFit.SigmaMode sigmaMode;
     private int localSigmaNeighbors;
 
     /**
@@ -22,10 +22,10 @@ public class StandardDeviationDialog extends JDialog {
      *
      * @param parent           Das übergeordnete Fenster.
      * @param currentVal       Aktuell geltender konstanter Wert.
-     * @param currentMode      Aktuell geltender {@link ChartPanel.SigmaMode}.
+     * @param currentMode      Aktuell geltender {@link GoodnessOfFit.SigmaMode}.
      * @param currentNeighbors Aktuelle Anzahl an Nachbarn für den lokalen Modus.
      */
-    public StandardDeviationDialog(JFrame parent, double currentVal, ChartPanel.SigmaMode currentMode, int currentNeighbors) {
+    public StandardDeviationDialog(JFrame parent, double currentVal, GoodnessOfFit.SigmaMode currentMode, int currentNeighbors) {
         super(parent, "Standardabweichung einstellen", true);
         setSize(560, 400);
         setLocationRelativeTo(parent);
@@ -89,7 +89,7 @@ public class StandardDeviationDialog extends JDialog {
         add(formPanel, BorderLayout.CENTER);
 
         // --- Vorbelegung ---
-        sigmaMode = (currentMode != null) ? currentMode : ChartPanel.SigmaMode.CONSTANT;
+        sigmaMode = (currentMode != null) ? currentMode : GoodnessOfFit.SigmaMode.CONSTANT;
         switch (sigmaMode) {
             case RESIDUAL_GLOBAL -> rbAutoGlobal.setSelected(true);
             case RESIDUAL_LOCAL -> rbAutoLocal.setSelected(true);
@@ -152,9 +152,9 @@ public class StandardDeviationDialog extends JDialog {
 
         standardDeviation = val;
         localSigmaNeighbors = (int) spNeighbors.getValue();
-        sigmaMode = rbAutoGlobal.isSelected() ? ChartPanel.SigmaMode.RESIDUAL_GLOBAL
-                : rbAutoLocal.isSelected() ? ChartPanel.SigmaMode.RESIDUAL_LOCAL
-                : ChartPanel.SigmaMode.CONSTANT;
+        sigmaMode = rbAutoGlobal.isSelected() ? GoodnessOfFit.SigmaMode.RESIDUAL_GLOBAL
+                : rbAutoLocal.isSelected() ? GoodnessOfFit.SigmaMode.RESIDUAL_LOCAL
+                : GoodnessOfFit.SigmaMode.CONSTANT;
 
         confirmed = true;
         dispose();
@@ -181,9 +181,9 @@ public class StandardDeviationDialog extends JDialog {
     /**
      * Gibt den gewählten Sigma-Berechnungsmodus zurück.
      *
-     * @return Der {@link ChartPanel.SigmaMode}.
+     * @return Der {@link GoodnessOfFit.SigmaMode}.
      */
-    public ChartPanel.SigmaMode getSigmaMode() {
+    public GoodnessOfFit.SigmaMode getSigmaMode() {
         return sigmaMode;
     }
 

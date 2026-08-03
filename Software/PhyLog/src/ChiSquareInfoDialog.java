@@ -9,10 +9,11 @@ import java.util.List;
  */
 public class ChiSquareInfoDialog extends JDialog {
 
-    private static final Color CARD_BG = new Color(45, 45, 45);
-    private static final Color MUTED_TEXT = new Color(160, 160, 160);
     private static final int CARD_ARC = 12;
     private static final int CONTENT_WIDTH = 420;
+    /** Obere Grenze der animierten Farbskala (siehe {@link #buildScaleBar}); Werte darüber
+     *  werden auf diesen Wert begrenzt dargestellt. */
+    private static final double BAR_REFERENCE_SCALE = 4.0;
 
     /**
      * Erstellt den Dialog mit Standard-Fehlermodus.
@@ -23,8 +24,8 @@ public class ChiSquareInfoDialog extends JDialog {
      * @param fitDescription     Beschreibung der gefitteten Funktion.
      */
     public ChiSquareInfoDialog(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom,
-                               ChartPanel.FitDescription fitDescription) {
-        this(ownerWindow, reducedChiSquare, degreesOfFreedom, fitDescription, ChartPanel.SigmaMode.CONSTANT);
+                               CurveFitting.FitDescription fitDescription) {
+        this(ownerWindow, reducedChiSquare, degreesOfFreedom, fitDescription, GoodnessOfFit.SigmaMode.CONSTANT);
     }
 
     /**
@@ -37,7 +38,7 @@ public class ChiSquareInfoDialog extends JDialog {
      * @param sigmaMode          Aktuell gewählter Modus für Fehlergrenzen.
      */
     public ChiSquareInfoDialog(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom,
-                               ChartPanel.FitDescription fitDescription, ChartPanel.SigmaMode sigmaMode) {
+                               CurveFitting.FitDescription fitDescription, GoodnessOfFit.SigmaMode sigmaMode) {
         super(ownerWindow, "Anpassungsgüte (\u03C7\u00B2_red)", ModalityType.APPLICATION_MODAL);
         initUI(ownerWindow, reducedChiSquare, degreesOfFreedom, fitDescription, sigmaMode);
     }
@@ -46,7 +47,7 @@ public class ChiSquareInfoDialog extends JDialog {
      * Initialisiert die Benutzeroberfläche und baut das Karten-Layout auf.
      */
     private void initUI(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom,
-                        ChartPanel.FitDescription fitDescription, ChartPanel.SigmaMode sigmaMode) {
+                        CurveFitting.FitDescription fitDescription, GoodnessOfFit.SigmaMode sigmaMode) {
         setLayout(new BorderLayout());
         setResizable(false);
 
@@ -55,8 +56,8 @@ public class ChiSquareInfoDialog extends JDialog {
         mainPanel.setBorder(BorderFactory.createEmptyBorder(20, 24, 20, 24));
         mainPanel.setBackground(Theme.BG);
 
-        ChartPanel.ChiRating rating = ChartPanel.rateChiSquare(reducedChiSquare);
-        Color ratingColor = ChartPanel.getChiSquareColor(reducedChiSquare);
+        GoodnessOfFit.ChiRating rating = GoodnessOfFit.rate(reducedChiSquare);
+        Color ratingColor = GoodnessOfFit.colorFor(reducedChiSquare);
         String ratingText = ratingText(rating);
 
         mainPanel.add(buildHeader());
@@ -73,7 +74,7 @@ public class ChiSquareInfoDialog extends JDialog {
             mainPanel.add(buildTipCard(tipText, ratingColor));
         }
 
-        if (sigmaMode == ChartPanel.SigmaMode.RESIDUAL_GLOBAL) {
+        if (sigmaMode == GoodnessOfFit.SigmaMode.RESIDUAL_GLOBAL) {
             mainPanel.add(Box.createVerticalStrut(14));
             mainPanel.add(buildTipCard(
                     "Sigma wird hier automatisch aus der Streuung aller Punkte um den Fit geschätzt - "
@@ -105,7 +106,7 @@ public class ChiSquareInfoDialog extends JDialog {
     /**
      * Wandelt eine Chi-Bewertung in lesbaren Text um.
      */
-    private String ratingText(ChartPanel.ChiRating rating) {
+    private String ratingText(GoodnessOfFit.ChiRating rating) {
         return switch (rating) {
             case OVERFIT -> "Zu niedrig (Überanpassung)";
             case GOOD -> "Sehr gut";
@@ -117,7 +118,7 @@ public class ChiSquareInfoDialog extends JDialog {
     /**
      * Erzeugt Hinweistexte zur Verbesserung der Modellgüte basierend auf der Bewertung.
      */
-    private String tipText(ChartPanel.ChiRating rating) {
+    private String tipText(GoodnessOfFit.ChiRating rating) {
         return switch (rating) {
             case OVERFIT -> "Die Fehlerbalken sind möglicherweise überschätzt, oder das Modell passt sich an das Rauschen an.";
             case MODERATE -> "Prüfe, ob der Funktionstyp zum Datenverlauf passt.<br>Bei einem zu hohen Polynomgrad droht Überanpassung.<br>Zoome näher an den relevanten Bereich heran.";
@@ -142,7 +143,7 @@ public class ChiSquareInfoDialog extends JDialog {
 
         JLabel subtitle = new JLabel("Bewertet über das reduzierte Chi\u00B2 unter Berücksichtigung der Freiheitsgrade");
         subtitle.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        subtitle.setForeground(MUTED_TEXT);
+        subtitle.setForeground(Theme.MUTED);
         subtitle.setAlignmentX(Component.CENTER_ALIGNMENT);
 
         header.add(title);
@@ -171,13 +172,13 @@ public class ChiSquareInfoDialog extends JDialog {
      * Baut eine einzelne Kennzahl-Karte mit Beschriftung und Wert auf.
      */
     private JPanel buildStatCard(String caption, String value, Color valueColor) {
-        RoundedPanel card = new RoundedPanel(CARD_BG, CARD_ARC);
+        RoundedPanel card = new RoundedPanel(Theme.CARD, CARD_ARC);
         card.setLayout(new BorderLayout(0, 4));
         card.setBorder(BorderFactory.createEmptyBorder(8, 6, 8, 6));
 
         JLabel captionLabel = new JLabel(caption, SwingConstants.CENTER);
         captionLabel.setFont(new Font("SansSerif", Font.PLAIN, 9));
-        captionLabel.setForeground(MUTED_TEXT);
+        captionLabel.setForeground(Theme.MUTED);
 
         JLabel valueLabel = new JLabel("<html><div style='text-align:center;width:110px;'>" + value + "</div></html>");
         valueLabel.setFont(new Font("SansSerif", Font.BOLD, 13));
@@ -194,7 +195,7 @@ public class ChiSquareInfoDialog extends JDialog {
      * Baut die Karte zur Darstellung der mathematischen Formel auf.
      */
     private JPanel buildFormulaCard() {
-        RoundedPanel card = new RoundedPanel(CARD_BG, CARD_ARC);
+        RoundedPanel card = new RoundedPanel(Theme.CARD, CARD_ARC);
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
         card.setBorder(BorderFactory.createEmptyBorder(10, 14, 10, 14));
         card.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -210,8 +211,6 @@ public class ChiSquareInfoDialog extends JDialog {
         card.add(formula);
         return card;
     }
-
-    private static final double BAR_REFERENCE_SCALE = 4.0;
 
     /**
      * Erstellt die animierte Farbskala mit Marker zur visuellen Einordnung.
@@ -231,9 +230,9 @@ public class ChiSquareInfoDialog extends JDialog {
                 int barHeight = 14;
                 int barY = 4;
 
-                g2.setPaint(new GradientPaint(0, 0, new Color(241, 196, 15), w * 0.35f, 0, new Color(46, 204, 113)));
+                g2.setPaint(new GradientPaint(0, 0, Theme.WARNING, w * 0.35f, 0, Theme.SUCCESS));
                 g2.fillRoundRect(0, barY, (int) (w * 0.5f), barHeight, 6, 6);
-                g2.setPaint(new GradientPaint(w * 0.35f, 0, new Color(46, 204, 113), w, 0, new Color(231, 76, 60)));
+                g2.setPaint(new GradientPaint(w * 0.35f, 0, Theme.SUCCESS, w, 0, Theme.DANGER));
                 g2.fillRoundRect((int) (w * 0.35f) - 2, barY, w - (int) (w * 0.35f) + 2, barHeight, 6, 6);
 
                 double normalized = Math.min(markerValue[0], BAR_REFERENCE_SCALE) / BAR_REFERENCE_SCALE;
@@ -242,12 +241,12 @@ public class ChiSquareInfoDialog extends JDialog {
                 g2.fillRoundRect(markerX, barY - 3, 6, barHeight + 6, 2, 2);
 
                 g2.setFont(new Font("SansSerif", Font.PLAIN, 9));
-                g2.setColor(MUTED_TEXT);
+                g2.setColor(Theme.MUTED);
                 int labelY = barY + barHeight + 13;
                 drawCenteredTick(g2, 0, "0", w, labelY);
-                drawCenteredTick(g2, (int) Math.round(ChartPanel.CHI_OVERFIT_THRESHOLD / BAR_REFERENCE_SCALE * w), "0.8", w, labelY);
-                drawCenteredTick(g2, (int) Math.round(ChartPanel.CHI_GOOD_THRESHOLD / BAR_REFERENCE_SCALE * w), "1.5", w, labelY);
-                drawCenteredTick(g2, (int) Math.round(ChartPanel.CHI_MODERATE_THRESHOLD / BAR_REFERENCE_SCALE * w), "3.0", w, labelY);
+                drawCenteredTick(g2, (int) Math.round(GoodnessOfFit.CHI_OVERFIT_THRESHOLD / BAR_REFERENCE_SCALE * w), "0.8", w, labelY);
+                drawCenteredTick(g2, (int) Math.round(GoodnessOfFit.CHI_GOOD_THRESHOLD / BAR_REFERENCE_SCALE * w), "1.5", w, labelY);
+                drawCenteredTick(g2, (int) Math.round(GoodnessOfFit.CHI_MODERATE_THRESHOLD / BAR_REFERENCE_SCALE * w), "3.0", w, labelY);
             }
         };
         panel.setOpaque(false);
@@ -336,7 +335,7 @@ public class ChiSquareInfoDialog extends JDialog {
         accentStripe.setBackground(accentColor);
         accentStripe.setPreferredSize(new Dimension(4, 10));
 
-        RoundedPanel card = new RoundedPanel(CARD_BG, CARD_ARC);
+        RoundedPanel card = new RoundedPanel(Theme.CARD, CARD_ARC);
         card.setLayout(new BorderLayout());
         card.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
 
@@ -353,8 +352,8 @@ public class ChiSquareInfoDialog extends JDialog {
     /**
      * Baut den Detailbereich für die gefittete Funktion auf.
      */
-    private JPanel buildFitDescriptionPanel(ChartPanel.FitDescription fitDescription) {
-        RoundedPanel panel = new RoundedPanel(CARD_BG, CARD_ARC);
+    private JPanel buildFitDescriptionPanel(CurveFitting.FitDescription fitDescription) {
+        RoundedPanel panel = new RoundedPanel(Theme.CARD, CARD_ARC);
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setBorder(BorderFactory.createEmptyBorder(10, 14, 10, 14));
         panel.setAlignmentX(Component.CENTER_ALIGNMENT);
