@@ -8,7 +8,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Zeichnet ein Zeit/Messwert-Diagramm mit Zoom, Freihand-Auswahl und Fadenkreuz, und legt bei
+ * Zeichnet ein X/Y-Diagramm (i. d. R. Zeit/Messwert, siehe {@link #setXAxisTitle} für Ausnahmen
+ * wie das Frequenzspektrum) mit Zoom, Freihand-Auswahl und Fadenkreuz, und legt bei
  * Bedarf eine Fit-Kurve samt Chi²-Gütebewertung darüber. Die eigentliche Ausgleichsrechnung
  * übernimmt {@link CurveFitting}, die Bewertung über das reduzierte Chi-Quadrat und die
  * Sigma-Schätzung {@link GoodnessOfFit} - diese Klasse fügt beides nur noch zur Anzeige
@@ -135,6 +136,10 @@ public class ChartPanel extends JPanel {
     private List<Series> extraSeries = new ArrayList<>();
 
     private String xUnit = "s";
+    /** Titelwort vor der Einheit auf der X-Achse (z. B. "Zeit" oder "Frequenz", siehe
+     *  {@link #setXAxisTitle}) - getrennt von {@link #xUnit}, damit Achsentitel und Einheit
+     *  unabhängig voneinander gesetzt werden können (z. B. für die Frequenzspektrum-Anzeige). */
+    private String xAxisTitle = "Zeit";
     private String yUnit = "Messwert";
     /** Bezeichnung der Hauptmessgröße (Kanal A) für die Legende - unabhängig vom Achsentitel,
      *  damit dieser bei zwei Kanälen generisch bleiben kann (siehe {@link #setUnits}). */
@@ -177,23 +182,24 @@ public class ChartPanel extends JPanel {
     private int currentDegreesOfFreedom = 1;
 
     /** Angenommene (konstante) Standardabweichung der Messwerte, geht als sigma in Chi^2 ein.
-     *  Dient außerdem als Rückfallebene für {@link GoodnessOfFit.SigmaMode#RESIDUAL_GLOBAL}/
-     *  {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL}, solange kein Fit aktiv ist. */
+     *  Dient außerdem als Rückfallebene für die automatischen Modi, solange kein Fit aktiv ist. */
     private double standardDeviation = 1.0;
 
     /** Wie sigma bestimmt wird (siehe {@link GoodnessOfFit.SigmaMode}). */
     private GoodnessOfFit.SigmaMode sigmaMode = GoodnessOfFit.SigmaMode.CONSTANT;
-    /** Anzahl der je Punkt einbezogenen Nachbarn für {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL}. */
+    /** Nachbarschaftsgröße k für die automatischen Modi (siehe {@link GoodnessOfFit.SigmaMode}). */
     private int localSigmaNeighbors = 8;
     /** {@code true}, wenn die aus Residuen abgeleiteten Sigma-Werte neu berechnet werden müssen
      *  (siehe {@link #ensureSigmaComputed}) - analog zu {@link #fitDirty}, aber unabhängig davon
      *  auch bei einem reinen Moduswechsel gesetzt. */
     private boolean sigmaCacheDirty = true;
-    /** Zwischengespeicherter globaler Sigma-Wert für {@link GoodnessOfFit.SigmaMode#RESIDUAL_GLOBAL}. */
-    private double cachedGlobalSigma = standardDeviation;
     /** Zwischengespeicherte, je Punkt in {@link #displayData} passende Sigma-Werte für
      *  {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL}, {@code null} in den anderen Modi. */
     private double[] cachedLocalSigmas = null;
+    /** Zwischengespeicherte Residuen samt Bandbreite für {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL_GAUSSIAN},
+     *  {@code null} in den anderen Modi (siehe {@link GoodnessOfFit#gaussianWeightedSigma}). */
+    private double[] cachedGaussianResiduals = null;
+    private double cachedGaussianBandwidth = 0;
 
     // --- Fit-Cache ---
     // Die komplette Regression (inkl. der iterativen Sinus-Anpassung) ist teuer und muss nicht
@@ -350,6 +356,13 @@ public class ChartPanel extends JPanel {
     public void setUnits(String xUnit, String yLabel) {
         this.xUnit = (xUnit != null) ? xUnit : "s";
         this.yUnit = (yLabel != null && !yLabel.isBlank()) ? yLabel.trim() : "Messwert";
+        repaint();
+    }
+
+    /** Setzt das Titelwort vor der X-Achsen-Einheit (Standard: "Zeit"), z. B. "Frequenz" für die
+     *  Frequenzspektrum-Anzeige (siehe {@link #setUnits}, das nur die Einheit selbst setzt). */
+    public void setXAxisTitle(String title) {
+        this.xAxisTitle = (title != null && !title.isBlank()) ? title.trim() : "Zeit";
         repaint();
     }
 
@@ -1001,7 +1014,7 @@ public class ChartPanel extends JPanel {
 
         g2.setColor(Theme.TEXT);
         g2.setFont(new Font("SansSerif", Font.BOLD, 11));
-        g2.drawString("Zeit (" + xUnit + ")", padding + plotWidth / 2 - 30, height - padding + 35);
+        g2.drawString(xAxisTitle + " (" + xUnit + ")", padding + plotWidth / 2 - 30, height - padding + 35);
 
         g2.setColor(primaryAxisColor);
         g2.drawString(yUnit, padding - 50, padding - 15);
@@ -1198,14 +1211,7 @@ public class ChartPanel extends JPanel {
      *             (siehe {@link #paintComponent}), sonst direkt oben in der Ecke
      */
     private void drawChiSquareOverlay(Graphics2D g2, int width, int rightPadding, int topY) {
-        // Bei SigmaMode.RESIDUAL_GLOBAL liegt sigma per Konstruktion so, dass chi²_red hier
-        // rechnerisch (fast) immer exakt 1 ergibt (siehe Javadoc von GoodnessOfFit) - das
-        // ist kein Fehler, sondern lässt sich ohne den Hinweis leicht als "kaputte Anzeige"
-        // missverstehen. Der Klick auf das "i"-Symbol erklärt es zusätzlich ausführlich.
         String chiText = String.format("χ²_red = %.4f", currentReducedChiSquare);
-        if (sigmaMode == GoodnessOfFit.SigmaMode.RESIDUAL_GLOBAL) {
-            chiText += "  (per Definition \u2248 1)";
-        }
         g2.setFont(new Font("SansSerif", Font.BOLD, 12));
         FontMetrics fm = g2.getFontMetrics();
 
@@ -1279,22 +1285,27 @@ public class ChartPanel extends JPanel {
      */
     private double sigmaForDataPoint(int i) {
         return switch (sigmaMode) {
-            case RESIDUAL_GLOBAL -> cachedGlobalSigma;
             case RESIDUAL_LOCAL -> (cachedLocalSigmas != null && i < cachedLocalSigmas.length)
                     ? cachedLocalSigmas[i] : standardDeviation;
+            case RESIDUAL_LOCAL_GAUSSIAN -> (cachedGaussianResiduals != null)
+                    ? GoodnessOfFit.gaussianWeightedSigma(displayData, cachedGaussianResiduals, cachedGaussianBandwidth, displayData.get(i)[0])
+                    : standardDeviation;
             default -> standardDeviation;
         };
     }
 
     /**
      * Liefert die Standardabweichung an einer beliebigen X-Stelle (nicht notwendigerweise ein
-     * Messpunkt) für das Toleranzband der Fit-Kurve - im lokalen Modus über
-     * {@link GoodnessOfFit#interpolateLocalSigma} zwischen den benachbarten Messpunkten interpoliert.
+     * Messpunkt) für das Toleranzband der Fit-Kurve - im Fenster-Modus über
+     * {@link GoodnessOfFit#interpolateLocalSigma} zwischen den benachbarten Messpunkten
+     * interpoliert, im Gauß-Modus direkt an der Stelle ausgewertet (keine Interpolation nötig).
      */
     private double sigmaForToleranceBand(double x) {
         return switch (sigmaMode) {
-            case RESIDUAL_GLOBAL -> cachedGlobalSigma;
             case RESIDUAL_LOCAL -> GoodnessOfFit.interpolateLocalSigma(displayData, cachedLocalSigmas, x, standardDeviation);
+            case RESIDUAL_LOCAL_GAUSSIAN -> (cachedGaussianResiduals != null)
+                    ? GoodnessOfFit.gaussianWeightedSigma(displayData, cachedGaussianResiduals, cachedGaussianBandwidth, x)
+                    : standardDeviation;
             default -> standardDeviation;
         };
     }
@@ -1316,8 +1327,9 @@ public class ChartPanel extends JPanel {
         GoodnessOfFit.SigmaEstimate estimate =
                 GoodnessOfFit.estimateSigma(displayData, func, paramCount, sigmaMode, localSigmaNeighbors, standardDeviation);
 
-        cachedGlobalSigma = estimate.globalSigma;
         cachedLocalSigmas = estimate.localSigmas;
+        cachedGaussianResiduals = estimate.residuals;
+        cachedGaussianBandwidth = estimate.gaussianBandwidth;
     }
 
     /**

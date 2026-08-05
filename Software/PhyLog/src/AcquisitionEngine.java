@@ -20,6 +20,10 @@ public class AcquisitionEngine {
 
         /** Die konfigurierte maximale Messdauer wurde erreicht, die Aufzeichnung wurde gestoppt. */
         void onDurationLimitReached();
+
+        /** Ein neues Frequenzspektrum für einen Spektrum-Sensor (siehe {@link Sensor#producesSpectrum()})
+         *  ist eingetroffen (siehe {@link #onLineReceived}). */
+        void onSpectrumFrame(char channelId, double[] magnitudesDb, int sampleRateHz);
     }
 
     private final MeasurementChannel channelA;
@@ -109,13 +113,18 @@ public class AcquisitionEngine {
         DeviceConnection.getInstance().sendLine("STOP");
     }
 
-    /** Verarbeitet eine vom Gerät empfangene Zeile; ignoriert alles außer Datenzeilen
-     *  ("D,millis,Kanal,Slot,Rohwert"). */
+    /** Verarbeitet eine vom Gerät empfangene Zeile: Datenzeilen ("D,millis,Kanal,Slot,Rohwert")
+     *  für normale Sensoren, {@code #SPEC}-Pakete für Spektrum-Sensoren (siehe
+     *  {@link Sensor#producesSpectrum()}); alles andere wird ignoriert. */
     public void onLineReceived(String line) {
-        if (!line.startsWith("D,")) {
-            return;
+        if (line.startsWith("D,")) {
+            onDataLine(line);
+        } else if (line.startsWith("#SPEC,")) {
+            onSpectrumLine(line);
         }
+    }
 
+    private void onDataLine(String line) {
         String[] parts = line.split(",");
         if (parts.length < 5) return;
 
@@ -128,6 +137,30 @@ public class AcquisitionEngine {
             if (channelId == 'A' || channelId == 'B') {
                 ingestSample(channel(channelId), slot, rawValue, millis);
             }
+        } catch (NumberFormatException ignored) {
+        }
+    }
+
+    /** Parst ein Spektrum-Paket {@code #SPEC,<Kanal>,<Bins>,<Abtastrate>,<mag_0>,<mag_1>,...}
+     *  (siehe {@code captureAndSendSpectrum} in phylog_firmware.ino) und reicht es an
+     *  {@link Listener#onSpectrumFrame} weiter. Magnituden kommen als dBFS·10 (int) an, um
+     *  Bandbreite zu sparen - hier wieder auf dB zurückgerechnet. */
+    private void onSpectrumLine(String line) {
+        String[] parts = line.split(",");
+        if (parts.length < 4) return;
+
+        try {
+            char channelId = parts[1].charAt(0);
+            int bins = Integer.parseInt(parts[2]);
+            int sampleRateHz = Integer.parseInt(parts[3]);
+            if (parts.length < 4 + bins) return;
+
+            double[] magnitudesDb = new double[bins];
+            for (int i = 0; i < bins; i++) {
+                magnitudesDb[i] = Integer.parseInt(parts[4 + i]) / 10.0;
+            }
+
+            listener.onSpectrumFrame(channelId, magnitudesDb, sampleRateHz);
         } catch (NumberFormatException ignored) {
         }
     }

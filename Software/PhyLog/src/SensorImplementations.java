@@ -179,6 +179,41 @@ class HX711Sensor extends Sensor {
 }
 
 /**
+ * INMP441-Mikrofon als Frequenzspektrum statt einzelnem dB-Wert (siehe {@link MicrophoneSensor}
+ * für die klassische Variante). Liefert selbst keine Zeitreihen-Messwerte - {@code decode} wird
+ * nie aufgerufen, da die Firmware für diesen Sensortyp ausschließlich {@code #SPEC}-Pakete
+ * schickt (siehe {@link AcquisitionEngine}), keine regulären Datenpakete.
+ */
+class MicrophoneSpectrumSensor extends Sensor {
+    /**
+     * Erstellt einen INMP441-Sensor im Spektrum-Modus.
+     */
+    public MicrophoneSpectrumSensor() {
+        super("INMP441 (Mikrofon, Frequenzspektrum)", "dB", List.of("DB"));
+    }
+
+    @Override
+    public double decode(int slot, long rawValue) {
+        return 0.0; // ungenutzt, siehe Klassenkommentar
+    }
+
+    @Override
+    public List<Quantity> getQuantities() {
+        return List.of(new Quantity("Frequenzspektrum", "dB", 0));
+    }
+
+    @Override
+    public String getFirmwareTypeName() {
+        return "MICSPEC";
+    }
+
+    @Override
+    public boolean producesSpectrum() {
+        return true;
+    }
+}
+
+/**
  * INMP441 I2S-Mikrofon zur Schätzung des Schalldruckpegels in dB.
  */
 class MicrophoneSensor extends Sensor {

@@ -37,4 +37,9 @@ public class MeasurementChannel {
     public boolean hasSensor() {
         return sensor != null && sensor != SensorRegistry.NO_SENSOR;
     }
+
+    /** @return ob der aktuelle Sensor ein Frequenzspektrum statt Zeitreihen-Messwerte liefert. */
+    public boolean producesSpectrum() {
+        return hasSensor() && sensor.producesSpectrum();
+    }
 }

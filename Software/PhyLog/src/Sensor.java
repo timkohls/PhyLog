@@ -70,6 +70,18 @@ public abstract class Sensor {
     public abstract List<Quantity> getQuantities();
 
     /**
+     * Liefert dieser Sensor statt einzelner Zeitreihen-Messwerte ein laufend aktualisiertes
+     * Frequenzspektrum (siehe {@link AcquisitionEngine.Listener#onSpectrumFrame})? Bestimmt in
+     * {@link GUI}, ob ein Kanal über die normale Tabelle/Zeitachse oder über die
+     * Frequenz-/Magnitude-Darstellung im {@link ChartPanel} angezeigt wird.
+     *
+     * @return {@code true} für Spektrum-Sensoren (Standard: {@code false})
+     */
+    public boolean producesSpectrum() {
+        return false;
+    }
+
+    /**
      * Liefert die anpassbaren Kalibrierparameter (Standard: leere Liste).
      *
      * @return Liste der {@link CalibrationParameter}.

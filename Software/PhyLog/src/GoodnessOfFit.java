@@ -42,12 +42,17 @@ public final class GoodnessOfFit {
     public enum SigmaMode {
         /** Ein einziger, manuell eingegebener Wert für alle Punkte (bisheriges Verhalten). */
         CONSTANT,
-        /** Ein einziger Wert, aus der Streuung aller Punkte um den aktuellen Fit geschätzt
-         *  (empirische Standardabweichung der Residuen unter Annahme gaußverteilten Rauschens). */
-        RESIDUAL_GLOBAL,
-        /** Ortsabhängiger Wert je Punkt, aus der Streuung der nächsten Nachbarn um den Fit
-         *  geschätzt - passt sich ungleichmäßig verteiltem Rauschen entlang der Messreihe an. */
-        RESIDUAL_LOCAL
+        /** Ortsabhängiger Wert je Punkt, aus der Streuung der k nächsten Nachbarn (hartes Fenster,
+         *  Indexabstand) um den Fit geschätzt - passt sich ungleichmäßig verteiltem Rauschen
+         *  entlang der Messreihe an, springt an den Fenstergrenzen aber sprunghaft statt sanft. */
+        RESIDUAL_LOCAL,
+        /** Wie {@link #RESIDUAL_LOCAL}, aber statt eines harten Fensters mit fließendem
+         *  Gauß-Kernel über den tatsächlichen X-Abstand gewichtet - jeder Punkt trägt zu jedem
+         *  sigma(x) bei, mit abnehmendem Gewicht je weiter er von x entfernt liegt. Dadurch
+         *  verläuft sigma(x) glatt statt stufig, und ist (anders als {@link #RESIDUAL_LOCAL})
+         *  auch bei ungleichmäßig verteilten Messpunkten sauber definiert, da nach X-Abstand statt
+         *  nach Index gewichtet wird (siehe {@link #gaussianWeightedSigma}). */
+        RESIDUAL_LOCAL_GAUSSIAN
     }
 
     /** Ergebnis von {@link #calculateReducedChiSquare}. */
@@ -61,15 +66,22 @@ public final class GoodnessOfFit {
         }
     }
 
-    /** Ergebnis von {@link #estimateSigma}: globaler Wert sowie (nur im lokalen Modus) ein
-     *  Sigma-Wert je Datenpunkt. */
+    /**
+     * Ergebnis von {@link #estimateSigma}. Je nach {@link SigmaMode} ist nur eines der beiden
+     * Felder belegt (das jeweils andere {@code null}) - {@link #localSigmas} für
+     * {@link SigmaMode#RESIDUAL_LOCAL}, {@link #residuals} (zusammen mit {@link #gaussianBandwidth})
+     * für {@link SigmaMode#RESIDUAL_LOCAL_GAUSSIAN}. Für {@link SigmaMode#CONSTANT} sind beide
+     * {@code null} - dort wird direkt der konstante Wert verwendet, ohne diese Klasse.
+     */
     public static final class SigmaEstimate {
-        public final double globalSigma;
         public final double[] localSigmas;
+        public final double[] residuals;
+        public final double gaussianBandwidth;
 
-        SigmaEstimate(double globalSigma, double[] localSigmas) {
-            this.globalSigma = globalSigma;
+        SigmaEstimate(double[] localSigmas, double[] residuals, double gaussianBandwidth) {
             this.localSigmas = localSigmas;
+            this.residuals = residuals;
+            this.gaussianBandwidth = gaussianBandwidth;
         }
     }
 
@@ -101,13 +113,6 @@ public final class GoodnessOfFit {
      * Berechnet das reduzierte Chi-Quadrat für eine gegebene Fit-Funktion:
      * chi²_red = (1 / DOF) * Summe((y_i - f(x_i))² / sigma_i²), DOF = n - Parameteranzahl.
      *
-     * <p>Hinweis: Bei {@link SigmaMode#RESIDUAL_GLOBAL} liegt chi²_red durch die Art der
-     * Schätzung (sigma wird ja gerade so gewählt, dass die Residuen im Mittel genau sigma
-     * entsprechen) rechnerisch immer nahe 1 - dort dient die Anzeige eher der Kontrolle, dass
-     * die Schätzung funktioniert hat, als einer echten Gütebewertung. Bei
-     * {@link SigmaMode#RESIDUAL_LOCAL} bleibt chi²_red dagegen aussagekräftig, da sigma_i aus
-     * den Nachbarn, nicht aus dem Punkt selbst geschätzt wird.</p>
-     *
      * @param data           die Datenpunkte, auf denen der Fit beruht
      * @param func           die angepasste Funktion
      * @param parameterCount Anzahl der freien Parameter des Modells (für die Freiheitsgrade)
@@ -137,24 +142,23 @@ public final class GoodnessOfFit {
      * Schätzt sigma aus den Fit-Residuen, sofern {@code mode} dies verlangt. Grundidee: Ohne
      * bekannte Messunsicherheit lässt sich sigma aus der tatsächlichen Streuung der Messwerte um
      * den aktuellen Fit schätzen - unter der (für viele Messungen plausiblen) Annahme
-     * gaußverteilten Rauschens ist die empirische Standardabweichung der Residuen genau dieser
-     * Schätzer. Bei {@link SigmaMode#RESIDUAL_GLOBAL} geschieht das einmal für den gesamten
-     * Datensatz; bei {@link SigmaMode#RESIDUAL_LOCAL} lokal je Punkt aus dessen nächsten
-     * Nachbarn (siehe {@link #localWindowStdDev}).
+     * gaußverteilten Rauschens ist die (lokal gewichtete) empirische Standardabweichung der
+     * Residuen genau dieser Schätzer.
      *
      * @param data              die Datenpunkte, auf denen der Fit beruht
      * @param func              die angepasste Funktion, oder {@code null} ohne aktiven Fit
-     * @param parameterCount    Anzahl der freien Parameter (für die Freiheitsgrade)
+     * @param parameterCount    Anzahl der freien Parameter (aktuell ungenutzt, für zukünftige Modi vorgehalten)
      * @param mode              der gewünschte Sigma-Modus
-     * @param localNeighbors    Anzahl der je Punkt einbezogenen Nachbarn ({@link SigmaMode#RESIDUAL_LOCAL})
-     * @param fallbackConstant  Rückfallwert für {@link SigmaMode#CONSTANT} bzw. ohne Fit
+     * @param localNeighbors    Nachbarschaftsgröße k ({@link SigmaMode#RESIDUAL_LOCAL}: Fenstergröße;
+     *                          {@link SigmaMode#RESIDUAL_LOCAL_GAUSSIAN}: Bandbreite, siehe {@link #gaussianBandwidthFor})
+     * @param fallbackConstant  Rückfallwert ohne Fit bzw. bei zu wenig Daten
      */
     public static SigmaEstimate estimateSigma(List<double[]> data, CurveFitting.FunctionEvaluator func,
                                                int parameterCount, SigmaMode mode, int localNeighbors,
                                                double fallbackConstant) {
         int n = data.size();
         if (func == null || n == 0 || mode == SigmaMode.CONSTANT) {
-            return new SigmaEstimate(fallbackConstant, null);
+            return new SigmaEstimate(null, null, 0);
         }
 
         double[] residuals = new double[n];
@@ -163,20 +167,18 @@ public final class GoodnessOfFit {
             residuals[i] = pt[1] - func.eval(pt[0]);
         }
 
-        if (mode == SigmaMode.RESIDUAL_GLOBAL) {
-            int dof = Math.max(1, n - parameterCount);
-            double sumSq = 0;
-            for (double r : residuals) sumSq += r * r;
-            return new SigmaEstimate(Math.max(1e-6, Math.sqrt(sumSq / dof)), null);
+        if (mode == SigmaMode.RESIDUAL_LOCAL_GAUSSIAN) {
+            double bandwidth = gaussianBandwidthFor(data, localNeighbors);
+            return new SigmaEstimate(null, residuals, bandwidth);
         }
 
-        // RESIDUAL_LOCAL
+        // RESIDUAL_LOCAL (hartes Fenster)
         int k = Math.max(1, Math.min(localNeighbors, n - 1));
         double[] localSigmas = new double[n];
         for (int i = 0; i < n; i++) {
             localSigmas[i] = Math.max(1e-6, localWindowStdDev(residuals, i, k));
         }
-        return new SigmaEstimate(fallbackConstant, localSigmas);
+        return new SigmaEstimate(localSigmas, null, 0);
     }
 
     /**
@@ -206,9 +208,57 @@ public final class GoodnessOfFit {
     }
 
     /**
+     * Wandelt die Nachbarschaftsgröße k in eine Gauß-Bandbreite (Standardabweichung des Kernels,
+     * in X-Einheiten) um: Bandbreite = k/2 mittlere Punktabstände, sodass k in etwa vergleichbar
+     * mit der Fenstergröße von {@link SigmaMode#RESIDUAL_LOCAL} bleibt - ein Wechsel zwischen
+     * beiden Modi bei gleichem k liefert also eine ähnlich "breite" Nachbarschaft, nur mit
+     * weichem statt hartem Übergang an den Rändern.
+     */
+    private static double gaussianBandwidthFor(List<double[]> data, int k) {
+        int n = data.size();
+        double span = data.get(n - 1)[0] - data.get(0)[0];
+        if (n < 2 || span <= 0) return 1.0;
+        double avgSpacing = span / (n - 1);
+        return Math.max(avgSpacing * 1e-3, (Math.max(1, k) / 2.0) * avgSpacing);
+    }
+
+    /**
+     * Gauß-gewichtete Streuung der Residuen an der Stelle {@code x}: jeder Datenpunkt trägt
+     * gemäß {@code exp(-(x_j - x)² / (2·bandwidth²))} bei, statt wie bei
+     * {@link #localWindowStdDev} hart auf ein Fenster von k Nachbarn abzuschneiden. Das Ergebnis
+     * ist eine glatte, für jedes x (auch zwischen Messpunkten, z. B. für das Toleranzband)
+     * direkt auswertbare Funktion - anders als bei {@link SigmaMode#RESIDUAL_LOCAL} ist dafür
+     * keine Interpolation zwischen vorab berechneten Stützstellen nötig.
+     *
+     * @param data      die Datenpunkte, deren {@code residuals} hier gewichtet einfließen
+     * @param residuals Residuen (y - f(x)) je Datenpunkt, siehe {@link SigmaEstimate#residuals}
+     * @param bandwidth Gauß-Bandbreite, siehe {@link #gaussianBandwidthFor}
+     * @param x         die Stelle, an der sigma ausgewertet werden soll
+     */
+    public static double gaussianWeightedSigma(List<double[]> data, double[] residuals, double bandwidth, double x) {
+        if (residuals == null || residuals.length == 0) return 0;
+
+        double twoBandwidthSq = 2 * bandwidth * bandwidth;
+        double weightedSumSq = 0;
+        double weightSum = 0;
+
+        for (int j = 0; j < residuals.length; j++) {
+            double dx = data.get(j)[0] - x;
+            double weight = Math.exp(-(dx * dx) / twoBandwidthSq);
+            weightedSumSq += weight * residuals[j] * residuals[j];
+            weightSum += weight;
+        }
+
+        if (weightSum < 1e-12) return 1e-6;
+        return Math.max(1e-6, Math.sqrt(weightedSumSq / weightSum));
+    }
+
+    /**
      * Lineare Interpolation der je Punkt geschätzten lokalen Sigma-Werte zwischen den beiden
      * Datenpunkten, die {@code x} einschließen - für Stellen zwischen echten Messpunkten (z. B.
-     * beim Zeichnen des Toleranzbands mit vielen Zwischenschritten). Außerhalb des Datenbereichs
+     * beim Zeichnen des Toleranzbands mit vielen Zwischenschritten), ausschließlich für
+     * {@link SigmaMode#RESIDUAL_LOCAL} genutzt ({@link SigmaMode#RESIDUAL_LOCAL_GAUSSIAN}
+     * benötigt das nicht, siehe {@link #gaussianWeightedSigma}). Außerhalb des Datenbereichs
      * wird der jeweilige Randwert fortgeschrieben.
      *
      * @param data        die Datenpunkte, zu denen {@code localSigmas} passt

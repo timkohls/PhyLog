@@ -7,7 +7,7 @@ import java.awt.*;
 public class StandardDeviationDialog extends JDialog {
 
     private final JRadioButton rbConstant;
-    private final JRadioButton rbAutoGlobal;
+    private final JRadioButton rbAutoGaussian;
     private final JRadioButton rbAutoLocal;
     private final JTextField tfValue;
     private final JSpinner spNeighbors;
@@ -53,18 +53,18 @@ public class StandardDeviationDialog extends JDialog {
         gbc.gridx = 1;
         formPanel.add(tfValue, gbc);
 
-        // --- Automatisch, global ---
-        rbAutoGlobal = new JRadioButton("Automatisch \u2013 global aus Fit-Residuen");
-        group.add(rbAutoGlobal);
+        // --- Automatisch, Gauß-gewichtet ---
+        rbAutoGaussian = new JRadioButton("Automatisch \u2013 gewichtet (Gau\u00df-Kernel)");
+        group.add(rbAutoGaussian);
         gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 2;
-        formPanel.add(rbAutoGlobal, gbc);
+        formPanel.add(rbAutoGaussian, gbc);
 
-        JLabel lblAutoGlobalHint = hintLabel("Ein Wert für alle Punkte, geschätzt aus der Streuung der Messwerte um den aktuellen Fit (nimmt gaußverteiltes Rauschen an).");
+        JLabel lblAutoGaussianHint = hintLabel("Wie 'lokal', aber mit weichem statt hartem Übergang: nahe Punkte gehen stärker, entfernte schwächer ein (Gewicht nimmt mit dem Abstand gaußförmig ab) - dadurch verläuft die Fehlerbreite glatt statt stufig, auch bei ungleichmäßig verteilten Messpunkten.");
         gbc.gridy = 3;
-        formPanel.add(lblAutoGlobalHint, gbc);
+        formPanel.add(lblAutoGaussianHint, gbc);
 
-        // --- Automatisch, lokal ---
-        rbAutoLocal = new JRadioButton("Automatisch \u2013 lokal (nächste Nachbarn)");
+        // --- Automatisch, lokal (hartes Fenster) ---
+        rbAutoLocal = new JRadioButton("Automatisch \u2013 lokal, hartes Fenster (nächste Nachbarn)");
         group.add(rbAutoLocal);
         gbc.gridy = 4;
         formPanel.add(rbAutoLocal, gbc);
@@ -75,14 +75,14 @@ public class StandardDeviationDialog extends JDialog {
 
         gbc.gridwidth = 1;
         gbc.gridx = 0; gbc.gridy = 6;
-        formPanel.add(new JLabel("     Nachbarn (k):"), gbc);
+        formPanel.add(new JLabel("     Nachbarschaftsgröße (k):"), gbc);
         spNeighbors = new JSpinner(new SpinnerNumberModel(Math.max(2, currentNeighbors), 2, 100, 1));
         gbc.gridx = 1;
         formPanel.add(spNeighbors, gbc);
 
         gbc.gridwidth = 2;
         gbc.gridx = 0; gbc.gridy = 7;
-        JLabel lblFallback = hintLabel("Beide automatischen Modi benötigen einen Funktions-Fit; ohne Fit gilt der konstante Wert.");
+        JLabel lblFallback = hintLabel("Alle automatischen Modi benötigen einen Funktions-Fit; ohne Fit gilt der konstante Wert.");
         lblFallback.setForeground(Theme.ACCENT);
         formPanel.add(lblFallback, gbc);
 
@@ -91,14 +91,14 @@ public class StandardDeviationDialog extends JDialog {
         // --- Vorbelegung ---
         sigmaMode = (currentMode != null) ? currentMode : GoodnessOfFit.SigmaMode.CONSTANT;
         switch (sigmaMode) {
-            case RESIDUAL_GLOBAL -> rbAutoGlobal.setSelected(true);
+            case RESIDUAL_LOCAL_GAUSSIAN -> rbAutoGaussian.setSelected(true);
             case RESIDUAL_LOCAL -> rbAutoLocal.setSelected(true);
             default -> rbConstant.setSelected(true);
         }
         updateFieldStates();
 
         rbConstant.addActionListener(e -> updateFieldStates());
-        rbAutoGlobal.addActionListener(e -> updateFieldStates());
+        rbAutoGaussian.addActionListener(e -> updateFieldStates());
         rbAutoLocal.addActionListener(e -> updateFieldStates());
 
         // --- Buttons ---
@@ -131,7 +131,7 @@ public class StandardDeviationDialog extends JDialog {
      */
     private void updateFieldStates() {
         tfValue.setEnabled(rbConstant.isSelected());
-        spNeighbors.setEnabled(rbAutoLocal.isSelected());
+        spNeighbors.setEnabled(rbAutoLocal.isSelected() || rbAutoGaussian.isSelected());
     }
 
     /**
@@ -152,7 +152,7 @@ public class StandardDeviationDialog extends JDialog {
 
         standardDeviation = val;
         localSigmaNeighbors = (int) spNeighbors.getValue();
-        sigmaMode = rbAutoGlobal.isSelected() ? GoodnessOfFit.SigmaMode.RESIDUAL_GLOBAL
+        sigmaMode = rbAutoGaussian.isSelected() ? GoodnessOfFit.SigmaMode.RESIDUAL_LOCAL_GAUSSIAN
                 : rbAutoLocal.isSelected() ? GoodnessOfFit.SigmaMode.RESIDUAL_LOCAL
                 : GoodnessOfFit.SigmaMode.CONSTANT;
 

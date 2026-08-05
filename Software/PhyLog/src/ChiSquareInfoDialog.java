@@ -60,7 +60,7 @@ public class ChiSquareInfoDialog extends JDialog {
         Color ratingColor = GoodnessOfFit.colorFor(reducedChiSquare);
         String ratingText = ratingText(rating);
 
-        mainPanel.add(buildHeader());
+        mainPanel.add(buildHeader(sigmaMode));
         mainPanel.add(Box.createVerticalStrut(16));
         mainPanel.add(buildStatRow(reducedChiSquare, degreesOfFreedom, ratingText, ratingColor));
         mainPanel.add(Box.createVerticalStrut(14));
@@ -72,16 +72,6 @@ public class ChiSquareInfoDialog extends JDialog {
         if (tipText != null) {
             mainPanel.add(Box.createVerticalStrut(14));
             mainPanel.add(buildTipCard(tipText, ratingColor));
-        }
-
-        if (sigmaMode == GoodnessOfFit.SigmaMode.RESIDUAL_GLOBAL) {
-            mainPanel.add(Box.createVerticalStrut(14));
-            mainPanel.add(buildTipCard(
-                    "Sigma wird hier automatisch aus der Streuung aller Punkte um den Fit geschätzt - "
-                            + "dadurch liegt \u03C7\u00B2_red rechnerisch fast immer nahe 1. Für eine echte "
-                            + "Fit-Bewertung eignet sich der lokale Modus (Nächste Nachbarn) oder ein "
-                            + "unabhängig bekannter, konstanter Wert besser.",
-                    Theme.ACCENT));
         }
 
         if (fitDescription != null) {
@@ -130,7 +120,7 @@ public class ChiSquareInfoDialog extends JDialog {
     /**
      * Baut den Kopfbereich des Dialogs auf.
      */
-    private JPanel buildHeader() {
+    private JPanel buildHeader(GoodnessOfFit.SigmaMode sigmaMode) {
         JPanel header = new JPanel();
         header.setLayout(new BoxLayout(header, BoxLayout.Y_AXIS));
         header.setOpaque(false);
@@ -146,10 +136,25 @@ public class ChiSquareInfoDialog extends JDialog {
         subtitle.setForeground(Theme.MUTED);
         subtitle.setAlignmentX(Component.CENTER_ALIGNMENT);
 
+        JLabel modeLabel = new JLabel("\u03c3-Modus: " + sigmaModeText(sigmaMode));
+        modeLabel.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        modeLabel.setForeground(Theme.MUTED);
+        modeLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+
         header.add(title);
         header.add(Box.createVerticalStrut(4));
         header.add(subtitle);
+        header.add(modeLabel);
         return header;
+    }
+
+    /** Kurzbezeichnung des Sigma-Modus für die Kopfzeile. */
+    private String sigmaModeText(GoodnessOfFit.SigmaMode sigmaMode) {
+        return switch (sigmaMode) {
+            case CONSTANT -> "konstant";
+            case RESIDUAL_LOCAL -> "lokal, hartes Fenster";
+            case RESIDUAL_LOCAL_GAUSSIAN -> "lokal, Gauß-gewichtet";
+        };
     }
 
     /**

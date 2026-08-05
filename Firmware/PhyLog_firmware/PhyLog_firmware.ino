@@ -1,5 +1,5 @@
 /*
- * PhyLog ESP32 Firmware v7.3
+ * PhyLog ESP32 Firmware v7.6
  *
  * Sensortypen: I2C (INA219, VEML7700), HX711 (DOUT/SCK, kein I2C), Analog-Pin, sowie ein
  * INMP441-Mikrofon (I2S). Welcher Sensortyp auf Kanal A/B aktiv ist, wird ausschließlich über
@@ -24,10 +24,31 @@
  * <p>Kanal A und Kanal B hängen an physisch getrennten Bussen (I2C: Wire/Wire1, I2S: Port 0/1) -
  * das ist notwendig, sobald beide Kanäle gleichzeitig einen Sensor betreiben, auch denselben
  * Typ zweimal.</p>
+ *
+ * <p>v7.4: Kanal A, Pin 2 (SCL/SCK/BCLK) lag bisher auf GPIO12 - einem Strapping-Pin, der beim
+ * Reset die Flash-Spannung festlegt. War beim Reset bereits ein Sensor angeschlossen, konnte der
+ * ESP32 dadurch mit falscher Flash-Spannung booten und landete in einer Watchdog-Reset-Schleife
+ * (TG0WDT_SYS_RESET), noch bevor setup() lief - nur per Reflash (zufällig verbunden mit einem
+ * sauberen Reset) zu beheben. Kanal A liegt jetzt komplett auf GPIO 17/16/4 (Pin 2/3/4) - eine
+ * auf dem 38-Pin-DevKitC zusammenhängende Dreiergruppe ohne Strapping-Pins, analog zu Kanal B
+ * auf 27/26/25. Zusätzlich: automatischer I2C-Bus-Reset nach mehreren Fehlern in Folge (siehe
+ * {@link #resetI2CBus}).</p>
+ *
+ * <p>v7.5: Neuer Live-Modus fürs Mikrofon - statt (bzw. zusätzlich zu) dem einzelnen dB-Wert pro
+ * Zyklus liefert das SPEC-Kommando laufend ein 512-Bin-Amplitudenspektrum (siehe
+ * {@link #captureAndSendSpectrum}), berechnet über eine selbst geschriebene Radix-2-FFT
+ * ({@link #computeFFT}) auf 1024 Samples je Bild.</p>
+ *
+ * <p>v7.6: Das separate SPEC-Kommando ist wieder weg - das Spektrum ist jetzt schlicht ein
+ * eigener Sensortyp (TYPE_MIC_SPECTRUM, GUI-seitig "MICSPEC"), der sich wie jeder andere Sensor
+ * über SET auswählen lässt und ganz normal an START/STOP hängt, statt eine eigene
+ * Start/Stopp-Logik zu brauchen. captureAndSendSpectrum() läuft dabei weiterhin mit eigener
+ * Taktung (SPECTRUM_INTERVAL_MS), unabhängig von der für normale Sensoren gedachten Abtastrate.</p>
  */
 
 #include <Wire.h>
 #include <driver/i2s_std.h>
+#include <math.h>
 
 enum SensorType {
   TYPE_NONE = 0,
@@ -35,7 +56,8 @@ enum SensorType {
   TYPE_INA219 = 2,
   TYPE_VEML7700 = 3,
   TYPE_HX711 = 4,
-  TYPE_MICROPHONE = 5
+  TYPE_MICROPHONE = 5,
+  TYPE_MIC_SPECTRUM = 6
 };
 
 SensorType configChannelA = TYPE_NONE;
@@ -44,8 +66,17 @@ SensorType configChannelB = TYPE_NONE;
 /** Die drei Signal-Pins eines Kanal-Ports (Steckerposition 2, 3, 4 - siehe pinout.md), deren
  *  Rolle vom gewählten Sensortyp abhängt (siehe {@link #configureChannelHardware}):
  *  I2C: [0]=SDA, [1]=SCL   HX711: [0]=DOUT, [1]=SCK   I2S: [0]=WS, [1]=BCLK, [2]=SD
- *  Analog: [0]=Eingang */
-const int PINS_CHANNEL_A[3] = {13, 12, 14};
+ *  Analog: [0]=Eingang
+ *
+ *  ACHTUNG bei künftigen Pin-Änderungen: GPIO 0, 2, 5, 12 und 15 sind beim ESP32
+ *  "Strapping-Pins" - ihr Pegel wird nur im Moment des Resets ausgelesen und beeinflusst u. a.
+ *  Boot-Modus bzw. Flash-Spannung. Hängt hier bereits ein Sensor (z. B. ein I2C-Pull-up) an
+ *  einem solchen Pin, wenn der ESP32 einen Reset macht, kann der Chip mit falscher
+ *  Flash-Spannung booten und landet in einer Watchdog-Reset-Schleife (TG0WDT_SYS_RESET), noch
+ *  bevor setup() überhaupt läuft - genau das Bild "geht nur nach Reflash weg, tritt vor allem
+ *  auf, wenn Sensoren schon beim Einstecken angeschlossen sind". Deshalb bewusst KEINER dieser
+ *  Pins hier verwendet. */
+const int PINS_CHANNEL_A[3] = {17, 16, 4};
 const int PINS_CHANNEL_B[3] = {27, 26, 25};
 
 const uint8_t ADDR_INA219   = 0x40;
@@ -59,6 +90,24 @@ const unsigned long HX711_TIMEOUT_MS = 100;
 const int MIC_SAMPLE_RATE_HZ = 16000;
 const int MIC_READ_SAMPLES = 256;
 
+/** FFT-Größe für den Live-Frequenzspektrum-Modus (siehe {@link #captureAndSendSpectrum}) - eine
+ *  Zweierpotenz, wie sie die iterative Radix-2-FFT ({@link #computeFFT}) voraussetzt. Ein reelles
+ *  Signal liefert nur n/2 unabhängige Frequenz-Bins (die obere Hälfte ist bei reellem Eingang nur
+ *  das gespiegelte Konjugat), 1024 Punkte ergeben also die gewünschten 512 nutzbaren Bins. */
+const int SPECTRUM_FFT_SIZE = 1024;
+const int SPECTRUM_OUTPUT_BINS = SPECTRUM_FFT_SIZE / 2;
+
+/** Mindestabstand zwischen zwei gesendeten Spektren. 512 Bins als kompakte Ganzzahlen sind
+ *  trotzdem noch einige hundert Byte pro Bild - bei 115200 Baud ist die serielle Übertragung
+ *  hier der limitierende Faktor, nicht die FFT-Rechenzeit selbst (die liegt im niedrigen
+ *  Millisekundenbereich). ~4 Bilder/Sekunde wirkt für einen Analyzer noch ausreichend "live". */
+const unsigned long SPECTRUM_INTERVAL_MS = 250;
+
+/** Letzter Zeitpunkt eines gesendeten Spektrums je Kanal, um dessen Taktung ({@link #SPECTRUM_INTERVAL_MS})
+ *  unabhängig von der (für normale Sensoren gedachten, ggf. viel höheren) Abtastrate zu halten. */
+unsigned long lastSpectrumTimeMsA = 0;
+unsigned long lastSpectrumTimeMsB = 0;
+
 bool isStreaming = false;
 unsigned long sampleIntervalMs = 50; // Standard: 20 Hz
 unsigned long lastSampleTimeMs = 0;
@@ -67,6 +116,13 @@ unsigned long lastSampleTimeMs = 0;
  *  dauerhaften Fehlern nicht mit Meldungen zu fluten (siehe {@link #reportSensorError}). */
 unsigned long lastErrorReportMsA = 0;
 unsigned long lastErrorReportMsB = 0;
+
+/** Anzahl aufeinanderfolgender I2C-Fehler je Kanal, um einen dauerhaft "hängenden" Bus (z. B.
+ *  nach einem Wackelkontakt) automatisch neu zu initialisieren, statt nur endlos Fehler zu
+ *  loggen (siehe {@link #noteI2CResult}). Wird bei jedem erfolgreichen I2C-Zugriff zurückgesetzt. */
+int i2cFailStreakA = 0;
+int i2cFailStreakB = 0;
+const int I2C_FAIL_STREAK_RESET_THRESHOLD = 20;
 
 /** Meldet einen fehlgeschlagenen Sensorzugriff auf einen Kanal, höchstens einmal pro Sekunde je
  *  Kanal, statt einen solchen Fehler stillschweigend zu verschlucken.
@@ -217,6 +273,35 @@ void configureSensorOnBus(TwoWire &bus, SensorType type, char channelName) {
   }
 }
 
+/** Initialisiert den I2C-Bus eines Kanals neu (Bus schließen, kurz warten, neu starten und den
+ *  Sensor neu konfigurieren). Wird nach mehreren I2C-Fehlern in Folge aufgerufen, um einen durch
+ *  einen Wackelkontakt "hängen gebliebenen" Bus wieder freizubekommen, statt dass der Kanal bis
+ *  zum nächsten manuellen Reset dauerhaft Fehler meldet. */
+void resetI2CBus(char channelName, SensorType type) {
+  TwoWire &bus = busForChannel(channelName);
+  bus.end();
+  delay(5);
+  const int *pins = (channelName == 'A') ? PINS_CHANNEL_A : PINS_CHANNEL_B;
+  bus.begin(pins[0], pins[1], 400000);
+  configureSensorOnBus(bus, type, channelName);
+}
+
+/** Zählt aufeinanderfolgende I2C-Fehler je Kanal und stößt ab {@link #I2C_FAIL_STREAK_RESET_THRESHOLD}
+ *  einen automatischen Bus-Reset an (siehe {@link #resetI2CBus}). Nach jedem I2C-Zugriff
+ *  (erfolgreich oder nicht) aufzurufen. */
+void noteI2CResult(char channelName, SensorType type, bool success) {
+  int &streak = (channelName == 'A') ? i2cFailStreakA : i2cFailStreakB;
+  if (success) {
+    streak = 0;
+    return;
+  }
+  streak++;
+  if (streak >= I2C_FAIL_STREAK_RESET_THRESHOLD) {
+    streak = 0;
+    resetI2CBus(channelName, type);
+  }
+}
+
 /** Startet den I2S-Kanal im Empfangsmodus für das INMP441 (Philips-I2S, mono, 32-Bit-Slot -
  *  das Modul liefert 24 gültige Datenbits linksbündig in einem 32-Bit-Wort) über den neuen
  *  I2S-Standardtreiber (siehe Kommentar bei {@link #micHandleA} zum Grund). */
@@ -258,7 +343,7 @@ void configureMicrophone(char channelName, const int pins[3]) {
 void releaseChannelHardware(char channelName, SensorType oldType) {
   if (oldType == TYPE_INA219 || oldType == TYPE_VEML7700) {
     busForChannel(channelName).end();
-  } else if (oldType == TYPE_MICROPHONE) {
+  } else if (oldType == TYPE_MICROPHONE || oldType == TYPE_MIC_SPECTRUM) {
     i2s_chan_handle_t &handle = micHandleForChannel(channelName);
     if (handle != NULL) {
       i2s_channel_disable(handle);
@@ -288,6 +373,9 @@ void configureChannelHardware(char channelName, SensorType newType, const int pi
       digitalWrite(pins[1], LOW);
       break;
     case TYPE_MICROPHONE:
+    case TYPE_MIC_SPECTRUM:
+      // Identische I2S-Hardware für beide Mikrofon-"Sensoren" - TYPE_MIC_SPECTRUM liefert nur
+      // ein anderes Ausgabeformat (Spektrum statt Einzelwert), siehe sampleChannel()/loop().
       configureMicrophone(channelName, pins);
       break;
     case TYPE_NONE:
@@ -300,7 +388,7 @@ void processCommand(String command) {
   command.trim();
 
   if (command.equalsIgnoreCase("PING")) {
-    Serial.println("#HELLO,PhyLog-ESP32,fw=7.3");
+    Serial.println("#HELLO,PhyLog-ESP32,fw=7.6");
   } else if (command.equalsIgnoreCase("START")) {
     isStreaming = true;
     Serial.println("#OK,START");
@@ -328,6 +416,7 @@ void processCommand(String command) {
       else if (sensorTypeName.equalsIgnoreCase("ANALOG")) newType = TYPE_ANALOG;
       else if (sensorTypeName.equalsIgnoreCase("HX711")) newType = TYPE_HX711;
       else if (sensorTypeName.equalsIgnoreCase("MIC")) newType = TYPE_MICROPHONE;
+      else if (sensorTypeName.equalsIgnoreCase("MICSPEC")) newType = TYPE_MIC_SPECTRUM;
 
       if (targetChannel == 'A') {
         releaseChannelHardware('A', configChannelA);
@@ -368,6 +457,117 @@ void sendDataPacket(char channel, int slot, long rawValue) {
   Serial.print(slot);
   Serial.print(",");
   Serial.println(rawValue);
+}
+
+/** Kehrt die Bit-Reihenfolge eines {@code bitCount}-Bit-Wertes um - Hilfsfunktion für die
+ *  Bit-Reversal-Permutation am Anfang der FFT (siehe {@link #computeFFT}). */
+uint16_t reverseBits(uint16_t value, int bitCount) {
+  uint16_t result = 0;
+  for (int i = 0; i < bitCount; i++) {
+    result = (result << 1) | (value & 1);
+    value >>= 1;
+  }
+  return result;
+}
+
+/**
+ * Iterative, in-place Radix-2-Cooley-Tukey-FFT über {@code n} (Zweierpotenz) komplexe Werte,
+ * ergebnis in {@code real}/{@code imag} zurückgeschrieben. Bewusst selbst geschrieben statt eine
+ * FFT-Bibliothek einzubinden, da nur eine einzige feste Größe ({@link #SPECTRUM_FFT_SIZE})
+ * benötigt wird und damit keine zusätzliche Abhängigkeit im Projekt nötig ist.
+ */
+void computeFFT(float *real, float *imag, int n) {
+  int bitCount = 0;
+  while ((1 << bitCount) < n) bitCount++;
+
+  for (int i = 0; i < n; i++) {
+    int j = reverseBits(i, bitCount);
+    if (j > i) {
+      float tempReal = real[i]; real[i] = real[j]; real[j] = tempReal;
+      float tempImag = imag[i]; imag[i] = imag[j]; imag[j] = tempImag;
+    }
+  }
+
+  for (int size = 2; size <= n; size *= 2) {
+    int halfSize = size / 2;
+    float angleStep = -2.0f * PI / size;
+    for (int start = 0; start < n; start += size) {
+      for (int k = 0; k < halfSize; k++) {
+        float angle = angleStep * k;
+        float wr = cosf(angle), wi = sinf(angle);
+        int evenIdx = start + k;
+        int oddIdx = evenIdx + halfSize;
+
+        float oddReal = real[oddIdx] * wr - imag[oddIdx] * wi;
+        float oddImag = real[oddIdx] * wi + imag[oddIdx] * wr;
+
+        real[oddIdx] = real[evenIdx] - oddReal;
+        imag[oddIdx] = imag[evenIdx] - oddImag;
+        real[evenIdx] += oddReal;
+        imag[evenIdx] += oddImag;
+      }
+    }
+  }
+}
+
+/** Sendet ein zuvor über {@link #computeFFT} berechnetes Spektrum als ein Paket:
+ *  {@code #SPEC,<Kanal>,<Bins>,<Abtastrate>,<mag_0>,<mag_1>,...}. Magnituden als dBFS·10,
+ *  auf int gerundet - spart deutlich Bandbreite gegenüber Floats (bei 512 Werten pro Bild sonst
+ *  schnell ein Vielfaches an Übertragungszeit). */
+void sendSpectrumPacket(char channelName, float *real, float *imag) {
+  static const float FULL_SCALE = 8388607.0f; // 2^23 - 1, wie in der Software-Sensorklasse
+
+  Serial.print("#SPEC,");
+  Serial.print(channelName);
+  Serial.print(",");
+  Serial.print(SPECTRUM_OUTPUT_BINS);
+  Serial.print(",");
+  Serial.print(MIC_SAMPLE_RATE_HZ);
+
+  for (int i = 0; i < SPECTRUM_OUTPUT_BINS; i++) {
+    float magnitude = sqrtf(real[i] * real[i] + imag[i] * imag[i]) / SPECTRUM_FFT_SIZE;
+    float amplitude = fmaxf(magnitude / FULL_SCALE, 1e-9f); // Division durch 0 im log10 vermeiden
+    int dbTimes10 = (int) roundf(20.0f * log10f(amplitude) * 10.0f);
+    Serial.print(",");
+    Serial.print(dbTimes10);
+  }
+  Serial.println();
+}
+
+/** Nimmt {@link #SPECTRUM_FFT_SIZE} Samples vom Mikrofon des angegebenen Kanals auf, wendet ein
+ *  Hann-Fenster an (reduziert den "Leckeffekt" durch den scharfen Rand des Ausschnitts, der sonst
+ *  als zusätzliche, falsche Frequenzanteile im Spektrum erscheinen würde), berechnet per FFT das
+ *  Amplitudenspektrum und verschickt es. Wird für Kanäle mit TYPE_MIC_SPECTRUM aufgerufen. */
+void captureAndSendSpectrum(char channelName) {
+  i2s_chan_handle_t handle = micHandleForChannel(channelName);
+  if (handle == NULL) {
+    reportSensorError(channelName, "I2S");
+    return;
+  }
+
+  static int32_t rawBuffer[SPECTRUM_FFT_SIZE];
+  size_t bytesRead = 0;
+  esp_err_t err = i2s_channel_read(handle, rawBuffer, sizeof(rawBuffer), &bytesRead, pdMS_TO_TICKS(200));
+  int sampleCount = bytesRead / sizeof(int32_t);
+  if (err != ESP_OK || sampleCount < SPECTRUM_FFT_SIZE) {
+    reportSensorError(channelName, "I2S");
+    return;
+  }
+
+  // real/imag als "static" statt lokal: 2 * 1024 * 4 Byte wären auf dem Stack des Loop-Tasks
+  // riskant knapp (Standard-Stackgröße bei Arduino-ESP32 8 KB) - im BSS-Bereich unkritisch.
+  static float real[SPECTRUM_FFT_SIZE];
+  static float imag[SPECTRUM_FFT_SIZE];
+
+  for (int i = 0; i < SPECTRUM_FFT_SIZE; i++) {
+    int32_t sample = rawBuffer[i] >> 8; // 24 gültige Bits linksbündig, siehe sampleMicrophone
+    float window = 0.5f - 0.5f * cosf(2.0f * PI * i / (SPECTRUM_FFT_SIZE - 1)); // Hann-Fenster
+    real[i] = sample * window;
+    imag[i] = 0;
+  }
+
+  computeFFT(real, imag, SPECTRUM_FFT_SIZE);
+  sendSpectrumPacket(channelName, real, imag);
 }
 
 /** Liest einen kurzen Block Rohsamples vom INMP441 und bildet daraus den Spitzenbetrag
@@ -412,24 +612,29 @@ void sampleChannel(char channelName, SensorType type, const int pins[3]) {
   } else if (type == TYPE_INA219) {
     TwoWire &bus = busForChannel(channelName);
     uint16_t rawVoltage, rawCurrent;
-    if (readI2CRegister16(bus, ADDR_INA219, 0x02, rawVoltage)) {
+    bool okVoltage = readI2CRegister16(bus, ADDR_INA219, 0x02, rawVoltage);
+    if (okVoltage) {
       sendDataPacket(channelName, 0, rawVoltage);
     } else {
       reportSensorError(channelName, "I2C");
     }
-    if (readI2CRegister16(bus, ADDR_INA219, 0x04, rawCurrent)) {
+    bool okCurrent = readI2CRegister16(bus, ADDR_INA219, 0x04, rawCurrent);
+    if (okCurrent) {
       sendDataPacket(channelName, 1, rawCurrent);
     } else {
       reportSensorError(channelName, "I2C");
     }
+    noteI2CResult(channelName, type, okVoltage && okCurrent);
   } else if (type == TYPE_VEML7700) {
     TwoWire &bus = busForChannel(channelName);
     uint16_t rawLux;
-    if (readI2CRegister16LE(bus, ADDR_VEML7700, 0x04, rawLux)) {
+    bool okLux = readI2CRegister16LE(bus, ADDR_VEML7700, 0x04, rawLux);
+    if (okLux) {
       sendDataPacket(channelName, 0, rawLux);
     } else {
       reportSensorError(channelName, "I2C");
     }
+    noteI2CResult(channelName, type, okLux);
   } else if (type == TYPE_HX711) {
     long rawWeight;
     if (readHX711(pins[0], pins[1], rawWeight)) {
@@ -439,6 +644,9 @@ void sampleChannel(char channelName, SensorType type, const int pins[3]) {
     }
   } else if (type == TYPE_MICROPHONE) {
     sampleMicrophone(channelName);
+  } else if (type == TYPE_MIC_SPECTRUM) {
+    // Bewusst kein Aufruf hier: das Spektrum braucht eine eigene, von der normalen Abtastrate
+    // unabhängige Taktung (SPECTRUM_INTERVAL_MS) und wird deshalb direkt in loop() behandelt.
   }
 }
 
@@ -449,18 +657,31 @@ void setup() {
   // Bewusst KEINE Pin-/Bus-Initialisierung hier: welche Rolle die drei Kanal-Pins spielen,
   // hängt vom gewählten Sensortyp ab und wird erst bei SET über configureChannelHardware()
   // hergestellt - beide Kanäle starten unkonfiguriert bei TYPE_NONE.
-  Serial.println("#HELLO,PhyLog-ESP32,fw=7.3");
+  Serial.println("#HELLO,PhyLog-ESP32,fw=7.6");
 }
 
 void loop() {
   handleSerialCommunication();
 
-  if (isStreaming) {
-    unsigned long currentTimeMs = millis();
-    if (currentTimeMs - lastSampleTimeMs >= sampleIntervalMs) {
-      lastSampleTimeMs = currentTimeMs;
-      sampleChannel('A', configChannelA, PINS_CHANNEL_A);
-      sampleChannel('B', configChannelB, PINS_CHANNEL_B);
-    }
+  if (!isStreaming) return;
+
+  unsigned long currentTimeMs = millis();
+  if (currentTimeMs - lastSampleTimeMs >= sampleIntervalMs) {
+    lastSampleTimeMs = currentTimeMs;
+    sampleChannel('A', configChannelA, PINS_CHANNEL_A);
+    sampleChannel('B', configChannelB, PINS_CHANNEL_B);
+  }
+
+  // Das Frequenzspektrum braucht eine eigene, von der (für normale Sensoren gedachten,
+  // ggf. viel höheren) Abtastrate unabhängige Taktung - eine einzelne FFT dauert zwar nur
+  // Millisekunden, aber 512 Bins pro Bild sind schon einige hundert Byte, die bei 115200 Baud
+  // nicht beliebig oft pro Sekunde übertragen werden können (siehe SPECTRUM_INTERVAL_MS).
+  if (configChannelA == TYPE_MIC_SPECTRUM && currentTimeMs - lastSpectrumTimeMsA >= SPECTRUM_INTERVAL_MS) {
+    lastSpectrumTimeMsA = currentTimeMs;
+    captureAndSendSpectrum('A');
+  }
+  if (configChannelB == TYPE_MIC_SPECTRUM && currentTimeMs - lastSpectrumTimeMsB >= SPECTRUM_INTERVAL_MS) {
+    lastSpectrumTimeMsB = currentTimeMs;
+    captureAndSendSpectrum('B');
   }
 }

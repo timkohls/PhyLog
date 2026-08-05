@@ -14,7 +14,8 @@ public class SensorRegistry {
             new INA219CurrentSensor(),
             new VEML7700Sensor(),
             new HX711Sensor(),
-            new MicrophoneSensor()
+            new MicrophoneSensor(),
+            new MicrophoneSpectrumSensor()
     );
 
     /**

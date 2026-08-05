@@ -52,6 +52,17 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
      *  Wirkt sich nur auf Achsenbeschriftung/-skalierung aus, nicht auf Fit, Zoom oder Chi². */
     private boolean dualYAxisMode = false;
 
+    /** {@code true}, solange das Diagramm aktuell im Frequenzspektrum-Modus zeigt (mindestens ein
+     *  Kanal hat einen Spektrum-Sensor, siehe {@link Sensor#producesSpectrum()}) - dient nur dazu,
+     *  einen Wechsel zwischen Zeit- und Frequenzachse zu erkennen, um dann den Zoom
+     *  zurückzusetzen (siehe {@link #updateTableLayout()}), da beide Achsen einen grundverschiedenen
+     *  Wertebereich haben. */
+    private boolean spectrumModeActive = false;
+    /** Zuletzt empfangenes Spektrum je Kanal (dB je Bin), {@code null} ohne aktiven Spektrum-Sensor
+     *  bzw. bevor das erste Paket eingetroffen ist (siehe {@link #onSpectrumFrame}). */
+    private double[] lastSpectrumA, lastSpectrumB;
+    private int lastSpectrumRateA = 16000, lastSpectrumRateB = 16000;
+
     public GUI() {
         super("PhyLog");
 
@@ -591,6 +602,66 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         lblTriggerStatus.setForeground(Theme.POINT_A);
     }
 
+    /** {@inheritDoc} Speichert das neue Spektrum für den jeweiligen Kanal und zeichnet es direkt
+     *  ins {@link ChartPanel} - unabhängig von Tabelle/Zeitachse, siehe {@link #renderSpectrumChart()}. */
+    @Override
+    public void onSpectrumFrame(char channelId, double[] magnitudesDb, int sampleRateHz) {
+        if (channelId == 'A') {
+            lastSpectrumA = magnitudesDb;
+            lastSpectrumRateA = sampleRateHz;
+        } else if (channelId == 'B') {
+            lastSpectrumB = magnitudesDb;
+            lastSpectrumRateB = sampleRateHz;
+        }
+        renderSpectrumChart();
+    }
+
+    /** Zeichnet die zwischengespeicherten Spektren der Kanäle, die aktuell einen Spektrum-Sensor
+     *  haben, ins {@link ChartPanel} - als Haupt-Serie (Kanal A, oder Kanal B falls A keines hat)
+     *  bzw. als Extra-Serie, analog zur normalen Zwei-Kanal-Überlagerung. Tut nichts, wenn
+     *  inzwischen kein Kanal mehr einen Spektrum-Sensor hat (z. B. veraltetes, spät eintreffendes
+     *  Paket nach einem Sensorwechsel). */
+    private void renderSpectrumChart() {
+        if (chartPanel == null) return;
+
+        boolean spectrumA = channelA.producesSpectrum();
+        boolean spectrumB = channelB.producesSpectrum();
+        if (!spectrumA && !spectrumB) return;
+
+        List<double[]> mainSeries = new ArrayList<>();
+        List<ChartPanel.Series> extras = new ArrayList<>();
+
+        if (spectrumA && lastSpectrumA != null) {
+            mainSeries = toFrequencyPoints(lastSpectrumA, lastSpectrumRateA);
+        }
+
+        if (spectrumB && lastSpectrumB != null) {
+            List<double[]> pointsB = toFrequencyPoints(lastSpectrumB, lastSpectrumRateB);
+            if (mainSeries.isEmpty()) {
+                mainSeries = pointsB; // A liefert (noch) nichts - B übernimmt die Haupt-Serie
+            } else {
+                extras.add(new ChartPanel.Series("Kanal B: Frequenzspektrum", Theme.POINT_B, pointsB));
+            }
+        }
+
+        chartPanel.setData(mainSeries);
+        chartPanel.setExtraSeries(extras);
+    }
+
+    /** Wandelt ein Spektrum (dB je Bin) in (Frequenz, dB)-Punkte um. Die Bin-Breite ergibt sich
+     *  aus Abtastrate und FFT-Größe - Letztere ist immer doppelt so groß wie die Anzahl der
+     *  (nutzbaren) Bins, siehe {@code captureAndSendSpectrum} in phylog_firmware.ino. */
+    private List<double[]> toFrequencyPoints(double[] magnitudesDb, int sampleRateHz) {
+        int bins = magnitudesDb.length;
+        int fftSize = bins * 2;
+        List<double[]> points = new ArrayList<>(bins);
+        for (int i = 0; i < bins; i++) {
+            double freq = i * (double) sampleRateHz / fftSize;
+            points.add(new double[]{freq, magnitudesDb[i]});
+        }
+        return points;
+    }
+
     private void updateStatusLabel() {
         boolean connected = DeviceConnection.getInstance().isConnected();
 
@@ -669,19 +740,32 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         configureTableModel(channelA);
         configureTableModel(channelB);
 
+        // Veraltete Spektren verwerfen, sobald der jeweilige Kanal kein Spektrum-Sensor mehr ist -
+        // sonst würde ein späterer Wechsel zurück kurzzeitig eine Grafik von vorhin zeigen.
+        if (!channelA.producesSpectrum()) lastSpectrumA = null;
+        if (!channelB.producesSpectrum()) lastSpectrumB = null;
+
+        // Zeit- und Frequenzachse haben einen grundverschiedenen Wertebereich - ein beim
+        // vorherigen Modus aktiver Zoom würde im neuen Modus u. U. schlicht nichts mehr zeigen.
+        boolean nowSpectrumMode = channelA.producesSpectrum() || channelB.producesSpectrum();
+        if (nowSpectrumMode != spectrumModeActive) {
+            spectrumModeActive = nowSpectrumMode;
+            chartPanel.resetZoom();
+        }
+
         // Wenn 2 Sensoren ausgewählt sind, wird standardmäßig der Modus mit zwei Y-Achsen gesetzt.
         boolean shouldBeDual = channelA.hasSensor() && channelB.hasSensor();
         setDualYAxisMode(shouldBeDual);
 
         channelA.scrollPane.setBorder(BorderFactory.createTitledBorder(
                 BorderFactory.createLineBorder(Theme.BORDER),
-                "Sensor A: " + channelA.sensor.getName(),
+                channelTitle('A', channelA),
                 0, 0, null, Theme.TEXT));
 
         if (channelB.hasSensor()) {
             channelB.scrollPane.setBorder(BorderFactory.createTitledBorder(
                     BorderFactory.createLineBorder(Theme.BORDER),
-                    "Sensor B: " + channelB.sensor.getName(),
+                    channelTitle('B', channelB),
                     0, 0, null, Theme.TEXT));
 
             JSplitPane verticalSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, channelA.scrollPane, channelB.scrollPane);
@@ -693,6 +777,21 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
         tableContainerPanel.revalidate();
         tableContainerPanel.repaint();
+
+        // Im Spektrum-Modus liefert die Tabelle keine Daten mehr (siehe updateChartData) - das
+        // Diagramm muss hier explizit mit dem zuletzt gecachten Frame angestoßen werden.
+        if (nowSpectrumMode) {
+            renderSpectrumChart();
+        } else {
+            updateChartData();
+        }
+    }
+
+    /** Titel für die Tabellen-Umrahmung eines Kanals - weist bei einem Spektrum-Sensor darauf
+     *  hin, dass die Tabelle hier leer bleibt und die Anzeige stattdessen im Diagramm läuft. */
+    private String channelTitle(char id, MeasurementChannel ch) {
+        String base = "Sensor " + id + ": " + ch.sensor.getName();
+        return ch.producesSpectrum() ? base + " - siehe Diagramm" : base;
     }
 
     private void configureTableModel(MeasurementChannel ch) {
@@ -720,6 +819,18 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
     private void updateChartUnits() {
         if (chartPanel == null) return;
+
+        boolean spectrumA = channelA.producesSpectrum();
+        boolean spectrumB = channelB.producesSpectrum();
+
+        if (spectrumA || spectrumB) {
+            chartPanel.setXAxisTitle("Frequenz");
+            chartPanel.setUnits("Hz", "Magnitude (dB)");
+            chartPanel.setMainLabel(spectrumA ? "Kanal A: Frequenzspektrum" : "Kanal B: Frequenzspektrum");
+            return;
+        }
+
+        chartPanel.setXAxisTitle("Zeit");
 
         List<Sensor.Quantity> quantitiesA = channelA.sensor.getQuantities();
         boolean hasSecondSensor = channelB.hasSensor();
@@ -753,6 +864,9 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
     private void updateChartData() {
         if (chartPanel == null) return;
+        // Im Spektrum-Modus kommt die Anzeige direkt aus onSpectrumFrame/renderSpectrumChart,
+        // nicht aus der (dort ohnehin leer bleibenden) Tabelle - siehe channelTitle().
+        if (channelA.producesSpectrum() || channelB.producesSpectrum()) return;
 
         chartPanel.setData(extractDataFromTable(channelA.tableModel, 1));
 
