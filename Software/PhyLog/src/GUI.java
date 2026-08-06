@@ -22,6 +22,11 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     private static final int DEFAULT_WIDTH = 1280;
     private static final int DEFAULT_HEIGHT = 720;
 
+    /** Muss exakt zur Firmware passen (siehe BAUD_RATE in phylog_firmware.ino) - sonst
+     *  verbindet sich nichts mehr. 460800 statt der früheren 115200, damit vor allem das
+     *  Frequenzspektrum (Kanal A/B) deutlich flüssiger übertragen werden kann. */
+    private static final int BAUD_RATE = 460800;
+
     private final MeasurementChannel channelA = new MeasurementChannel('A');
     private final MeasurementChannel channelB = new MeasurementChannel('B');
     private final AcquisitionEngine acquisitionEngine = new AcquisitionEngine(channelA, channelB, this);
@@ -299,7 +304,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
                 if (selectedItem != null) {
                     String portName = selectedItem.toString().trim();
                     if (!portName.isEmpty()) {
-                        boolean success = DeviceConnection.getInstance().connect(portName, 115200);
+                        boolean success = DeviceConnection.getInstance().connect(portName, BAUD_RATE);
                         if (success) {
                             connectButton.setText("Trennen");
                         } else {
@@ -695,7 +700,11 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
         TriggerDialog.Config triggerConfig = acquisitionEngine.getTriggerConfig();
         boolean hasAnySensor = channelA.hasSensor() || channelB.hasSensor();
-        boolean triggerChannelReady = !triggerConfig.thresholdMode || channel(triggerConfig.channel).hasSensor();
+        MeasurementChannel triggerChannel = channel(triggerConfig.channel);
+        // Ein Spektrum-Kanal sendet nie die für den Schwellenwert-Trigger nötigen Einzelwerte
+        // (D-Pakete) - der Trigger würde dort schlicht nie feuern.
+        boolean triggerChannelReady = !triggerConfig.thresholdMode
+                || (triggerChannel.hasSensor() && !triggerChannel.producesSpectrum());
         boolean alreadyRunning = acquisitionEngine.isRecording() || acquisitionEngine.isWaitingForTrigger();
 
         boolean canStart = connected && hasAnySensor && triggerChannelReady && !alreadyRunning;
@@ -705,6 +714,25 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         boolean canStop = alreadyRunning;
         btnStop.setEnabled(canStop);
         btnStop.setToolTipText(canStop ? "Laufende Messung stoppen" : "Es läuft aktuell keine Messung.");
+
+        // Beides ergibt im Frequenzspektrum-Modus keinen Sinn: die Tabelle bleibt dort ohnehin
+        // leer (siehe channelTitle()), und ein Trigger kann auf einem Spektrum-Kanal nicht
+        // feuern (siehe triggerChannelReady oben) - klar ausgegraut statt stillschweigend wirkungslos.
+        boolean spectrumMode = channelA.producesSpectrum() || channelB.producesSpectrum();
+
+        if (btnClear != null) {
+            btnClear.setEnabled(!spectrumMode);
+            btnClear.setToolTipText(spectrumMode
+                    ? "Im Frequenzspektrum-Modus gibt es keine Tabellendaten zum Leeren."
+                    : "Aufgezeichnete Werte löschen");
+        }
+
+        if (btnTrigger != null) {
+            btnTrigger.setEnabled(!spectrumMode);
+            btnTrigger.setToolTipText(spectrumMode
+                    ? "Trigger funktioniert nicht mit einem Frequenzspektrum-Kanal."
+                    : "Trigger-Bedingung für den Messstart festlegen");
+        }
     }
 
     private String startButtonTooltip(boolean connected, boolean hasAnySensor, boolean triggerChannelReady,
@@ -827,9 +855,11 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
             chartPanel.setXAxisTitle("Frequenz");
             chartPanel.setUnits("Hz", "Magnitude (dB)");
             chartPanel.setMainLabel(spectrumA ? "Kanal A: Frequenzspektrum" : "Kanal B: Frequenzspektrum");
+            chartPanel.setColorByMagnitude(true);
             return;
         }
 
+        chartPanel.setColorByMagnitude(false);
         chartPanel.setXAxisTitle("Zeit");
 
         List<Sensor.Quantity> quantitiesA = channelA.sensor.getQuantities();

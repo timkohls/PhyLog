@@ -117,6 +117,7 @@ public class SensorConfigDialog extends JDialog {
         southWrapper.add(buildButtonPanel());
         add(southWrapper, BorderLayout.SOUTH);
 
+        enforceSpectrumExclusivity();
         updateChannelStates();
         startLiveUpdates();
 
@@ -139,6 +140,7 @@ public class SensorConfigDialog extends JDialog {
         ch.comboSensor = new JComboBox<>(availableSensors);
         ch.comboSensor.setSelectedItem(current != null ? current : SensorRegistry.NO_SENSOR);
         ch.comboSensor.addActionListener(e -> {
+            enforceSpectrumExclusivity();
             updateChannelStates();
             if (selectionListener != null) {
                 selectionListener.onSensorSelected(channelId, (Sensor) ch.comboSensor.getSelectedItem());
@@ -245,19 +247,63 @@ public class SensorConfigDialog extends JDialog {
     }
 
     /**
+     * Verhindert, dass beide Kanäle gleichzeitig ein Frequenzspektrum aufnehmen bzw. dass ein
+     * Kanal parallel zu einem Spektrum-Kanal noch einen normalen Sensor betreibt: sobald ein
+     * Kanal auf einen Spektrum-Sensor gestellt wird, wird der jeweils andere Kanal automatisch
+     * auf "kein Sensor" zurückgesetzt (siehe {@link #updateChannel} fürs anschließende Ausgrauen).
+     * Die Firmware unterstützt das ohnehin nicht sinnvoll gleichzeitig - zwei Mikrofon-Captures
+     * über denselben, ansonsten bereits knappen seriellen Kanal ergäben nur unnötige Bandbreite
+     * für einen Kanal, der am Ende gar nicht ausgewertet wird.
+     */
+    private void enforceSpectrumExclusivity() {
+        Sensor selectedA = (Sensor) channelA.comboSensor.getSelectedItem();
+        Sensor selectedB = (Sensor) channelB.comboSensor.getSelectedItem();
+        boolean spectrumOnA = selectedA != null && selectedA.producesSpectrum();
+        boolean spectrumOnB = selectedB != null && selectedB.producesSpectrum();
+
+        if (spectrumOnA && selectedB != SensorRegistry.NO_SENSOR) {
+            channelB.comboSensor.setSelectedItem(SensorRegistry.NO_SENSOR);
+        } else if (spectrumOnB && selectedA != SensorRegistry.NO_SENSOR) {
+            channelA.comboSensor.setSelectedItem(SensorRegistry.NO_SENSOR);
+        }
+    }
+
+    /**
      * Aktualisiert Status und Live-Werte aller Kanäle.
      */
     private void updateChannelStates() {
-        updateChannel(channelA, live1);
-        updateChannel(channelB, live2);
+        Sensor selectedA = (Sensor) channelA.comboSensor.getSelectedItem();
+        Sensor selectedB = (Sensor) channelB.comboSensor.getSelectedItem();
+        boolean spectrumOnA = selectedA != null && selectedA.producesSpectrum();
+        boolean spectrumOnB = selectedB != null && selectedB.producesSpectrum();
+
+        updateChannel(channelA, live1, spectrumOnB);
+        updateChannel(channelB, live2, spectrumOnA);
+
+        // Die Abtastrate wirkt sich nur auf normale Sensoren aus - das Frequenzspektrum läuft
+        // mit eigener, fest in der Firmware vorgegebener Taktung (siehe phylog_firmware.ino,
+        // SPECTRUM_INTERVAL_MS) und ignoriert diese Einstellung komplett.
+        boolean sampleRateRelevant = !spectrumOnA && !spectrumOnB;
+        comboSampleRate.setEnabled(sampleRateRelevant);
+        comboSampleRate.setToolTipText(sampleRateRelevant ? null
+                : "Wirkt sich nicht auf das Frequenzspektrum aus - dessen Bildrate ist fest in der Firmware vorgegeben.");
     }
 
     /**
      * Aktualisiert Status und Anzeigen eines einzelnen Kanals.
+     *
+     * @param lockedBySpectrum ob der jeweils andere Kanal ein Frequenzspektrum aufnimmt und
+     *                         dieser Kanal deshalb aktuell keinen Sensor haben darf (siehe
+     *                         {@link #enforceSpectrumExclusivity}).
      */
-    private void updateChannel(Channel ch, LiveSource source) {
+    private void updateChannel(Channel ch, LiveSource source, boolean lockedBySpectrum) {
         Sensor sensor = (Sensor) ch.comboSensor.getSelectedItem();
         boolean active = (sensor != null && sensor != SensorRegistry.NO_SENSOR);
+
+        ch.comboSensor.setEnabled(!lockedBySpectrum);
+        ch.comboSensor.setToolTipText(lockedBySpectrum
+                ? "Nicht wählbar, solange der andere Kanal ein Frequenzspektrum aufnimmt - beide gleichzeitig unterstützt die Firmware nicht."
+                : null);
 
         ch.lblUnit.setText(active ? sensor.getUnit() : "-");
         ch.txtOffset.setEnabled(active);

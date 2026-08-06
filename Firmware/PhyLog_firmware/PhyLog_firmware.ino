@@ -1,5 +1,5 @@
 /*
- * PhyLog ESP32 Firmware v7.6
+ * PhyLog ESP32 Firmware v7.7
  *
  * Sensortypen: I2C (INA219, VEML7700), HX711 (DOUT/SCK, kein I2C), Analog-Pin, sowie ein
  * INMP441-Mikrofon (I2S). Welcher Sensortyp auf Kanal A/B aktiv ist, wird ausschließlich über
@@ -44,6 +44,13 @@
  * über SET auswählen lässt und ganz normal an START/STOP hängt, statt eine eigene
  * Start/Stopp-Logik zu brauchen. captureAndSendSpectrum() läuft dabei weiterhin mit eigener
  * Taktung (SPECTRUM_INTERVAL_MS), unabhängig von der für normale Sensoren gedachten Abtastrate.</p>
+ *
+ * <p>v7.7: Baudrate auf 460800 vervierfacht (siehe BAUD_RATE) und SPECTRUM_INTERVAL_MS von
+ * 250ms auf 60ms verkürzt - das Spektrum ist damit an der tatsächlich erreichbaren Grenze statt
+ * an einer für die alte, langsamere Baudrate konservativ gewählten Konstante. GUI-seitig
+ * erzwingt der Sensor-Dialog jetzt außerdem, dass ein Kanal automatisch auf "kein Sensor"
+ * zurückfällt, sobald der andere Kanal ein Frequenzspektrum aufnimmt - zwei Mikrofon-Captures
+ * gleichzeitig ergäben ohnehin nur unnötige Konkurrenz um dieselbe, jetzt knappere Bandbreite.</p>
  */
 
 #include <Wire.h>
@@ -90,6 +97,15 @@ const unsigned long HX711_TIMEOUT_MS = 100;
 const int MIC_SAMPLE_RATE_HZ = 16000;
 const int MIC_READ_SAMPLES = 256;
 
+/** Serielle Baudrate zum PC. War lange 115200 - das begrenzte das Frequenzspektrum auf
+ *  ~4 Bilder/Sekunde, da 512 Bins pro Bild schon ein paar KB sind (siehe SPECTRUM_INTERVAL_MS).
+ *  460800 ist auf allen gängigen USB-Seriell-Chips (CP210x, CH340, native USB-CDC) zuverlässig
+ *  nutzbar und vervierfacht die Übertragungsgeschwindigkeit. Muss mit dem Baudrate-Wert in
+ *  GUI.java (DeviceConnection.connect-Aufruf) und dem Vorgabewert in Terminal.java übereinstimmen -
+ *  sonst verbindet sich nichts mehr. Bei zuverlässiger Verbindung kann versuchsweise auch
+ *  921600 probiert werden (weitere Verdopplung), das ist aber chipabhängig weniger garantiert. */
+const long BAUD_RATE = 460800;
+
 /** FFT-Größe für den Live-Frequenzspektrum-Modus (siehe {@link #captureAndSendSpectrum}) - eine
  *  Zweierpotenz, wie sie die iterative Radix-2-FFT ({@link #computeFFT}) voraussetzt. Ein reelles
  *  Signal liefert nur n/2 unabhängige Frequenz-Bins (die obere Hälfte ist bei reellem Eingang nur
@@ -98,10 +114,14 @@ const int SPECTRUM_FFT_SIZE = 1024;
 const int SPECTRUM_OUTPUT_BINS = SPECTRUM_FFT_SIZE / 2;
 
 /** Mindestabstand zwischen zwei gesendeten Spektren. 512 Bins als kompakte Ganzzahlen sind
- *  trotzdem noch einige hundert Byte pro Bild - bei 115200 Baud ist die serielle Übertragung
- *  hier der limitierende Faktor, nicht die FFT-Rechenzeit selbst (die liegt im niedrigen
- *  Millisekundenbereich). ~4 Bilder/Sekunde wirkt für einen Analyzer noch ausreichend "live". */
-const unsigned long SPECTRUM_INTERVAL_MS = 250;
+ *  trotzdem noch rund 2,5 KB pro Bild - bei BAUD_RATE=460800 (~46 KB/s) dauert allein die
+ *  Übertragung davon schon knapp 55ms, die FFT selbst nur wenige ms. 60ms liegt knapp darüber
+ *  (Sicherheitsspielraum für FFT-Zeit und Schleifen-Overhead) und ergibt damit ~16 Bilder/Sekunde -
+ *  spürbar "live" statt der ~4 Bilder/Sekunde, die bei der alten Baudrate (115200) das Maximum
+ *  waren. Absichtlich keine feste Wartezeit weit über dem physikalischen Minimum: Serial.print()
+ *  blockiert ohnehin, sobald der Sende-Puffer voll ist, ein zu kleiner Wert würde also nicht zu
+ *  einem Rückstau führen, sondern höchstens ungenutzt bleiben. */
+const unsigned long SPECTRUM_INTERVAL_MS = 60;
 
 /** Letzter Zeitpunkt eines gesendeten Spektrums je Kanal, um dessen Taktung ({@link #SPECTRUM_INTERVAL_MS})
  *  unabhängig von der (für normale Sensoren gedachten, ggf. viel höheren) Abtastrate zu halten. */
@@ -388,7 +408,7 @@ void processCommand(String command) {
   command.trim();
 
   if (command.equalsIgnoreCase("PING")) {
-    Serial.println("#HELLO,PhyLog-ESP32,fw=7.6");
+    Serial.println("#HELLO,PhyLog-ESP32,fw=7.7");
   } else if (command.equalsIgnoreCase("START")) {
     isStreaming = true;
     Serial.println("#OK,START");
@@ -574,7 +594,7 @@ void captureAndSendSpectrum(char channelName) {
  *  (Peak-Amplitude) - ein einzelner Wert pro Aufrufzyklus, genau wie bei allen anderen
  *  Sensortypen. Das hält das serielle Protokoll unverändert (ein Datenpaket pro Kanal und
  *  Intervall) - die hohe I2S-Abtastrate bleibt intern und wird nicht Sample für Sample über die
- *  serielle Verbindung geschickt, was bei 115200 Baud ohnehin nicht möglich wäre. */
+ *  serielle Verbindung geschickt, was bei dieser Baudrate ohnehin nicht möglich wäre. */
 void sampleMicrophone(char channelName) {
   i2s_chan_handle_t handle = micHandleForChannel(channelName);
   if (handle == NULL) {
@@ -651,13 +671,13 @@ void sampleChannel(char channelName, SensorType type, const int pins[3]) {
 }
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(BAUD_RATE);
   delay(200);
 
   // Bewusst KEINE Pin-/Bus-Initialisierung hier: welche Rolle die drei Kanal-Pins spielen,
   // hängt vom gewählten Sensortyp ab und wird erst bei SET über configureChannelHardware()
   // hergestellt - beide Kanäle starten unkonfiguriert bei TYPE_NONE.
-  Serial.println("#HELLO,PhyLog-ESP32,fw=7.6");
+  Serial.println("#HELLO,PhyLog-ESP32,fw=7.7");
 }
 
 void loop() {
@@ -674,7 +694,7 @@ void loop() {
 
   // Das Frequenzspektrum braucht eine eigene, von der (für normale Sensoren gedachten,
   // ggf. viel höheren) Abtastrate unabhängige Taktung - eine einzelne FFT dauert zwar nur
-  // Millisekunden, aber 512 Bins pro Bild sind schon einige hundert Byte, die bei 115200 Baud
+  // Millisekunden, aber 512 Bins pro Bild sind schon einige hundert Byte, die bei dieser Baudrate
   // nicht beliebig oft pro Sekunde übertragen werden können (siehe SPECTRUM_INTERVAL_MS).
   if (configChannelA == TYPE_MIC_SPECTRUM && currentTimeMs - lastSpectrumTimeMsA >= SPECTRUM_INTERVAL_MS) {
     lastSpectrumTimeMsA = currentTimeMs;

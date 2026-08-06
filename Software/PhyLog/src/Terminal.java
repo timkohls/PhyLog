@@ -65,7 +65,7 @@ public class Terminal extends JFrame {
         JButton btnRefresh = new JButton("Aktualisieren");
         btnRefresh.addActionListener(e -> refreshPorts());
 
-        txtBaud = new JTextField("115200", 7);
+        txtBaud = new JTextField("460800", 7);
 
         btnConnect = new JButton("Verbinden");
         btnConnect.addActionListener(e -> toggleConnection());

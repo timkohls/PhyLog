@@ -152,6 +152,10 @@ public class ChartPanel extends JPanel {
 
     private boolean showPoints = true;
     private LineMode lineMode = LineMode.NONE;
+    /** {@code true}, wenn Messpunkte statt in ihrer festen Serienfarbe nach ihrem Y-Wert gefärbt
+     *  werden sollen (siehe {@link #magnitudeColor}) - genutzt für die Frequenzspektrum-Anzeige,
+     *  wo die Farbe zusätzlich zur Höhe auf einen Blick zeigt, wie laut ein Frequenzanteil ist. */
+    private boolean colorByMagnitude = false;
     private FitMode fitMode = FitMode.NONE;
     private int polynomialDegree = 2;
 
@@ -406,6 +410,13 @@ public class ChartPanel extends JPanel {
     /** @param lineMode wie die Messpunkte verbunden werden sollen (siehe {@link LineMode}) */
     public void setLineMode(LineMode lineMode) {
         this.lineMode = (lineMode != null) ? lineMode : LineMode.NONE;
+        repaint();
+    }
+
+    /** @param colorByMagnitude ob Messpunkte nach ihrem Y-Wert statt in fester Serienfarbe
+     *                          gefärbt werden sollen (siehe {@link #magnitudeColor}) */
+    public void setColorByMagnitude(boolean colorByMagnitude) {
+        this.colorByMagnitude = colorByMagnitude;
         repaint();
     }
 
@@ -702,9 +713,14 @@ public class ChartPanel extends JPanel {
 
             if (showPoints) {
                 g2.setColor(series.color);
-                for (Point2DDouble pt : points) {
+                for (int i = 0; i < points.size(); i++) {
+                    Point2DDouble pt = points.get(i);
                     if (pt.x >= geo.padding && pt.x <= rightEdge
                             && pt.y >= geo.padding && pt.y <= geo.height - geo.padding) {
+                        if (colorByMagnitude) {
+                            double normalized = (seriesRangeY > 1e-9) ? (series.data.get(i)[1] - seriesMinY) / seriesRangeY : 0.5;
+                            g2.setColor(magnitudeColor(normalized));
+                        }
                         g2.fill(new Ellipse2D.Double(pt.x - pointSize / 2, pt.y - pointSize / 2, pointSize, pointSize));
                     }
                 }
@@ -1033,6 +1049,33 @@ public class ChartPanel extends JPanel {
         return new Color(color.getRed(), color.getGreen(), color.getBlue(), alpha);
     }
 
+    /** Mehrstufiger, kühl-nach-warm-Farbverlauf für {@link #colorByMagnitude}: leise/niedrige
+     *  Werte (normalized nahe 0) erscheinen kühl-blau, laute/hohe Werte (nahe 1) warm-rot -
+     *  gedacht für die Frequenzspektrum-Anzeige, wo Farbe zusätzlich zur Balkenhöhe auf einen
+     *  Blick zeigt, welche Frequenzanteile dominieren.
+     *
+     * @param normalized Wert zwischen 0 und 1 (wird andernfalls dorthin begrenzt)
+     */
+    private static Color magnitudeColor(double normalized) {
+        double t = Math.max(0.0, Math.min(1.0, normalized));
+        Color[] stops = {
+                new Color(60, 70, 200),   // leise: kühles Blau
+                new Color(40, 180, 190),  // Türkis
+                new Color(250, 170, 40),  // Orange
+                new Color(230, 60, 60)    // laut: Rot
+        };
+
+        double scaled = t * (stops.length - 1);
+        int index = Math.min(stops.length - 2, (int) scaled);
+        double localT = scaled - index;
+
+        Color a = stops[index], b = stops[index + 1];
+        int r = (int) Math.round(a.getRed() + (b.getRed() - a.getRed()) * localT);
+        int g = (int) Math.round(a.getGreen() + (b.getGreen() - a.getGreen()) * localT);
+        int bl = (int) Math.round(a.getBlue() + (b.getBlue() - a.getBlue()) * localT);
+        return new Color(r, g, bl);
+    }
+
     /** Farbe der zweiten Y-Achse - dieselbe wie die (aktuell einzige mögliche) Kanal-B-Kurve,
      *  damit auf einen Blick klar ist, welche Achse zu welcher Kurve gehört. */
     private Color secondaryAxisColor() {
@@ -1140,14 +1183,20 @@ public class ChartPanel extends JPanel {
                 geo.rangeX, geo.rangeY, geo.padding, geo.height, geo.plotWidth, geo.plotHeight, Theme.ACCENT);
     }
 
-    /** Zeichnet alle sichtbaren Messpunkte als kleine Kreise. */
+    /** Zeichnet alle sichtbaren Messpunkte als kleine Kreise, wahlweise (siehe
+     *  {@link #colorByMagnitude}) nach ihrem Y-Wert statt in {@link Theme#POINT_A} eingefärbt. */
     private void drawDataPoints(Graphics2D g2, PlotGeometry geo, List<Point2DDouble> points) {
         double pointSize = 7;
         int rightEdge = geo.width - geo.rightPadding;
-        for (Point2DDouble pt : points) {
+        g2.setColor(Theme.POINT_A);
+        for (int i = 0; i < points.size(); i++) {
+            Point2DDouble pt = points.get(i);
             if (pt.x >= geo.padding && pt.x <= rightEdge
                     && pt.y >= geo.padding && pt.y <= geo.height - geo.padding) {
-                g2.setColor(Theme.POINT_A);
+                if (colorByMagnitude) {
+                    double normalized = (geo.rangeY > 1e-9) ? (displayData.get(i)[1] - geo.minY) / geo.rangeY : 0.5;
+                    g2.setColor(magnitudeColor(normalized));
+                }
                 g2.fill(new Ellipse2D.Double(pt.x - pointSize / 2, pt.y - pointSize / 2, pointSize, pointSize));
             }
         }
