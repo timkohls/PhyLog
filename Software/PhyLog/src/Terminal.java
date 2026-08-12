@@ -17,6 +17,9 @@ public class Terminal extends JFrame {
     private JTextField txtCommand;
 
     private final Consumer<String> lineListener = this::appendLog;
+    /** Hält den Button hier synchron mit dem tatsächlichen Verbindungsstatus - auch dann, wenn
+     *  die Verbindung über das Hauptfenster ({@link GUI}) auf- oder abgebaut wurde. */
+    private final Runnable connectionListener = this::updateConnectButtonLabel;
 
     /**
      * Erstellt das Terminal-Fenster und initialisiert die UI.
@@ -35,9 +38,10 @@ public class Terminal extends JFrame {
 
         refreshPorts();
         DeviceConnection.getInstance().addLineListener(lineListener);
+        DeviceConnection.getInstance().addConnectionListener(connectionListener);
+        updateConnectButtonLabel();
 
         if (DeviceConnection.getInstance().isConnected()) {
-            btnConnect.setText("Trennen");
             appendLog("# Bereits verbunden (geteilte Verbindung mit dem Hauptfenster).");
         }
 
@@ -45,8 +49,19 @@ public class Terminal extends JFrame {
             @Override
             public void windowClosing(WindowEvent e) {
                 DeviceConnection.getInstance().removeLineListener(lineListener);
+                DeviceConnection.getInstance().removeConnectionListener(connectionListener);
             }
         });
+    }
+
+    /**
+     * Setzt die Beschriftung von {@link #btnConnect} passend zum tatsächlichen Verbindungsstatus.
+     * Wird sowohl beim Aufbau dieses Fensters als auch bei jeder Statusänderung aufgerufen (siehe
+     * {@link #connectionListener}) - unabhängig davon, ob die Änderung von hier oder von {@link GUI}
+     * ausgelöst wurde.
+     */
+    private void updateConnectButtonLabel() {
+        btnConnect.setText(DeviceConnection.getInstance().isConnected() ? "Trennen" : "Verbinden");
     }
 
     /**
@@ -182,10 +197,11 @@ public class Terminal extends JFrame {
 
         if (DeviceConnection.getInstance().connect(portName, baud)) {
             appendLog("# Verbunden mit " + portName + " @ " + baud + " Baud");
-            btnConnect.setText("Trennen");
         } else {
             appendLog("# Verbindung zu " + portName + " fehlgeschlagen.");
         }
+        // Kein manuelles btnConnect.setText mehr hier: DeviceConnection#connect benachrichtigt
+        // bereits connectionListener (siehe Konstruktor), der die Beschriftung aktualisiert.
     }
 
     /**
@@ -194,7 +210,7 @@ public class Terminal extends JFrame {
     private void disconnect() {
         DeviceConnection.getInstance().disconnect();
         appendLog("# Verbindung getrennt.");
-        btnConnect.setText("Verbinden");
+        // Kein manuelles btnConnect.setText mehr hier, siehe #connect().
     }
 
     /**

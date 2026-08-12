@@ -26,6 +26,10 @@ public class DeviceConnection {
     private SerialPort activePort;
     private final StringBuilder receiveBuffer = new StringBuilder();
     private final List<Consumer<String>> lineListeners = new ArrayList<>();
+    /** Reagiert auf Verbindungsauf-/-abbau, unabhängig davon, über welches Fenster ({@link GUI}
+     *  oder {@link Terminal}) er ausgelöst wurde - so kann jedes Fenster seine Button-Beschriftung
+     *  am tatsächlichen, gemeinsamen Zustand ausrichten statt an einer lokal mitgeführten Kopie. */
+    private final List<Runnable> connectionListeners = new ArrayList<>();
 
     private DeviceConnection() {
     }
@@ -98,6 +102,7 @@ public class DeviceConnection {
         // brauchen dafür einen durchgehenden Strom vom Gerät, nicht nur während Start/Stop.
         sendLine("START");
 
+        notifyConnectionListeners();
         return true;
     }
 
@@ -109,6 +114,7 @@ public class DeviceConnection {
             sendLine("STOP");
             activePort.closePort();
             activePort = null;
+            notifyConnectionListeners();
         }
     }
 
@@ -128,6 +134,35 @@ public class DeviceConnection {
      */
     public void removeLineListener(Consumer<String> listener) {
         lineListeners.remove(listener);
+    }
+
+    /**
+     * Registriert einen Listener für Verbindungsauf- und -abbau. Der Listener bekommt nur die
+     * Information "Zustand hat sich geändert" - {@link #isConnected()} liefert den aktuellen
+     * Stand, ein zusätzlicher Boolean-Parameter wäre daher redundant.
+     *
+     * @param listener Callback, der bei jeder Zustandsänderung aufgerufen wird.
+     */
+    public void addConnectionListener(Runnable listener) {
+        connectionListeners.add(listener);
+    }
+
+    /**
+     * Entfernt einen registrierten Verbindungsstatus-Listener.
+     *
+     * @param listener Zu entfernender Callback.
+     */
+    public void removeConnectionListener(Runnable listener) {
+        connectionListeners.remove(listener);
+    }
+
+    /**
+     * Benachrichtigt alle registrierten Verbindungsstatus-Listener über eine Zustandsänderung.
+     */
+    private void notifyConnectionListeners() {
+        for (Runnable listener : new ArrayList<>(connectionListeners)) {
+            listener.run();
+        }
     }
 
     /**

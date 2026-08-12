@@ -340,7 +340,10 @@ void resetI2CBus(char channelName, SensorType type) {
 void noteI2CResult(char channelName, SensorType type, bool success) {
   int &streak = (channelName == 'A') ? i2cFailStreakA : i2cFailStreakB;
   if (success) {
-    streak = 0;
+    if (streak > 0) {
+      streak = 0;
+      resetI2CBus(channelName, type);
+    }
     return;
   }
   streak++;

@@ -641,7 +641,8 @@ public class ChartPanel extends JPanel {
             return;
         }
 
-        List<Point2DDouble> screenPoints = projectDataToScreen(geo);
+        List<double[]> renderData = downsampleForRendering(displayData, geo);
+        List<Point2DDouble> screenPoints = projectDataToScreen(geo, renderData);
 
         if (lineMode != LineMode.NONE && screenPoints.size() > 1) {
             drawConnectingLine(g2, screenPoints);
@@ -650,7 +651,7 @@ public class ChartPanel extends JPanel {
         drawFitOverlayClipped(g2, geo);
 
         if (showPoints) {
-            drawDataPoints(g2, geo, screenPoints);
+            drawDataPoints(g2, geo, screenPoints, renderData);
         }
 
         drawExtraSeries(g2, geo);
@@ -698,8 +699,9 @@ public class ChartPanel extends JPanel {
         int rightEdge = geo.width - geo.rightPadding;
 
         for (Series series : extraSeries) {
+            List<double[]> renderData = downsampleForRendering(series.data, geo);
             List<Point2DDouble> points = new ArrayList<>();
-            for (double[] point : series.data) {
+            for (double[] point : renderData) {
                 double px = geo.padding + ((point[0] - geo.minX) / geo.rangeX) * geo.plotWidth;
                 double py = (geo.height - geo.padding) - ((point[1] - seriesMinY) / seriesRangeY) * geo.plotHeight;
                 points.add(new Point2DDouble(px, py));
@@ -718,7 +720,7 @@ public class ChartPanel extends JPanel {
                     if (pt.x >= geo.padding && pt.x <= rightEdge
                             && pt.y >= geo.padding && pt.y <= geo.height - geo.padding) {
                         if (colorByMagnitude) {
-                            double normalized = (seriesRangeY > 1e-9) ? (series.data.get(i)[1] - seriesMinY) / seriesRangeY : 0.5;
+                            double normalized = (seriesRangeY > 1e-9) ? (renderData.get(i)[1] - seriesMinY) / seriesRangeY : 0.5;
                             g2.setColor(magnitudeColor(normalized));
                         }
                         g2.fill(new Ellipse2D.Double(pt.x - pointSize / 2, pt.y - pointSize / 2, pointSize, pointSize));
@@ -1089,15 +1091,87 @@ public class ChartPanel extends JPanel {
         g2.drawString("Keine Messdaten vorhanden", geo.width / 2 - 70, geo.height / 2);
     }
 
-    /** Projiziert alle Punkte aus {@link #displayData} (Datenraum) in Bildschirmkoordinaten. */
-    private List<Point2DDouble> projectDataToScreen(PlotGeometry geo) {
+    /** Projiziert die übergebenen Datenpunkte (typischerweise {@link #displayData} bzw. dessen
+     *  über {@link #downsampleForRendering} reduzierte Fassung) in Bildschirmkoordinaten. */
+    private List<Point2DDouble> projectDataToScreen(PlotGeometry geo, List<double[]> data) {
         List<Point2DDouble> points = new ArrayList<>();
-        for (double[] point : displayData) {
+        for (double[] point : data) {
             double px = geo.padding + ((point[0] - geo.minX) / geo.rangeX) * geo.plotWidth;
             double py = (geo.height - geo.padding) - ((point[1] - geo.minY) / geo.rangeY) * geo.plotHeight;
             points.add(new Point2DDouble(px, py));
         }
         return points;
+    }
+
+    /**
+     * Reduziert sehr lange Datenreihen vor dem Zeichnen auf ein Min/Max-Envelope je Pixel-Spalte:
+     * bei Zehntausenden Messpunkten (z. B. Mikrofon oder Lichtsensor über mehrere Minuten bei
+     * hoher Abtastrate, siehe {@link MicrophoneSensor}/{@link VEML7700Sensor}) würde sonst bei
+     * jedem Repaint über die volle Reihe iteriert und jeder Punkt gezeichnet, obwohl auf dem
+     * Bildschirm ohnehin nur {@code geo.plotWidth} Pixelspalten sichtbar sind. Je Spalte werden
+     * nur kleinster und größter Y-Wert behalten (in ihrer ursprünglichen zeitlichen Reihenfolge,
+     * damit die Verbindungslinie nicht rückwärts läuft) - eine reine "jeden n-ten Punkt nehmen"-
+     * Reduktion würde dagegen kurze Spitzen/Ausschläge zwischen den erhaltenen Punkten verschlucken.
+     *
+     * <p>Betrifft nur die Darstellung: Fit, Chi² und alle übrigen Berechnungen rechnen weiterhin
+     * direkt auf {@link #displayData} (siehe {@link #ensureFitComputed}), nicht auf dem hier
+     * reduzierten Ergebnis.</p>
+     *
+     * @param data Datenpunkte in Datenraum, nach X aufsteigend sortiert (Zeitreihen sind das
+     *             bauartbedingt immer)
+     * @param geo  aktuelle Plot-Geometrie, liefert Pixelbreite und sichtbaren X-Bereich
+     * @return {@code data} unverändert, wenn sich eine Reduktion nicht lohnt (im Schnitt nicht
+     *         mehr als 2 Punkte je Pixelspalte), sonst die auf höchstens 2 Punkte je Spalte reduzierte Liste
+     */
+    private List<double[]> downsampleForRendering(List<double[]> data, PlotGeometry geo) {
+        int n = data.size();
+        int columns = Math.max(1, geo.plotWidth);
+        if (n <= columns * 2) return data;
+
+        double[] colMinY = new double[columns];
+        double[] colMaxY = new double[columns];
+        int[] colMinIdx = new int[columns];
+        int[] colMaxIdx = new int[columns];
+        boolean[] colHasData = new boolean[columns];
+
+        for (int i = 0; i < n; i++) {
+            double[] point = data.get(i);
+            int col = (int) (((point[0] - geo.minX) / geo.rangeX) * columns);
+            if (col < 0) col = 0;
+            if (col >= columns) col = columns - 1;
+
+            if (!colHasData[col]) {
+                colHasData[col] = true;
+                colMinY[col] = point[1];
+                colMaxY[col] = point[1];
+                colMinIdx[col] = i;
+                colMaxIdx[col] = i;
+            } else {
+                if (point[1] < colMinY[col]) {
+                    colMinY[col] = point[1];
+                    colMinIdx[col] = i;
+                }
+                if (point[1] > colMaxY[col]) {
+                    colMaxY[col] = point[1];
+                    colMaxIdx[col] = i;
+                }
+            }
+        }
+
+        List<double[]> reduced = new ArrayList<>(columns * 2);
+        for (int c = 0; c < columns; c++) {
+            if (!colHasData[c]) continue;
+            if (colMinIdx[c] == colMaxIdx[c]) {
+                reduced.add(data.get(colMinIdx[c]));
+            } else if (colMinIdx[c] < colMaxIdx[c]) {
+                reduced.add(data.get(colMinIdx[c]));
+                reduced.add(data.get(colMaxIdx[c]));
+            } else {
+                reduced.add(data.get(colMaxIdx[c]));
+                reduced.add(data.get(colMinIdx[c]));
+            }
+        }
+        return reduced;
     }
 
     /** Zeichnet die (optionale) Verbindungslinie zwischen aufeinanderfolgenden Messpunkten. */
@@ -1184,8 +1258,9 @@ public class ChartPanel extends JPanel {
     }
 
     /** Zeichnet alle sichtbaren Messpunkte als kleine Kreise, wahlweise (siehe
-     *  {@link #colorByMagnitude}) nach ihrem Y-Wert statt in {@link Theme#POINT_A} eingefärbt. */
-    private void drawDataPoints(Graphics2D g2, PlotGeometry geo, List<Point2DDouble> points) {
+     *  {@link #colorByMagnitude}) nach ihrem Y-Wert statt in {@link Theme#POINT_A} eingefärbt.
+     *  {@code data} muss index-parallel zu {@code points} sein (siehe {@link #downsampleForRendering}). */
+    private void drawDataPoints(Graphics2D g2, PlotGeometry geo, List<Point2DDouble> points, List<double[]> data) {
         double pointSize = 7;
         int rightEdge = geo.width - geo.rightPadding;
         g2.setColor(Theme.POINT_A);
@@ -1194,7 +1269,7 @@ public class ChartPanel extends JPanel {
             if (pt.x >= geo.padding && pt.x <= rightEdge
                     && pt.y >= geo.padding && pt.y <= geo.height - geo.padding) {
                 if (colorByMagnitude) {
-                    double normalized = (geo.rangeY > 1e-9) ? (displayData.get(i)[1] - geo.minY) / geo.rangeY : 0.5;
+                    double normalized = (geo.rangeY > 1e-9) ? (data.get(i)[1] - geo.minY) / geo.rangeY : 0.5;
                     g2.setColor(magnitudeColor(normalized));
                 }
                 g2.fill(new Ellipse2D.Double(pt.x - pointSize / 2, pt.y - pointSize / 2, pointSize, pointSize));

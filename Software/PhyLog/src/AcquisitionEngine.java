@@ -30,6 +30,25 @@ public class AcquisitionEngine {
          *  Trigger-Auslösung, damit z. B. ein einmaliges "letztes Spektrum in die Tabelle
          *  übernehmen" nicht bei jeder Statusänderung erneut passiert. */
         void onRecordingStopped();
+
+        /** Eine laufende Aufzeichnung bzw. das Warten auf den Trigger wurde abgebrochen, weil die
+         *  Verbindung zum Gerät verloren ging (siehe {@link #onConnectionStatusChanged}) - wird
+         *  zusätzlich zu, und unmittelbar nach, {@link #onStatusChanged()} und
+         *  {@link #onRecordingStopped()} aufgerufen, damit die UI den Grund des Abbruchs anzeigen
+         *  kann (anders als beim regulären Stopp-Knopf oder {@link #onDurationLimitReached()}). */
+        void onConnectionLostDuringRecording();
+
+        /** Eine laufende Aufzeichnung bzw. das Warten auf den Trigger wurde abgebrochen, weil die
+         *  Firmware für einen Kanal wiederholt einen Sensorfehler gemeldet hat (siehe
+         *  {@link #onErrorLine}, {@code #ERR,<Tag>,<Kanal>} in phylog_firmware.ino - z. B. eine
+         *  ausbleibende I2C-Antwort oder ein HX711-Timeout). Wird, wie
+         *  {@link #onConnectionLostDuringRecording()}, zusätzlich zu und unmittelbar nach
+         *  {@link #onStatusChanged()} und {@link #onRecordingStopped()} aufgerufen.
+         *
+         * @param channelId betroffener Kanal ('A' oder 'B')
+         * @param errorTag  von der Firmware gemeldete Fehlerart (z. B. "I2C", "HX711")
+         */
+        void onSensorErrorDuringRecording(char channelId, String errorTag);
     }
 
     private final MeasurementChannel channelA;
@@ -47,10 +66,34 @@ public class AcquisitionEngine {
      *  Trigger-Bedingung gewartet wird - es wird noch nichts aufgezeichnet. */
     private boolean waitingForTrigger = false;
 
+    /** Bricht eine laufende Aufzeichnung bzw. das Warten auf den Trigger ab, sobald die
+     *  Verbindung zum Gerät verloren geht (siehe {@link #onConnectionStatusChanged}) - sonst
+     *  bliebe der Zustand unbemerkt für immer auf "läuft" stehen, ohne dass je wieder ein
+     *  Messwert eintrifft, bis jemand von Hand auf Stopp klickt. */
+    private final Runnable connectionListener = this::onConnectionStatusChanged;
+
+    /** Anzahl aufeinanderfolgender, von der Firmware gemeldeter Sensorfehler (siehe
+     *  {@link #onErrorLine}) je Kanal, ohne dazwischen eine erfolgreiche Datenzeile für diesen
+     *  Kanal. Wird bei jeder erfolgreich verarbeiteten Datenzeile dieses Kanals zurückgesetzt
+     *  (siehe {@link #onDataLine}) - ein einzelner, vereinzelter Fehler (z. B. kurzer
+     *  I2C-Wackelkontakt, den die Firmware ohnehin selbst per automatischem Bus-Reset behebt,
+     *  siehe {@code noteI2CResult} in phylog_firmware.ino) soll die Aufzeichnung nicht
+     *  gleich abbrechen. */
+    private int sensorErrorStreakA = 0;
+    private int sensorErrorStreakB = 0;
+
+    /** Ab wie vielen aufeinanderfolgenden Fehlermeldungen für denselben Kanal (siehe
+     *  {@link #sensorErrorStreakA}/{@link #sensorErrorStreakB}) eine laufende Aufzeichnung
+     *  abgebrochen wird. Die Firmware meldet Fehler je Kanal höchstens einmal pro Sekunde (siehe
+     *  {@code reportSensorError} in phylog_firmware.ino) - der Schwellenwert entspricht also
+     *  grob so vielen Sekunden andauerndem Fehler. */
+    private static final int SENSOR_ERROR_STREAK_THRESHOLD = 3;
+
     public AcquisitionEngine(MeasurementChannel channelA, MeasurementChannel channelB, Listener listener) {
         this.channelA = channelA;
         this.channelB = channelB;
         this.listener = listener;
+        DeviceConnection.getInstance().addConnectionListener(connectionListener);
     }
 
     /** @return den Kanal 'A' oder 'B'; alles andere fällt auf Kanal A zurück. */
@@ -149,14 +192,29 @@ public class AcquisitionEngine {
         // funktionieren, wenn gerade keine Aufzeichnung läuft.
     }
 
+    /** Reagiert auf jede Verbindungsstatusänderung (siehe {@link DeviceConnection#addConnectionListener}),
+     *  aber nur ein Verbindungsverlust während laufender Aufzeichnung bzw. während auf den
+     *  Trigger gewartet wird löst hier etwas aus - ein Verbindungsaufbau selbst hat auf eine
+     *  bereits laufende Aufzeichnung keinen Einfluss und muss deshalb auch nichts abbrechen. */
+    private void onConnectionStatusChanged() {
+        if (DeviceConnection.getInstance().isConnected()) return;
+        if (!recording && !waitingForTrigger) return;
+
+        stop();
+        listener.onConnectionLostDuringRecording();
+    }
+
     /** Verarbeitet eine vom Gerät empfangene Zeile: Datenzeilen ("D,millis,Kanal,Slot,Rohwert")
      *  für normale Sensoren, {@code #SPEC}-Pakete für Spektrum-Sensoren (siehe
-     *  {@link Sensor#producesSpectrum()}); alles andere wird ignoriert. */
+     *  {@link Sensor#producesSpectrum()}), {@code #ERR}-Pakete für gemeldete Sensorfehler (siehe
+     *  {@link #onErrorLine}); alles andere wird ignoriert. */
     public void onLineReceived(String line) {
         if (line.startsWith("D,")) {
             onDataLine(line);
         } else if (line.startsWith("#SPEC,")) {
             onSpectrumLine(line);
+        } else if (line.startsWith("#ERR,")) {
+            onErrorLine(line);
         }
     }
 
@@ -171,17 +229,65 @@ public class AcquisitionEngine {
             long rawValue = Long.parseLong(parts[4].trim());
 
             if (channelId == 'A' || channelId == 'B') {
+                resetSensorErrorStreak(channelId);
                 ingestSample(channel(channelId), slot, rawValue, millis);
             }
         } catch (NumberFormatException ignored) {
         }
     }
 
+    /** Parst ein Fehlerpaket {@code #ERR,<Tag>,<Kanal>} (siehe {@code reportSensorError} in
+     *  phylog_firmware.ino, z. B. für eine ausbleibende I2C-Antwort oder einen HX711-Timeout) und
+     *  bricht eine laufende Aufzeichnung bzw. das Warten auf den Trigger ab, sobald sich für
+     *  denselben Kanal {@link #SENSOR_ERROR_STREAK_THRESHOLD} solcher Meldungen in Folge häufen,
+     *  ohne dass dazwischen wieder eine gültige Datenzeile für diesen Kanal ankam (siehe
+     *  {@link #onDataLine}) - ein einzelner, vorübergehender Fehler bricht also noch nichts ab. */
+    private void onErrorLine(String line) {
+        String[] parts = line.split(",");
+        if (parts.length < 3) return;
+
+        String errorTag = parts[1].trim();
+        char channelId = parts[2].trim().charAt(0);
+        if (channelId != 'A' && channelId != 'B') return;
+
+        MeasurementChannel ch = channel(channelId);
+        if (!ch.hasSensor()) return;   // Kanal ist gar nicht konfiguriert -> Fehler ignorieren
+
+        int streak = incrementSensorErrorStreak(channelId);
+        if (streak < SENSOR_ERROR_STREAK_THRESHOLD) return;
+
+        resetSensorErrorStreak(channelId);
+        if (!recording && !waitingForTrigger) return;
+
+        stop();
+        listener.onSensorErrorDuringRecording(channelId, errorTag);
+    }
+
+    private int incrementSensorErrorStreak(char channelId) {
+        if (channelId == 'A') return ++sensorErrorStreakA;
+        return ++sensorErrorStreakB;
+    }
+
+    private void resetSensorErrorStreak(char channelId) {
+        if (channelId == 'A') sensorErrorStreakA = 0;
+        else sensorErrorStreakB = 0;
+    }
+
     /** Parst ein Spektrum-Paket {@code #SPEC,<Kanal>,<Bins>,<Abtastrate>,<mag_0>,<mag_1>,...}
      *  (siehe {@code captureAndSendSpectrum} in phylog_firmware.ino) und reicht es an
      *  {@link Listener#onSpectrumFrame} weiter. Magnituden kommen als dBFS·10 (int) an, um
-     *  Bandbreite zu sparen - hier wieder auf dB zurückgerechnet. */
+     *  Bandbreite zu sparen - hier wieder auf dB zurückgerechnet.
+     *
+     *  <p>Wie bei normalen Messwerten (siehe {@link #ingestSample}) wird nur während einer
+     *  laufenden Aufzeichnung weitergereicht - die Firmware streamt Spektrum-Pakete zwar
+     *  durchgehend ab dem Verbindungsaufbau (siehe {@link DeviceConnection#connect}), ohne diese
+     *  Prüfung würde das Diagramm also auch dann live mit Spektren aktualisiert, wenn nie "Start"
+     *  gedrückt wurde. Einen {@code waitingForTrigger}-Fall wie in {@link #ingestSample} gibt es
+     *  hier nicht, da Spektrum-Sensoren keinen Trigger unterstützen (siehe {@code spectrumMode}
+     *  in {@link GUI}, das den Trigger-Button dafür sperrt).</p> */
     private void onSpectrumLine(String line) {
+        if (!recording) return;
+
         String[] parts = line.split(",");
         if (parts.length < 4) return;
 

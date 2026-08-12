@@ -105,12 +105,13 @@ public class SensorConfigDialog extends JDialog {
         setLocationRelativeTo(owner);
         setLayout(new BorderLayout(10, 10));
 
-        Sensor[] availableSensors = SensorRegistry.getAvailableSensors().toArray(new Sensor[0]);
+        Sensor[] availableSensorsA = buildChannelSensorList(current1);
+        Sensor[] availableSensorsB = buildChannelSensorList(current2);
 
         JPanel mainPanel = new JPanel(new GridLayout(1, 2, 15, 0));
         mainPanel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
-        mainPanel.add(buildChannelPanel(channelA, 'A', "Kanal A", availableSensors, current1));
-        mainPanel.add(buildChannelPanel(channelB, 'B', "Kanal B", availableSensors, current2));
+        mainPanel.add(buildChannelPanel(channelA, 'A', "Kanal A", availableSensorsA, current1));
+        mainPanel.add(buildChannelPanel(channelB, 'B', "Kanal B", availableSensorsB, current2));
         add(mainPanel, BorderLayout.CENTER);
 
         JPanel southWrapper = new JPanel();
@@ -130,6 +131,34 @@ public class SensorConfigDialog extends JDialog {
                 stopLiveUpdates();
             }
         });
+    }
+
+    /**
+     * Baut die Sensor-Auswahlliste für genau einen Kanal auf. Jeder Kanal bekommt dabei seine
+     * eigenen, unabhängigen Sensor-Instanzen (siehe {@link SensorRegistry#getAvailableSensors()})
+     * - nur für den bereits aktiven Sensortyp dieses Kanals wird {@code current} selbst
+     * wiederverwendet, statt auch dafür eine frische Instanz zu erzeugen. Damit bleibt eine
+     * zuvor gesetzte Kalibrierung beim erneuten Öffnen des Dialogs erhalten, und - der eigentliche
+     * Zweck der pro-Kanal-Listen - Kanal A und Kanal B teilen sich nie dieselbe Sensor-Instanz,
+     * selbst wenn beide denselben Sensortyp verwenden. Ohne das würde z. B. das Kalibrieren einer
+     * HX711-Wägezelle auf Kanal A denselben Kalibrierfaktor auch auf Kanal B verändern, sobald
+     * dort ebenfalls ein HX711 gewählt ist - der Kalibrierwert steckt im Sensor-Objekt selbst
+     * (siehe {@link Sensor.CalibrationParameter}), nicht im {@link MeasurementChannel}.
+     *
+     * @param current Aktuell für diesen Kanal aktiver Sensor (oder {@code null}/{@link SensorRegistry#NO_SENSOR}).
+     * @return Sensor-Auswahlliste für genau diesen Kanal.
+     */
+    private static Sensor[] buildChannelSensorList(Sensor current) {
+        List<Sensor> sensors = new ArrayList<>(SensorRegistry.getAvailableSensors());
+        if (current != null && current != SensorRegistry.NO_SENSOR) {
+            for (int i = 0; i < sensors.size(); i++) {
+                if (sensors.get(i).getClass() == current.getClass()) {
+                    sensors.set(i, current);
+                    break;
+                }
+            }
+        }
+        return sensors.toArray(new Sensor[0]);
     }
 
     /**

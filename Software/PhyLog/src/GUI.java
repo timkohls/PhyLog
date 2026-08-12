@@ -36,7 +36,12 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     private JSplitPane mainSplitPane;
 
     private JButton btnStart, btnStop, btnSnapshot, btnTrigger, btnZoomIn, btnZoomOut, btnResetZoom, btnClear;
+    private JButton connectButton;
     private JLabel lblTriggerStatus;
+
+    /** Hält den Verbindungsstatus-Listener fest, damit er beim Schließen des Fensters wieder
+     *  abgemeldet werden kann (siehe {@link #dispose()}-Ersatz im WindowListener). */
+    private final Runnable connectionListener = this::updateStatusLabel;
 
     /** "Sensor konfigurieren..."-Menüeintrag - nur nutzbar, solange eine Verbindung zum ESP32
      *  besteht (siehe {@link #openSensorConfigDialog()} und {@link #updateStatusLabel()}), damit
@@ -95,6 +100,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
+                DeviceConnection.getInstance().removeConnectionListener(connectionListener);
                 DeviceConnection.getInstance().disconnect();
             }
         });
@@ -102,6 +108,10 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         initMenuBar();
         initToolBar();
         initMainArea();
+
+        // Hält die Button-Beschriftung synchron mit dem tatsächlichen Verbindungsstatus, auch
+        // wenn dieser über das Terminal-Fenster geändert wurde (siehe DeviceConnection).
+        DeviceConnection.getInstance().addConnectionListener(connectionListener);
 
         // Anfangszustand von Start/Stop, Sensor-Menüpunkt etc. korrekt setzen (siehe
         // #updateStatusLabel), statt bis zur ersten Verbindungsänderung auf die in initToolBar()
@@ -309,23 +319,20 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
             }
         });
 
-        JButton connectButton = new JButton(DeviceConnection.getInstance().isConnected() ? "Trennen" : "Verbinden");
+        connectButton = new JButton(DeviceConnection.getInstance().isConnected() ? "Trennen" : "Verbinden");
         connectButton.setFocusPainted(false);
         connectButton.setMargin(new Insets(2, 8, 2, 8));
 
         connectButton.addActionListener(e -> {
             if (DeviceConnection.getInstance().isConnected()) {
                 DeviceConnection.getInstance().disconnect();
-                connectButton.setText("Verbinden");
             } else {
                 Object selectedItem = portSelector.getSelectedItem();
                 if (selectedItem != null) {
                     String portName = selectedItem.toString().trim();
                     if (!portName.isEmpty()) {
                         boolean success = DeviceConnection.getInstance().connect(portName, BAUD_RATE);
-                        if (success) {
-                            connectButton.setText("Trennen");
-                        } else {
+                        if (!success) {
                             JOptionPane.showMessageDialog(null,
                                     "Verbindung zu " + portName + " fehlgeschlagen.",
                                     "Verbindungsfehler",
@@ -334,7 +341,11 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
                     }
                 }
             }
-            updateStatusLabel();
+            // Kein manuelles connectButton.setText mehr hier: DeviceConnection#connect/#disconnect
+            // benachrichtigt bereits den in der Konstruktion registrierten connectionListener, der
+            // updateStatusLabel() (und damit die Beschriftung) aufruft - so bleibt dieser Button
+            // auch dann korrekt, wenn die Verbindung stattdessen über das Terminal-Fenster
+            // geändert wird.
         });
 
         menuFit.add(itemNone);
@@ -642,6 +653,26 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         lblTriggerStatus.setForeground(Theme.POINT_A);
     }
 
+    /** {@inheritDoc} Im Gegensatz zu {@link #onDurationLimitReached()} kein regulär erreichtes
+     *  Limit, sondern ein Verbindungsabbruch (z. B. abgezogenes Kabel) - deshalb eigene,
+     *  unmissverständliche Meldung statt einer stillschweigend beendeten Aufzeichnung. */
+    @Override
+    public void onConnectionLostDuringRecording() {
+        lblTriggerStatus.setText("Verbindung verloren - Aufnahme gestoppt");
+        lblTriggerStatus.setForeground(Theme.DANGER);
+    }
+
+    /** {@inheritDoc} Anders als {@link #onConnectionLostDuringRecording()} bleibt die serielle
+     *  Verbindung selbst bestehen - die Firmware konnte nur den Sensor auf einem Kanal wiederholt
+     *  nicht auslesen (z. B. abgezogener I2C-Sensor oder HX711-Timeout, siehe
+     *  {@code reportSensorError} in phylog_firmware.ino). Eigene Meldung inkl. Kanal und
+     *  Fehlerart, damit klar ist, welcher Sensor betroffen ist. */
+    @Override
+    public void onSensorErrorDuringRecording(char channelId, String errorTag) {
+        lblTriggerStatus.setText("Sensorfehler Kanal " + channelId + " (" + errorTag + ") - Aufnahme gestoppt");
+        lblTriggerStatus.setForeground(Theme.DANGER);
+    }
+
     /** {@inheritDoc} Übernimmt für jeden Kanal mit Spektrum-Sensor das zuletzt empfangene
      *  Spektrum als Momentaufnahme in dessen Tabelle - die live im Diagramm laufende Anzeige
      *  liefert sonst nirgendwo Zeilen, die sich z. B. per CSV exportieren ließen (siehe
@@ -665,7 +696,11 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     }
 
     /** {@inheritDoc} Speichert das neue Spektrum für den jeweiligen Kanal und zeichnet es direkt
-     *  ins {@link ChartPanel} - unabhängig von Tabelle/Zeitachse, siehe {@link #renderSpectrumChart()}. */
+     *  ins {@link ChartPanel} - unabhängig von Tabelle/Zeitachse, siehe {@link #renderSpectrumChart()}.
+     *  Wird nur während einer laufenden Aufzeichnung aufgerufen ({@link AcquisitionEngine} filtert
+     *  das bereits vor der Weitergabe an den Listener), das Diagramm bleibt nach "Stopp" also auf
+     *  dem letzten während der Aufzeichnung empfangenen Spektrum stehen - analog zu den Tabellen
+     *  normaler Kanäle, die ebenfalls nur während der Aufzeichnung neue Zeilen bekommen. */
     @Override
     public void onSpectrumFrame(char channelId, double[] magnitudesDb, int sampleRateHz) {
         if (channelId == 'A') {
@@ -726,6 +761,10 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
     private void updateStatusLabel() {
         boolean connected = DeviceConnection.getInstance().isConnected();
+
+        if (connectButton != null) {
+            connectButton.setText(connected ? "Trennen" : "Verbinden");
+        }
 
         if (configSensorItem != null) {
             configSensorItem.setEnabled(connected);
