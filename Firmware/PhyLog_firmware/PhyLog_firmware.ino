@@ -123,6 +123,37 @@
  * gestartet statt direkt im Anschluss ans Lesen der vorherigen - dadurch kam bei einem
  * Abtastintervall knapp über der Konversionszeit (z. B. 1 Hz, 1000ms &gt; 750ms) nur alle zwei
  * Intervalle ein Datenpaket statt bei jedem.</p>
+ *
+ * <p>v8.4: Drei Nachbesserungen, keine davon durch konkret beobachtete Fehlfunktion ausgelöst,
+ * sondern beim Review gefunden.</p>
+ * <p>Erstens dieselbe Schwachstellen-Klasse wie beim 1-Wire-Timing (siehe v8.2) jetzt auch bei
+ * {@link #readHX711} behoben: Die 24 Taktflanken liefen bisher über {@code digitalWrite()}/
+ * {@code digitalRead()} (mehrere hundert ns IO-MUX-Overhead je Aufruf, siehe dort) und ohne
+ * {@code noInterrupts()} um die Schleife - ein dazwischenfunkender Interrupt (z. B. der
+ * Millis-Timer) konnte SCK im ungünstigsten Fall über die ~60µs-Sleep-Schwelle des HX711 hinaus
+ * verzögern und den Chip mitten im Auslesen in den Sleep-Modus schicken. Jetzt per neuer
+ * {@link #gpioWriteFast}/{@link #gpioReadFast}-Hilfsfunktionen (direkter Registerzugriff wie bei
+ * {@link #owLow} & Co., aber als reiner Push-Pull-Zugriff ohne dessen Open-Drain-Semantik - SCK
+ * ist ein regulärer Ausgang) und mit der gesamten 24-Bit-Schleife innerhalb von
+ * {@code noInterrupts()}/{@code interrupts()}, analog zu den 1-Wire-Grundoperationen.</p>
+ * <p>Zweitens {@link #sendSpectrumPacket} auf einen einzigen {@code Serial.write()} pro Bild
+ * umgestellt statt bisher 512 einzelner {@code Serial.print()}-Aufrufe für die Magnituden (plus
+ * Header) - jeder einzelne Aufruf formatiert eine Zahl in ASCII und schreibt sie separat raus,
+ * bei 512 Bins und ~16 Bildern/Sekunde (siehe {@link #SPECTRUM_INTERVAL_MS}) waren das über 8000
+ * Print-Aufrufe pro Sekunde, die spürbar CPU-Zeit kosteten - Zeit, die für die zeitkritische
+ * Abtastung des jeweils anderen Kanals fehlte. Jetzt wird das Paket in einen statischen Puffer
+ * ({@link #SPECTRUM_PACKET_BUF_SIZE}) formatiert und als ein einziger {@code Serial.write()}
+ * verschickt.</p>
+ * <p>Drittens die {@code i2s_channel_read()}-Timeouts in {@link #sampleMicrophone} (50ms) und
+ * {@link #captureAndSendSpectrum} (200ms) verkleinert (auf 20ms bzw. 100ms) - beide lagen mit
+ * deutlichem Sicherheitsabstand über der tatsächlich benötigten Zeit, um die jeweils angeforderte
+ * Samplezahl bei {@link #MIC_SAMPLE_RATE_HZ} zu sammeln (max. 32ms bzw. 64ms). Ein hängendes oder
+ * getrenntes Mikrofon blockiert {@code loop()} - und damit auch die Abtastung des jeweils anderen
+ * Kanals, siehe {@link #sampleChannel} - dadurch spürbar kürzer. Behebt das Problem nicht
+ * grundsätzlich: Bei sehr hohen Abtastraten auf dem Nicht-Mikrofon-Kanal bleibt eine denkbare,
+ * wenn auch kleinere, Verzögerung. Eine echte Entkopplung bräuchte einen eigenen FreeRTOS-Task
+ * für die I2S-Lesevorgänge (mit Ringpuffer statt direktem Aufruf aus {@code loop()}) - das ist ein
+ * größerer struktureller Umbau und hier bewusst nicht mitgemacht.</p>
  */
 
 #include <Wire.h>
@@ -204,6 +235,12 @@ const long BAUD_RATE = 460800;
  *  das gespiegelte Konjugat), 1024 Punkte ergeben also die gewünschten 512 nutzbaren Bins. */
 const int SPECTRUM_FFT_SIZE = 1024;
 const int SPECTRUM_OUTPUT_BINS = SPECTRUM_FFT_SIZE / 2;
+
+/** Puffergröße für ein komplettes, im BSS-Bereich statisch gehaltenes Spektrum-Paket (siehe
+ *  {@link #sendSpectrumPacket}): Header ("#SPEC,X,512,16000") plus je Bin bis zu 6 Byte
+ *  (",-1234") plus etwas Marge - großzügig genug, ohne bei jedem Bild neu berechnet werden zu
+ *  müssen. */
+const size_t SPECTRUM_PACKET_BUF_SIZE = 32 + (size_t) SPECTRUM_OUTPUT_BINS * 7;
 
 /** Mindestabstand zwischen zwei gesendeten Spektren. 512 Bins als kompakte Ganzzahlen sind
  *  trotzdem noch rund 2,5 KB pro Bild - bei BAUD_RATE=460800 (~46 KB/s) dauert allein die
@@ -316,11 +353,52 @@ bool readI2CRegister16LE(TwoWire &bus, uint8_t addr, uint8_t reg, uint16_t &outV
   return true;
 }
 
+/** Direkter Registerzugriff für reguläre Push-Pull-Pins (anders als {@link #owLow}/
+ *  {@link #owRelease}, die bewusst nur nach LOW treiben und für HIGH in den hochohmigen
+ *  Eingangszustand wechseln - passend für den Open-Drain-Charakter von 1-Wire, aber falsch für
+ *  einen Pin wie HX711-SCK, der aktiv auf HIGH UND LOW getrieben werden muss). Setzt voraus, dass
+ *  der Pin bereits per {@code pinMode(pin, OUTPUT)} als Ausgang konfiguriert ist (siehe
+ *  {@link #configureChannelHardware}, Fall {@code TYPE_HX711}) - hier wird nur noch der
+ *  Ausgangspegel selbst geschrieben, ohne bei jedem Aufruf erneut die Pin-Richtung anzufassen.
+ *  Gleicher Grund wie bei {@link #owLow}: {@code digitalWrite()} kostet auf dem ESP32 mehrere
+ *  hundert ns bis über 1µs (IO-MUX-Rekonfiguration, Bounds-Checks), direkter Registerzugriff nur
+ *  wenige Taktzyklen - bei den hier genutzten 1µs-Zeitfenstern (siehe {@link #readHX711}) macht
+ *  das den Unterschied zwischen einer sauberen und einer verzerrten Taktflanke. */
+static inline void gpioWriteFast(int pin, bool high) {
+  if (pin < 32) {
+    if (high) GPIO.out_w1ts = (1U << pin);
+    else      GPIO.out_w1tc = (1U << pin);
+  } else {
+    if (high) GPIO.out1_w1ts.val = (1U << (pin - 32));
+    else      GPIO.out1_w1tc.val = (1U << (pin - 32));
+  }
+}
+
+/** Liest den aktuellen Pegel von {@code pin} (0 oder 1) - inhaltlich identisch zu {@link #owRead},
+ *  hier als eigener Name, damit {@link #readHX711} nicht von einer für 1-Wire benannten Funktion
+ *  abhängt, obwohl beide Stellen rein technisch dasselbe Zustandsregister lesen. */
+static inline int gpioReadFast(int pin) {
+  if (pin < 32) {
+    return (GPIO.in >> pin) & 0x1;
+  } else {
+    return (GPIO.in1.data >> (pin - 32)) & 0x1;
+  }
+}
+
 /**
  * Liest einen 24-Bit-Rohwert vom HX711 per Bit-Banging (kein I2C, sondern eigenes DOUT/SCK-
  * Protokoll). Wartet zunächst, bis das Modul über DOUT LOW signalisiert, dass ein Wert bereit
  * ist; ist das nach {@link #HX711_TIMEOUT_MS} nicht der Fall, gilt der Zyklus als fehlgeschlagen
  * (kein angeschlossenes Modul oder noch nicht bereit), statt einen falschen Wert zu senden.
+ *
+ * <p>Die eigentlichen 24 Taktflanken (inkl. der 25., Gain-wählenden) laufen komplett innerhalb
+ * von {@code noInterrupts()}/{@code interrupts()} und nutzen {@link #gpioWriteFast}/
+ * {@link #gpioReadFast} statt {@code digitalWrite()}/{@code digitalRead()} - siehe v8.4-Hinweis
+ * im Dateikopf. Der HX711 geht in Sleep, sobald SCK länger als ~60µs am Stück HIGH bleibt; ohne
+ * diese Absicherung konnte sowohl der IO-MUX-Overhead der Arduino-HAL-Aufrufe als auch ein
+ * dazwischenfunkender Interrupt (z. B. der Millis-Timer) dieses Fenster im ungünstigen Fall
+ * reißen. Die gesamte Schleife (24 Bits + 25. Flanke, je 2µs) bleibt mit rund 50µs klar unter der
+ * Sleep-Schwelle und ist kurz genug, um das System nicht spürbar zu blockieren.</p>
  *
  * <p>Die 25. Taktflanke (nach den 24 Datenbits) wählt Kanal A mit Gain 128 für den nächsten
  * Messzyklus - die in dieser Firmware fest verwendete Standardkonfiguration des HX711.</p>
@@ -337,18 +415,20 @@ bool readHX711(int doutPin, int sckPin, long &outValue) {
   }
 
   long value = 0;
+  noInterrupts();
   for (int i = 0; i < 24; i++) {
-    digitalWrite(sckPin, HIGH);
+    gpioWriteFast(sckPin, true);
     delayMicroseconds(1);
-    value = (value << 1) | digitalRead(doutPin);
-    digitalWrite(sckPin, LOW);
+    value = (value << 1) | gpioReadFast(doutPin);
+    gpioWriteFast(sckPin, false);
     delayMicroseconds(1);
   }
 
-  digitalWrite(sckPin, HIGH); // 25. Flanke: Gain 128 / Kanal A für den nächsten Zyklus
+  gpioWriteFast(sckPin, true); // 25. Flanke: Gain 128 / Kanal A für den nächsten Zyklus
   delayMicroseconds(1);
-  digitalWrite(sckPin, LOW);
+  gpioWriteFast(sckPin, false);
   delayMicroseconds(1);
+  interrupts();
 
   if (value & 0x800000) { // 24-Bit-Zweierkomplement auf 32 Bit vorzeichenrichtig erweitern
     value |= 0xFF000000;
@@ -741,7 +821,7 @@ void processCommand(String command) {
   command.trim();
 
   if (command.equalsIgnoreCase("PING")) {
-    Serial.println("#HELLO,PhyLog-ESP32,fw=8.3");
+    Serial.println("#HELLO,PhyLog-ESP32,fw=8.4");
   } else if (command.equalsIgnoreCase("START")) {
     isStreaming = true;
     Serial.println("#OK,START");
@@ -868,25 +948,36 @@ void computeFFT(float *real, float *imag, int n) {
 /** Sendet ein zuvor über {@link #computeFFT} berechnetes Spektrum als ein Paket:
  *  {@code #SPEC,<Kanal>,<Bins>,<Abtastrate>,<mag_0>,<mag_1>,...}. Magnituden als dBFS·10,
  *  auf int gerundet - spart deutlich Bandbreite gegenüber Floats (bei 512 Werten pro Bild sonst
- *  schnell ein Vielfaches an Übertragungszeit). */
+ *  schnell ein Vielfaches an Übertragungszeit).
+ *
+ * <p>Baut das gesamte Paket in {@link #SPECTRUM_PACKET_BUF_SIZE} zusammen und verschickt es mit
+ * einem einzigen {@code Serial.write()}, statt wie zuvor mit 512+ einzelnen {@code Serial.print()}
+ * -Aufrufen (siehe v8.4-Hinweis im Dateikopf) - jeder einzelne Aufruf formatiert eine Zahl separat
+ * und schreibt sie einzeln raus, was bei ~16 Bildern/Sekunde spürbar CPU-Zeit kostete, die dann
+ * z. B. für die zeitkritische Abtastung des jeweils anderen Kanals fehlte. Der Puffer ist
+ * {@code static}, um bei jedem Aufruf denselben (im BSS-Bereich liegenden) Speicher
+ * wiederzuverwenden, statt ~3,6 KB auf dem Stack des Loop-Tasks zu allozieren.</p>
+ *
+ * <p>Die Abbruchbedingung {@code offset < SPECTRUM_PACKET_BUF_SIZE - 8} in der Schleife ist eine
+ * reine Sicherheitsgrenze gegen einen Pufferüberlauf (acht Byte Reserve für den längsten
+ * möglichen einzelnen Bin-Eintrag plus Newline) - bei der aktuellen Puffergröße und
+ * {@link #SPECTRUM_OUTPUT_BINS}=512 wird sie in der Praxis nie erreicht.</p> */
 void sendSpectrumPacket(char channelName, float *real, float *imag) {
   static const float FULL_SCALE = 8388607.0f; // 2^23 - 1, wie in der Software-Sensorklasse
+  static char packetBuf[SPECTRUM_PACKET_BUF_SIZE];
 
-  Serial.print("#SPEC,");
-  Serial.print(channelName);
-  Serial.print(",");
-  Serial.print(SPECTRUM_OUTPUT_BINS);
-  Serial.print(",");
-  Serial.print(MIC_SAMPLE_RATE_HZ);
+  int offset = snprintf(packetBuf, SPECTRUM_PACKET_BUF_SIZE, "#SPEC,%c,%d,%d",
+                         channelName, SPECTRUM_OUTPUT_BINS, MIC_SAMPLE_RATE_HZ);
 
-  for (int i = 0; i < SPECTRUM_OUTPUT_BINS; i++) {
+  for (int i = 0; i < SPECTRUM_OUTPUT_BINS && offset < (int) SPECTRUM_PACKET_BUF_SIZE - 8; i++) {
     float magnitude = sqrtf(real[i] * real[i] + imag[i] * imag[i]) / SPECTRUM_FFT_SIZE;
     float amplitude = fmaxf(magnitude / FULL_SCALE, 1e-9f); // Division durch 0 im log10 vermeiden
     int dbTimes10 = (int) roundf(20.0f * log10f(amplitude) * 10.0f);
-    Serial.print(",");
-    Serial.print(dbTimes10);
+    offset += snprintf(packetBuf + offset, SPECTRUM_PACKET_BUF_SIZE - offset, ",%d", dbTimes10);
   }
-  Serial.println();
+
+  packetBuf[offset++] = '\n';
+  Serial.write((const uint8_t *) packetBuf, offset);
 }
 
 /** Nimmt {@link #SPECTRUM_FFT_SIZE} Samples vom Mikrofon des angegebenen Kanals auf, wendet ein
@@ -902,7 +993,10 @@ void captureAndSendSpectrum(char channelName) {
 
   static int32_t rawBuffer[SPECTRUM_FFT_SIZE];
   size_t bytesRead = 0;
-  esp_err_t err = i2s_channel_read(handle, rawBuffer, sizeof(rawBuffer), &bytesRead, pdMS_TO_TICKS(200));
+  // Wie bei sampleMicrophone (siehe dort und v8.4-Hinweis im Dateikopf): SPECTRUM_FFT_SIZE
+  // Samples bei MIC_SAMPLE_RATE_HZ sind 64ms, 100ms statt vormals 200ms genügt als Marge und
+  // begrenzt eine mögliche Verzögerung des jeweils anderen Kanals im Fehlerfall stärker.
+  esp_err_t err = i2s_channel_read(handle, rawBuffer, sizeof(rawBuffer), &bytesRead, pdMS_TO_TICKS(100));
   int sampleCount = bytesRead / sizeof(int32_t);
   if (err != ESP_OK || sampleCount < SPECTRUM_FFT_SIZE) {
     reportSensorError(channelName, "I2S");
@@ -951,7 +1045,13 @@ void sampleMicrophone(char channelName) {
   int32_t buffer[MIC_MAX_READ_SAMPLES];
   size_t bytesRead = 0;
 
-  esp_err_t err = i2s_channel_read(handle, buffer, samplesToRead * sizeof(int32_t), &bytesRead, pdMS_TO_TICKS(50));
+  // Timeout bewusst knapp über der maximal benötigten Sammelzeit gewählt (MIC_MAX_READ_SAMPLES
+  // Samples bei MIC_SAMPLE_RATE_HZ sind 32ms) statt der vorherigen 50ms mit größerer Marge -
+  // siehe v8.4-Hinweis im Dateikopf: ein blockierender Lesevorgang hier verzögert auch die
+  // Abtastung des jeweils anderen Kanals (siehe #loop/#sampleChannel), ein kleineres Timeout
+  // begrenzt diese Verzögerung im Fehlerfall (hängendes/getrenntes Mikrofon), ohne bei normalem
+  // Betrieb je greifen zu müssen.
+  esp_err_t err = i2s_channel_read(handle, buffer, samplesToRead * sizeof(int32_t), &bytesRead, pdMS_TO_TICKS(20));
   if (err != ESP_OK || bytesRead == 0) {
     reportSensorError(channelName, "I2S");
     return;
@@ -1032,7 +1132,7 @@ void setup() {
   // Bewusst KEINE Pin-/Bus-Initialisierung hier: welche Rolle die drei Kanal-Pins spielen,
   // hängt vom gewählten Sensortyp ab und wird erst bei SET über configureChannelHardware()
   // hergestellt - beide Kanäle starten unkonfiguriert bei TYPE_NONE.
-  Serial.println("#HELLO,PhyLog-ESP32,fw=8.3");
+  Serial.println("#HELLO,PhyLog-ESP32,fw=8.4");
 }
 
 void loop() {

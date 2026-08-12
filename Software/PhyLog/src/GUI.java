@@ -956,21 +956,43 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         yAxisDual.setEnabled(bothActive);
         yAxisDual.setToolTipText(bothActive ? null : "Nur verfügbar, wenn auf beiden Kanälen ein Sensor aktiv ist.");
 
-        channelA.scrollPane.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createLineBorder(Theme.BORDER),
-                channelTitle('A', channelA),
-                0, 0, null, Theme.TEXT));
+        // Nur die Tabelle(n) der Kanäle anzeigen, die tatsächlich einen Sensor haben - bisher
+        // wurde die Split-Ansicht schon gezeigt, sobald Kanal B einen Sensor hatte, unabhängig
+        // davon, ob Kanal A überhaupt aktiv war (Bug: bei nur Kanal B erschienen trotzdem beide
+        // Tabellen, die von A leer/mit "-- Kein Sensor --"). Ist gar kein Sensor aktiv, bleibt
+        // Kanal A als Platzhalter sichtbar (bisheriges Verhalten) - für diesen Fall verweigert
+        // {@link #startMeasurement} ohnehin das Starten.
+        boolean hasA = channelA.hasSensor();
+        boolean hasB = channelB.hasSensor();
 
-        if (channelB.hasSensor()) {
+        if (hasA) {
+            channelA.scrollPane.setBorder(BorderFactory.createTitledBorder(
+                    BorderFactory.createLineBorder(Theme.BORDER),
+                    channelTitle('A', channelA),
+                    0, 0, null, Theme.TEXT));
+        }
+        if (hasB) {
             channelB.scrollPane.setBorder(BorderFactory.createTitledBorder(
                     BorderFactory.createLineBorder(Theme.BORDER),
                     channelTitle('B', channelB),
                     0, 0, null, Theme.TEXT));
+        }
 
+        if (hasA && hasB) {
             JSplitPane verticalSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, channelA.scrollPane, channelB.scrollPane);
             verticalSplit.setResizeWeight(0.5);
             tableContainerPanel.add(verticalSplit, BorderLayout.CENTER);
+        } else if (hasB) {
+            tableContainerPanel.add(channelB.scrollPane, BorderLayout.CENTER);
         } else {
+            // Weder A noch B aktiv: Kanal A bleibt als Platzhalter sichtbar (bisheriges Verhalten
+            // ohne Sensorauswahl); ist nur A aktiv, ist es ohnehin die richtige Tabelle.
+            if (!hasA) {
+                channelA.scrollPane.setBorder(BorderFactory.createTitledBorder(
+                        BorderFactory.createLineBorder(Theme.BORDER),
+                        channelTitle('A', channelA),
+                        0, 0, null, Theme.TEXT));
+            }
             tableContainerPanel.add(channelA.scrollPane, BorderLayout.CENTER);
         }
 
