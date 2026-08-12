@@ -209,7 +209,7 @@ class MicrophoneSpectrumSensor extends Sensor {
      * Erstellt einen INMP441-Sensor im Spektrum-Modus.
      */
     public MicrophoneSpectrumSensor() {
-        super("INMP441 (Mikrofon, Frequenzspektrum)", "dB", List.of("DB"));
+        super("INMP441 (Audio-Frequenzspektrum)", "dB", List.of("DB"));
     }
 
     @Override
@@ -275,7 +275,7 @@ class MicrophoneSensor extends Sensor {
     private static final double FULL_SCALE = 8_388_607.0; // 2^23 - 1, größter 24-Bit-Betrag
     private static final double REFERENCE_SPL_DB = 94.0;
 
-    private double sensitivityDbfsAt94db = 0.0;
+    private double sensitivityDbfsAt94db = 12.0;
 
     /**
      * Erstellt einen INMP441-Mikrofonsensor.
@@ -310,6 +310,136 @@ class MicrophoneSensor extends Sensor {
     @Override
     public int getMaxSampleRateHz() {
         return 1000; // Firmware liest dafür dynamisch so wenig I2S-Samples wie nötig, siehe
-                     // microphoneReadSampleCount() in phylog_firmware.ino
+        // microphoneReadSampleCount() in phylog_firmware.ino
+    }
+}
+
+/**
+ * Generisches 0-25V-Spannungsteiler-Modul (Teilerverhältnis 5:1, Ausgang "S" für einen
+ * Arduino-ADC mit 5V-Referenz) an einem ESP32-Analogeingang. Nutzt den generischen
+ * {@code TYPE_ANALOG}-Rohwert-Sensortyp der Firmware (siehe {@code sampleChannel} in
+ * phylog_firmware.ino) - die Firmware liefert nur den rohen {@code analogRead()}-Zählerwert,
+ * die komplette Umrechnung in Volt passiert hier.
+ *
+ * <p><b>Wichtiger Hardware-Hinweis (unbedingt vor dem Anschließen prüfen):</b> Der ESP32-
+ * Analogeingang ist auf ca. 3,3V ausgelegt (Standard-Dämpfung ADC_11db), das absolute Maximum
+ * laut Datenblatt liegt bei VDD+0,3V (also ca. 3,6V) - deutlich unter den 5V, die dieses Modul
+ * bei einer Eingangsspannung von 25V an "S" ausgibt (25V / 5 = 5V). Direkt an den ESP32
+ * angeschlossen ist der volle 0-25V-Bereich damit NICHT unbedenklich nutzbar: sicher ist nur
+ * eine Eingangsspannung bis ca. 16,5V (= 3,3V x 5). Für den vollen 25V-Bereich braucht es vor
+ * dem ESP32-Pin einen weiteren Spannungsteiler (bzw. einen Levelshifter bzw. eine Clamp-Diode
+ * auf 3,3V) - ohne das riskiert man, den ADC-Eingang oder den ganzen Chip zu beschädigen.</p>
+ */
+class VoltageDividerSensor extends Sensor {
+
+    /** Referenzspannung des ESP32-ADC bei Standard-Dämpfung (ADC_11db) - eine feste
+     *  Chip-Eigenschaft, kein Kalibrierwert, daher hier Konstante statt {@link CalibrationParameter}.
+     *  Siehe Hardware-Hinweis im Klassenkommentar. */
+    static final double ADC_REFERENCE_VOLTAGE = 3.3;
+    /** Auflösung des ESP32-ADC (12 Bit -> 0..4095), ebenfalls Chip-Eigenschaft statt Kalibrierwert. */
+    static final double ADC_MAX_COUNT = 4095.0;
+
+    /** Teilerverhältnis Eingangsspannung/Ausgangsspannung des Moduls - beim verbreiteten
+     *  "0-25V"-Modul (R1=30k, R2=7,5k) ergibt sich rechnerisch genau 5,0; weicht das konkrete
+     *  Exemplar wegen Bauteiltoleranzen leicht ab, hier über den Kalibrierdialog (mit einem
+     *  bekannten Referenzspannungswert, z. B. einem Multimeter) feinjustierbar. */
+    private double dividerRatio = 3.3;
+
+    /**
+     * Erstellt einen 0-25V-Spannungsteiler-Sensor.
+     */
+    public VoltageDividerSensor() {
+        super("Spannungssensor", "V", List.of("V", "VOLT"));
+    }
+
+    @Override
+    public double decode(int slot, long rawValue) {
+        double adcVoltage = (rawValue / ADC_MAX_COUNT) * ADC_REFERENCE_VOLTAGE;
+        return adcVoltage * dividerRatio;
+    }
+
+    @Override
+    public List<Quantity> getQuantities() {
+        return List.of(new Quantity("Spannung", "V", 0));
+    }
+
+    @Override
+    public String getFirmwareTypeName() {
+        return "ANALOG";
+    }
+
+    @Override
+    public List<CalibrationParameter> getCalibrationParameters() {
+        return List.of(new CalibrationParameter("Teilerverhältnis", "Vin/Vout",
+                () -> dividerRatio, v -> dividerRatio = v));
+    }
+}
+
+/**
+ * DS18B20-Digitalthermometer (Dallas/Maxim) am 1-Wire-Bus. Anders als der zuvor genutzte
+ * NTC-Spannungsteiler-Aufbau liest die Firmware hier keinen rohen ADC-Zählerwert mehr, sondern
+ * das bereits im Sensor-IC selbst temperaturkompensierte 16-Bit-Register aus dem "Scratchpad"
+ * über das 1-Wire-Protokoll (siehe {@code TYPE_DS18B20} in der Firmware) - {@code decode} muss
+ * den Rohwert daher nur noch durch die feste Registerauflösung teilen, keine eigene
+ * Spannungsteiler-/Steinhart-Hart-Rechnung wie zuvor beim NTC-Aufbau mehr durchführen.
+ *
+ * <p>Registerformat bei der (in der Firmware fest eingestellten) 12-Bit-Auflösung: vorzeichen-
+ * behafteter 16-Bit-Wert in 1/16°C-Schritten (siehe DS18B20-Datenblatt, "Temperature Register
+ * Format") - Rohwert 0x0191 entspricht z. B. 25,0625°C.</p>
+ *
+ * <p>Die Konversionszeit bei 12-Bit-Auflösung beträgt laut Datenblatt bis zu 750ms - schnelleres
+ * Abfragen liefert nur denselben, noch nicht aktualisierten Wert erneut (siehe
+ * {@link #getMaxSampleRateHz}).</p>
+ *
+ * <p><b>Hardware-Hinweis:</b> Datenleitung braucht einen Pull-up-Widerstand nach 3,3V (typisch
+ * 4,7kΩ, beim verbreiteten wasserdichten DS18B20-Modul oft bereits auf der Platine verbaut) -
+ * ohne den bleibt der Bus permanent LOW und die Firmware findet beim Adress-Scan keinen Sensor.</p>
+ */
+class DS18B20Sensor extends Sensor {
+
+    /** Registerauflösung bei 12-Bit-Modus: 1 LSB = 1/16°C (siehe Klassenkommentar). */
+    private static final double REGISTER_LSB = 1.0 / 16.0;
+
+    /** Additiver Korrekturwert, z. B. für eine Abweichung gegenüber einem Referenzthermometer -
+     *  der DS18B20 selbst ist werkseitig auf ±0,5°C kalibriert, ein multiplikativer Faktor wie
+     *  beim vorherigen NTC-Aufbau (Teilerverhältnis, Beta-Koeffizient) ergibt hier keinen Sinn,
+     *  ein fester Offset genügt. */
+    private double calibrationOffsetC = 0.0;
+
+    /**
+     * Erstellt einen DS18B20-Temperatursensor.
+     */
+    public DS18B20Sensor() {
+        super("DS18B20 (Temperatur)", "°C", List.of("C", "CELSIUS", "GRAD"));
+    }
+
+    @Override
+    public double decode(int slot, long rawValue) {
+        short signedRaw = (short) (rawValue & 0xFFFF);
+        return signedRaw * REGISTER_LSB + calibrationOffsetC;
+    }
+
+    @Override
+    public List<Quantity> getQuantities() {
+        return List.of(new Quantity("Temperatur", "°C", 0));
+    }
+
+    @Override
+    public String getFirmwareTypeName() {
+        return "DS18B20";
+    }
+
+    @Override
+    public List<CalibrationParameter> getCalibrationParameters() {
+        return List.of(new CalibrationParameter("Offset", "°C",
+                () -> calibrationOffsetC, v -> calibrationOffsetC = v));
+    }
+
+    @Override
+    public int getMaxSampleRateHz() {
+        // 750ms Konversionszeit bei 12-Bit-Auflösung (siehe Klassenkommentar) -> max. ~1,3 Hz;
+        // abgerundet auf 1 Hz als sichere Obergrenze, damit nicht wiederholt derselbe (noch
+        // nicht aktualisierte) Registerwert als vermeintlich neuer Messwert gezählt wird.
+        return 1;
     }
 }

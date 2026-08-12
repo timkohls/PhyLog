@@ -1,10 +1,12 @@
 /*
- * PhyLog ESP32 Firmware v7.9
+ * PhyLog ESP32 Firmware v8.3
  *
- * Sensortypen: I2C (INA219, VEML7700), HX711 (DOUT/SCK, kein I2C), Analog-Pin, sowie ein
- * INMP441-Mikrofon (I2S). Welcher Sensortyp auf Kanal A/B aktiv ist, wird ausschließlich über
- * das serielle Kommando SET,<Kanal>,<Typ> gesetzt (siehe GUI.pushSensorSelectionToFirmware).
- * Beide Kanäle starten bei TYPE_NONE, bis die Software eine Auswahl sendet.
+ * Sensortypen: I2C (INA219, VEML7700), HX711 (DOUT/SCK, kein I2C), Analog-Pin, ein
+ * INMP441-Mikrofon (I2S), ein KY-003-Hall-Modul (digital) sowie ein DS18B20-Digitalthermometer
+ * (1-Wire, siehe v8.1-Hinweis unten). Welcher Sensortyp auf Kanal A/B aktiv ist, wird
+ * ausschließlich über das serielle Kommando SET,<Kanal>,<Typ> gesetzt (siehe
+ * GUI.pushSensorSelectionToFirmware). Beide Kanäle starten bei TYPE_NONE, bis die Software eine
+ * Auswahl sendet.
  *
  * <p>Jeder Kanal-Port (RJ45, 9 Pins) hat genau drei Signal-Pins (Pin 2, 3, 4 - siehe
  * pinout.md), deren Rolle sich erst beim SET-Kommando aus dem gewählten Sensortyp ergibt (siehe
@@ -13,6 +15,7 @@
  *   HX711:     Pin2=DOUT, Pin3=SCK
  *   I2S (Mic): Pin2=WS,   Pin3=BCLK, Pin4=SD
  *   Analog:    Pin2=Eingang
+ *   1-Wire (DS18B20): Pin2=Datenleitung (braucht externen Pull-up nach 3,3V, siehe DS18B20Sensor.java)
  * Nie mehr als drei Adern pro Sensor, unabhängig vom Typ.</p>
  *
  * <p>Das Mikrofon nutzt bewusst den NEUEN I2S-Standardtreiber (driver/i2s_std.h), nicht den
@@ -32,7 +35,8 @@
  * sauberen Reset) zu beheben. Kanal A liegt jetzt komplett auf GPIO 17/16/4 (Pin 2/3/4) - eine
  * auf dem 38-Pin-DevKitC zusammenhängende Dreiergruppe ohne Strapping-Pins, analog zu Kanal B
  * auf 27/26/25. Zusätzlich: automatischer I2C-Bus-Reset nach mehreren Fehlern in Folge (siehe
- * {@link #resetI2CBus}).</p>
+ * {@link #resetI2CBus}). (Stand v7.4 - diese Belegung wurde in v8.0 wegen fehlender ADC-Hardware
+ * auf GPIO17/16 nochmal geändert, siehe dortiger Hinweis.)</p>
  *
  * <p>v7.5: Neuer Live-Modus fürs Mikrofon - statt (bzw. zusätzlich zu) dem einzelnen dB-Wert pro
  * Zyklus liefert das SPEC-Kommando laufend ein 512-Bin-Amplitudenspektrum (siehe
@@ -65,11 +69,66 @@
  * die kürzeste verfügbare Einstellung (25ms, max. 40 Hz) reduziert. Java-seitig kennt jeder
  * Sensor jetzt seine realistische Obergrenze ({@link Sensor#getMaxSampleRateHz}), damit die GUI
  * gar nicht erst höhere Raten anbietet, als der jeweilige Sensor tatsächlich liefern kann.</p>
+ *
+ * <p>v8.0: TYPE_ANALOG las auf Kanal A immer 0 statt eines echten Messwerts - dessen Pin 2 lag
+ * auf GPIO17, das hat auf dem klassischen ESP32 schlicht keine ADC-Hardware, {@code analogRead()}
+ * darauf liefert deshalb unabhängig vom tatsächlich angelegten Signal konstant 0. Kanal B (Pin 2
+ * = GPIO27, ein regulärer ADC2-Kanal) war davon nie betroffen - deshalb lag es nicht an
+ * Wackelkontakt oder Spannungspegel, sondern schlicht an einem für Analog-Sensoren ungeeigneten
+ * Pin. Statt das nur für TYPE_ANALOG per Sonderfall zu umgehen (und Kanal A/B dadurch dauerhaft
+ * unterschiedliche Pin-Belegungen für Analog-Sensoren zu geben), liegt Kanal A jetzt komplett auf
+ * GPIO 32/33/35 statt 17/16/4 (siehe {@link #PINS_CHANNEL_A}) - alle drei ADC1-fähig (Kanal B auf
+ * 27/26/25 bleibt unverändert, dort war ohnehin schon jeder Pin ADC-fähig). Pin 2 ist damit auf
+ * beiden Kanälen gleichermaßen der Analog-Eingang, ohne Sonderfall in {@link #sampleChannel} - nur
+ * die interne Verdrahtung zwischen ESP32 und der Kanal-A-Buchse ändert sich (GPIO17->32,
+ * GPIO16->33, GPIO4->35), an der Steckerbelegung selbst (Pin 2/3/4) ändert sich nichts. 35 statt
+ * dem anfangs gewählten 34, weil 34/35/32/33 auf den gängigen 38-Pin-DevKitC-Boards als
+ * zusammenhängender Viererblock direkt nebeneinander auf der Buchsenleiste liegen (34 am Rand,
+ * dann 35/32/33) - mit 32/33/35 landen die drei tatsächlich genutzten Pins ohne Lücke
+ * nebeneinander, statt mit 34 einen Pin mittendrin ungenutzt zu lassen. Genaue Reihenfolge je
+ * nach Board-Variante im Zweifel gegen den eigenen Bestückungsplan/Aufdruck prüfen.</p>
+ *
+ * <p>v8.1: Neuer Sensortyp TYPE_DS18B20 für das digitale DS18B20-Thermometer am 1-Wire-Bus
+ * (ersetzt den bisherigen NTC-Spannungsteiler-Aufbau über TYPE_ANALOG). Anders als bei allen
+ * bisherigen Sensoren braucht eine einzelne Messung hier bis zu 750ms Konversionszeit (12-Bit-
+ * Auflösung, siehe DS18B20-Datenblatt) - ein direktes {@code delay(750)} mitten in {@link #loop}
+ * hätte in dieser Zeit auch Serial-Kommandos (inkl. STOP) und die Abtastung des jeweils anderen
+ * Kanals eingefroren. {@link #sampleDS18B20} löst die Konversion deshalb nur an und holt das
+ * Ergebnis erst im nächsten Aufruf ab, sobald genug Zeit vergangen ist - keine Blockade, aber
+ * dadurch auch kein Datenpaket bei jedem einzelnen Zyklus (analog zu TYPE_MIC_SPECTRUM, das mit
+ * SPECTRUM_INTERVAL_MS ebenfalls eigenem statt dem regulären Abtasttakt folgt). Das 1-Wire-
+ * Protokoll selbst ist wie beim HX711 ({@link #readHX711}) von Hand bit-gebangt, keine externe
+ * OneWire-Bibliothek nötig.</p>
+ *
+ * <p>v8.2: {@link #oneWireReset}/{@link #oneWireWriteBit}/{@link #oneWireReadBit} nutzten bisher
+ * die normalen Arduino-Funktionen {@code pinMode()}/{@code digitalWrite()}/{@code digitalRead()}.
+ * Auf dem ESP32 kosten diese (anders als auf AVR) jeweils mehrere hundert ns bis über 1µs
+ * (IO-MUX-Rekonfiguration, Bounds-Checks) - bei den hier genutzten 1-2µs-Zeitfenstern verschob
+ * das den tatsächlichen Abtast-/Flankenzeitpunkt gegenüber dem 1-Wire-Timing so stark, dass die
+ * Kommunikation mit einem angeschlossenen DS18B20 fast durchgehend an der CRC8-Prüfung scheiterte
+ * (dauerhafte {@code #ERR,DS18B20}-Meldungen bei korrekt beschaltetem externen Pull-up). Ohne
+ * Pull-up blieb der Bus dagegen dauerhaft auf LOW - dabei "passt" der CRC8 von neun gelesenen
+ * Nullbytes zufällig gegen die ebenfalls gelesene Null-CRC, was eine augenscheinlich gültige,
+ * aber falsche 0°C-Messung ergab, statt eines Fehlers. Fix: {@link #owLow}/{@link #owRelease}/
+ * {@link #owRead} greifen direkt auf die GPIO-Register zu (wenige Taktzyklen statt hunderte ns)
+ * und ersetzen die drei Arduino-HAL-Aufrufe in den zeitkritischen 1-Wire-Grundoperationen.</p>
+ *
+ * <p>v8.3: Zwei Nachbesserungen an v8.2. Erstens ein Tippfehler in {@link #owLow}/{@link #owRelease}:
+ * Für Pins &ge; 32 (GPIO32-39, zweiter Registersatz - auf Kanal A betrifft das bereits den
+ * DS18B20-Datenpin selbst, GPIO32) wurde für die Schreib-Register fälschlich {@code .data} statt
+ * {@code .val} verwendet - dadurch schaltete der Bus auf Kanal A faktisch nie sauber um, mit
+ * demselben "0°C ohne Fehler"-Symptom wie beim fehlenden Pull-up (siehe v8.2-Absatz); Kanal B
+ * (Pins 27/26/25, alle &lt; 32) war nie betroffen. Zweitens ein Zeitverhalten-Bug in
+ * {@link #sampleDS18B20}: die nächste Konversion wurde bisher erst beim übernächsten Aufruf
+ * gestartet statt direkt im Anschluss ans Lesen der vorherigen - dadurch kam bei einem
+ * Abtastintervall knapp über der Konversionszeit (z. B. 1 Hz, 1000ms &gt; 750ms) nur alle zwei
+ * Intervalle ein Datenpaket statt bei jedem.</p>
  */
 
 #include <Wire.h>
 #include <driver/i2s_std.h>
 #include <math.h>
+#include "soc/gpio_struct.h"
 
 enum SensorType {
   TYPE_NONE = 0,
@@ -79,7 +138,8 @@ enum SensorType {
   TYPE_HX711 = 4,
   TYPE_MICROPHONE = 5,
   TYPE_MIC_SPECTRUM = 6,
-  TYPE_HALL = 7
+  TYPE_HALL = 7,
+  TYPE_DS18B20 = 8
 };
 
 SensorType configChannelA = TYPE_NONE;
@@ -88,7 +148,8 @@ SensorType configChannelB = TYPE_NONE;
 /** Die drei Signal-Pins eines Kanal-Ports (Steckerposition 2, 3, 4 - siehe pinout.md), deren
  *  Rolle vom gewählten Sensortyp abhängt (siehe {@link #configureChannelHardware}):
  *  I2C: [0]=SDA, [1]=SCL   HX711: [0]=DOUT, [1]=SCK   I2S: [0]=WS, [1]=BCLK, [2]=SD
- *  Analog: [0]=Eingang   Hall (KY-003): [0]=Signal
+ *  Analog: [0]=Eingang (auf beiden Kanälen, siehe v8.0-Hinweis oben)   Hall (KY-003): [0]=Signal
+ *  DS18B20 (1-Wire): [0]=Datenleitung (braucht externen Pull-up nach 3,3V)
  *
  *  ACHTUNG bei künftigen Pin-Änderungen: GPIO 0, 2, 5, 12 und 15 sind beim ESP32
  *  "Strapping-Pins" - ihr Pegel wird nur im Moment des Resets ausgelesen und beeinflusst u. a.
@@ -97,8 +158,17 @@ SensorType configChannelB = TYPE_NONE;
  *  Flash-Spannung booten und landet in einer Watchdog-Reset-Schleife (TG0WDT_SYS_RESET), noch
  *  bevor setup() überhaupt läuft - genau das Bild "geht nur nach Reflash weg, tritt vor allem
  *  auf, wenn Sensoren schon beim Einstecken angeschlossen sind". Deshalb bewusst KEINER dieser
- *  Pins hier verwendet. */
-const int PINS_CHANNEL_A[3] = {17, 16, 4};
+ *  Pins hier verwendet.
+ *
+ *  Kanal A liegt seit v8.0 auf GPIO 32/33/35 statt vormals 17/16/4 - alle drei ADC1-fähig (32/33
+ *  zusätzlich normale, bidirektionale GPIOs für SDA/SCK/WS-Rollen; 35 ist ADC1-fähig, aber
+ *  Eingang-only, was für die dort einzige benötigte Rolle - I2S "din" - ausreicht). GPIO16/17
+ *  wurden verlassen, weil sie auf dem klassischen ESP32 gar keine ADC-Hardware besitzen und
+ *  TYPE_ANALOG dort immer 0 lieferte, unabhängig vom angelegten Signal (siehe v8.0-Hinweis oben).
+ *  Kanal B auf 27/26/25 bleibt unverändert, dort war ohnehin schon jeder der drei Pins ADC-fähig
+ *  (Bonus: 32/33/35 hängen an ADC1, das anders als ADC2 - auf dem 27/26/25 von Kanal B - nicht mit
+ *  WiFi kollidiert, hier aktuell aber ungenutzt, da diese Firmware kein WiFi verwendet). */
+const int PINS_CHANNEL_A[3] = {32, 33, 35};
 const int PINS_CHANNEL_B[3] = {27, 26, 25};
 
 const uint8_t ADDR_INA219   = 0x40;
@@ -287,6 +357,220 @@ bool readHX711(int doutPin, int sckPin, long &outValue) {
   return true;
 }
 
+// --- DS18B20 (1-Wire), TYPE_DS18B20 ---
+//
+// Von Hand bit-gebangtes 1-Wire-Protokoll nach den Timing-Vorgaben aus dem DS18B20-Datenblatt -
+// keine externe OneWire-Bibliothek, analog zur bereits manuell implementierten HX711-Anbindung
+// oben. Alle drei Grundoperationen (Reset, Bit schreiben, Bit lesen) laufen mit kurzzeitig
+// deaktivierten Interrupts: die engsten hier genutzten Zeitfenster liegen bei nur 1-2µs, leicht
+// zu reißen z. B. durch die I2S-DMA-ISR des Mikrofons auf dem jeweils anderen Kanal.
+//
+// owLow()/owRelease()/owRead() ersetzen dafür pinMode()/digitalWrite()/digitalRead() durch
+// direkten Zugriff auf die GPIO-Register: Die Arduino-HAL-Funktionen kosten auf dem ESP32
+// (anders als auf AVR) jeweils mehrere hundert ns bis über 1µs (IO-MUX-Rekonfiguration,
+// Bounds-Checks) - bei den hier genutzten 1-2µs-Zeitfenstern verschiebt allein das
+// Umschalten von Pinrichtung/Pegel den eigentlichen Abtast-/Flankenzeitpunkt erheblich und
+// zerstört damit praktisch jede Übertragung (siehe v8.2-Hinweis im Dateikopf). Direkter
+// Registerzugriff kostet dagegen nur wenige CPU-Taktzyklen. GPIO32-39 hängen an einem zweiten
+// Register-Satz (GPIO.out1/enable1/in1 statt .../in), daher die Fallunterscheidung nach Pin 32.
+
+/** Zieht {@code pin} aktiv auf LOW (Open-Drain-Charakter des 1-Wire-Busses: nur Treiben nach
+ *  LOW, niemals aktiv nach HIGH - siehe {@link #owRelease}).
+ *
+ *  <p>ACHTUNG bei den GPIO32-39-Registern (Pin &ge; 32): Die Schreib-Register {@code out1_w1ts}/
+ *  {@code out1_w1tc}/{@code enable1_w1ts}/{@code enable1_w1tc} sind Unions mit Feld {@code .val}
+ *  - anders als das reine Zustandsregister {@link #owRead}s {@code in1}, das tatsächlich
+ *  {@code .data} heißt. Eine frühere Version dieser Funktion griff hier fälschlich überall auf
+ *  {@code .data} zu; betraf ausschließlich Pins &ge; 32 (auf Kanal A z. B. Pin 32 selbst) und
+ *  äußerte sich wie ein dauerhaft feststehender Bus - Kanal B (Pins 27/26/25, alle &lt; 32) war
+ *  nie betroffen.</p> */
+static inline void owLow(int pin) {
+  if (pin < 32) {
+    GPIO.out_w1tc = (1U << pin);
+    GPIO.enable_w1ts = (1U << pin);
+  } else {
+    GPIO.out1_w1tc.val = (1U << (pin - 32));
+    GPIO.enable1_w1ts.val = (1U << (pin - 32));
+  }
+}
+
+/** Gibt {@code pin} wieder als Eingang frei - der externe Pull-up zieht den Bus auf HIGH, kein
+ *  aktives Treiben nach HIGH nötig (und für einen Open-Drain-Bus wie 1-Wire auch nicht zulässig,
+ *  falls mehrere Teilnehmer gleichzeitig senden könnten). Zum Feldnamen-Hinweis siehe {@link #owLow}. */
+static inline void owRelease(int pin) {
+  if (pin < 32) {
+    GPIO.enable_w1tc = (1U << pin);
+  } else {
+    GPIO.enable1_w1tc.val = (1U << (pin - 32));
+  }
+}
+
+/** Liest den aktuellen Pegel von {@code pin} (0 oder 1). Nutzt bewusst {@code .data} (nicht
+ *  {@code .val} wie die Schreib-Register in {@link #owLow}) - {@code in1} ist das reine
+ *  Zustandsregister, dessen Payload-Bitfeld tatsächlich so heißt. */
+static inline int owRead(int pin) {
+  if (pin < 32) {
+    return (GPIO.in >> pin) & 0x1;
+  } else {
+    return (GPIO.in1.data >> (pin - 32)) & 0x1;
+  }
+}
+
+/** Sendet den 1-Wire-Reset-Puls und wertet den Presence-Puls des Sensors aus.
+ *
+ * @return {@code true}, wenn ein Gerät geantwortet hat.
+ */
+bool oneWireReset(int pin) {
+  owLow(pin);
+  delayMicroseconds(480);
+
+  noInterrupts();
+  owRelease(pin); // Bus loslassen - der externe Pull-up zieht ihn wieder auf HIGH
+  delayMicroseconds(70);
+  bool presence = (owRead(pin) == 0); // Gerät antwortet mit einem kurzen LOW-Puls
+  interrupts();
+
+  delayMicroseconds(410); // Rest des insgesamt >=480µs breiten Resetfensters abwarten
+  return presence;
+}
+
+/** Schreibt ein einzelnes Bit per 1-Wire-Zeitschlitz (Länge des LOW-Pulses codiert 0/1). */
+void oneWireWriteBit(int pin, uint8_t bitValue) {
+  noInterrupts();
+  owLow(pin);
+  delayMicroseconds(bitValue ? 6 : 60);
+  owRelease(pin);
+  interrupts();
+  delayMicroseconds(bitValue ? 64 : 10); // Zeitschlitz auf insgesamt >=70µs auffüllen
+}
+
+/** Liest ein einzelnes Bit per 1-Wire-Zeitschlitz: kurz selbst LOW ziehen, dann loslassen und
+ *  innerhalb des vom Sensor ggf. verlängerten LOW-Fensters abtasten. */
+uint8_t oneWireReadBit(int pin) {
+  noInterrupts();
+  owLow(pin);
+  delayMicroseconds(2);
+  owRelease(pin);
+  delayMicroseconds(10);
+  uint8_t bitValue = owRead(pin);
+  interrupts();
+  delayMicroseconds(50); // Zeitschlitz auf insgesamt >=60µs auffüllen
+  return bitValue;
+}
+
+void oneWireWriteByte(int pin, uint8_t value) {
+  for (int i = 0; i < 8; i++) {
+    oneWireWriteBit(pin, value & 0x01);
+    value >>= 1;
+  }
+}
+
+uint8_t oneWireReadByte(int pin) {
+  uint8_t value = 0;
+  for (int i = 0; i < 8; i++) {
+    value |= (oneWireReadBit(pin) << i);
+  }
+  return value;
+}
+
+/** Dallas/Maxim-CRC8 (Polynom x^8+x^5+x^4+1, reflektiert) über das Scratchpad, zur Absicherung
+ *  gegen durch Störungen verfälschte 1-Wire-Übertragungen - anders als bei I2C (siehe
+ *  {@link #readI2CRegister16}) gibt es hier keine Hardware-Bestätigung auf Byte-Ebene. */
+uint8_t oneWireCRC8(const uint8_t *data, uint8_t len) {
+  uint8_t crc = 0;
+  for (uint8_t i = 0; i < len; i++) {
+    uint8_t inByte = data[i];
+    for (uint8_t bit = 0; bit < 8; bit++) {
+      uint8_t mix = (crc ^ inByte) & 0x01;
+      crc >>= 1;
+      if (mix) crc ^= 0x8C;
+      inByte >>= 1;
+    }
+  }
+  return crc;
+}
+
+/** Konversionszeit bei 12-Bit-Auflösung (Werkseinstellung des DS18B20 nach jedem Power-on/Reset,
+ *  hier nie umkonfiguriert) - siehe DS18B20-Datenblatt sowie DS18B20Sensor.java, das denselben
+ *  Wert für {@link Sensor#getMaxSampleRateHz} zugrunde legt. */
+const unsigned long DS18B20_CONVERSION_MS = 750;
+
+/** Ob für den jeweiligen Kanal aktuell eine Konversion läuft, deren Ergebnis noch nicht
+ *  abgeholt wurde - siehe {@link #sampleDS18B20}. Bei einem Kanalwechsel weg von TYPE_DS18B20
+ *  über {@link #releaseChannelHardware} zurückgesetzt, damit ein späteres erneutes Einschalten
+ *  nicht versucht, das Scratchpad einer nie gestarteten (oder eines ganz anderen Sensors
+ *  zugehörigen) Konversion zu lesen. */
+bool ds18b20ConversionPendingA = false;
+bool ds18b20ConversionPendingB = false;
+unsigned long ds18b20ConversionStartMsA = 0;
+unsigned long ds18b20ConversionStartMsB = 0;
+
+/** Liest (ohne selbst eine neue Konversion anzustoßen) das Scratchpad einer bereits
+ *  abgeschlossenen DS18B20-Konversion aus und prüft dessen CRC8.
+ *
+ * @param outValue Ziel für das vorzeichenbehaftete 16-Bit-Temperaturregister (1/16°C-Schritte,
+ *                 siehe DS18B20Sensor.decode)
+ * @return {@code true} bei Erfolg (Presence-Puls und gültige CRC8)
+ */
+bool readDS18B20Scratchpad(int pin, long &outValue) {
+  if (!oneWireReset(pin)) return false;
+  oneWireWriteByte(pin, 0xCC); // Skip ROM - setzt genau einen Sensor an diesem Pin voraus
+  oneWireWriteByte(pin, 0xBE); // Read Scratchpad
+
+  uint8_t scratchpad[9];
+  for (int i = 0; i < 9; i++) {
+    scratchpad[i] = oneWireReadByte(pin);
+  }
+  if (oneWireCRC8(scratchpad, 8) != scratchpad[8]) return false;
+
+  outValue = (int16_t) ((scratchpad[1] << 8) | scratchpad[0]);
+  return true;
+}
+
+/**
+ * Tastet einen DS18B20 nicht-blockierend ab. Anders als bei allen anderen Sensortypen liefert
+ * ein Aufruf hier nicht bei jedem Zyklus ein Datenpaket: Die bis zu {@link #DS18B20_CONVERSION_MS}
+ * dauernde Konversion würde als direktes {@code delay()} mitten in {@link #loop} auch Serial-
+ * Kommandos (inkl. STOP) und die Abtastung des jeweils anderen Kanals blockieren (siehe
+ * Klassenkommentar, v8.1-Absatz). Stattdessen: Bei einer laufenden Konversion wird zuerst geprüft,
+ * ob genug Zeit vergangen ist - falls ja, wird das Scratchpad gelesen und ein Datenpaket verschickt
+ * (bzw. bei einem CRC-/Presence-Fehler {@link #reportSensorError} aufgerufen). Direkt im Anschluss
+ * (noch im selben Aufruf, ohne auf den nächsten Zyklus zu warten) wird sofort die nächste
+ * Konversion gestartet - das hält den Abstand zwischen zwei Datenpaketen bei genau einem
+ * Abtastintervall, sofern dieses &ge; {@link #DS18B20_CONVERSION_MS} ist. (v8.2 startete die
+ * nächste Konversion erst beim nachfolgenden Aufruf statt sofort - das verdoppelte den
+ * tatsächlichen Abstand zwischen zwei Werten gegenüber dem in der GUI eingestellten Intervall,
+ * z. B. nur noch 1 Wert alle 2s bei eingestellter 1 Hz statt jede Sekunde einer.)
+ */
+void sampleDS18B20(char channelName, int pin) {
+  bool &pending = (channelName == 'A') ? ds18b20ConversionPendingA : ds18b20ConversionPendingB;
+  unsigned long &startMs = (channelName == 'A') ? ds18b20ConversionStartMsA : ds18b20ConversionStartMsB;
+
+  if (pending) {
+    if (millis() - startMs < DS18B20_CONVERSION_MS) return; // Konversion läuft noch
+
+    long rawTemp;
+    bool ok = readDS18B20Scratchpad(pin, rawTemp);
+    pending = false;
+
+    if (ok) {
+      sendDataPacket(channelName, 0, rawTemp);
+    } else {
+      reportSensorError(channelName, "DS18B20");
+    }
+  }
+
+  // Nächste Konversion sofort anstoßen, statt erst beim nächsten Aufruf (siehe Methodenkommentar).
+  if (!oneWireReset(pin)) {
+    reportSensorError(channelName, "DS18B20");
+    return;
+  }
+  oneWireWriteByte(pin, 0xCC); // Skip ROM
+  oneWireWriteByte(pin, 0x44); // Convert T
+  startMs = millis();
+  pending = true;
+}
+
 /** Schreibt die Init-Konfiguration eines I2C-Sensortyps auf den angegebenen (bereits über
  *  {@link #configureChannelHardware} gestarteten) Bus. Meldet einen Fehler, falls einer der
  *  Schreibvorgänge fehlschlägt. */
@@ -401,6 +685,10 @@ void releaseChannelHardware(char channelName, SensorType oldType) {
       i2s_del_channel(handle);
       handle = NULL;
     }
+  } else if (oldType == TYPE_DS18B20) {
+    // Siehe Kommentar bei ds18b20ConversionPendingA/B: eine noch laufende Konversion wird beim
+    // Wegschalten verworfen, statt ihr Ergebnis später fälschlich einem neuen Sensor zuzuordnen.
+    (channelName == 'A' ? ds18b20ConversionPendingA : ds18b20ConversionPendingB) = false;
   }
 }
 
@@ -429,6 +717,14 @@ void configureChannelHardware(char channelName, SensorType newType, const int pi
       // robuster gegen Module ohne eigenen Pull-up.
       pinMode(pins[0], INPUT_PULLUP);
       break;
+    case TYPE_DS18B20:
+      // Bus in Ruhestellung: oneWireReset()/-WriteBit()/-ReadBit() schalten pinMode() für die
+      // eigentliche Kommunikation ohnehin bei jedem Zugriff selbst um (siehe dort) - hier nur
+      // der definierte Ausgangszustand. Kein interner Pull-up wie bei TYPE_HALL: der 1-Wire-Bus
+      // braucht einen externen Pull-up nach 3,3V (typisch 4,7kΩ), der interne ESP32-Pull-up ist
+      // dafür in der Praxis zu hochohmig (siehe Hardware-Hinweis in DS18B20Sensor.java).
+      pinMode(pins[0], INPUT);
+      break;
     case TYPE_MICROPHONE:
     case TYPE_MIC_SPECTRUM:
       // Identische I2S-Hardware für beide Mikrofon-"Sensoren" - TYPE_MIC_SPECTRUM liefert nur
@@ -445,7 +741,7 @@ void processCommand(String command) {
   command.trim();
 
   if (command.equalsIgnoreCase("PING")) {
-    Serial.println("#HELLO,PhyLog-ESP32,fw=7.9");
+    Serial.println("#HELLO,PhyLog-ESP32,fw=8.3");
   } else if (command.equalsIgnoreCase("START")) {
     isStreaming = true;
     Serial.println("#OK,START");
@@ -475,6 +771,7 @@ void processCommand(String command) {
       else if (sensorTypeName.equalsIgnoreCase("MIC")) newType = TYPE_MICROPHONE;
       else if (sensorTypeName.equalsIgnoreCase("MICSPEC")) newType = TYPE_MIC_SPECTRUM;
       else if (sensorTypeName.equalsIgnoreCase("HALL")) newType = TYPE_HALL;
+      else if (sensorTypeName.equalsIgnoreCase("DS18B20")) newType = TYPE_DS18B20;
 
       if (targetChannel == 'A') {
         releaseChannelHardware('A', configChannelA);
@@ -718,6 +1015,8 @@ void sampleChannel(char channelName, SensorType type, const int pins[3]) {
     // allen anderen Sensoren auch - die Firmware kennt nur Rohwerte.
     int rawState = digitalRead(pins[0]);
     sendDataPacket(channelName, 0, rawState);
+  } else if (type == TYPE_DS18B20) {
+    sampleDS18B20(channelName, pins[0]);
   } else if (type == TYPE_MICROPHONE) {
     sampleMicrophone(channelName);
   } else if (type == TYPE_MIC_SPECTRUM) {
@@ -733,7 +1032,7 @@ void setup() {
   // Bewusst KEINE Pin-/Bus-Initialisierung hier: welche Rolle die drei Kanal-Pins spielen,
   // hängt vom gewählten Sensortyp ab und wird erst bei SET über configureChannelHardware()
   // hergestellt - beide Kanäle starten unkonfiguriert bei TYPE_NONE.
-  Serial.println("#HELLO,PhyLog-ESP32,fw=7.9");
+  Serial.println("#HELLO,PhyLog-ESP32,fw=8.3");
 }
 
 void loop() {

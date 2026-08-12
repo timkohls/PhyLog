@@ -115,7 +115,7 @@ public class ChartPanel extends JPanel {
 
     /** Unveränderte, zuletzt über {@link #setData(List)} gesetzte Messdaten (Hauptgröße - einzige,
      *  die Zoom, Freihand-Auswahl, Fit und Chi² einbezieht). Wird von Zoom/Freihand-Auswahl NIE
-     *  verändert - siehe {@link #viewMinX} für den eigentlichen Zoom-Zustand. */
+     *  verändert - siehe {@link #viewport} für den eigentlichen Zoom-Zustand. */
     private List<double[]> originalData = new ArrayList<>();
     /** Auf das aktuelle Zoom-/Auswahlfenster eingeschränkte Teilmenge von {@link #originalData}
      *  (siehe {@link #recomputeDisplayData()}) - diese, nicht {@link #originalData}, geht in
@@ -123,13 +123,13 @@ public class ChartPanel extends JPanel {
      *  sichtbaren Bereich eingrenzt (siehe Hinweistext in {@link ChiSquareInfoDialog}). */
     private List<double[]> displayData = new ArrayList<>();
 
-    /** Aktuelles Zoom-/Auswahlfenster (Rubber-Band- oder Freihand-Auswahl), {@code null} = kein
-     *  Fenster gesetzt, es wird der volle Datenbereich verwendet. Anders als früher wird dabei
-     *  nie ein Datenpunkt aus {@link #originalData} gelöscht: {@link #recomputeDisplayData()}
-     *  leitet {@link #displayData} bei jeder Änderung (neue Messwerte, neues Fenster, Reset)
-     *  frisch aus {@link #originalData} ab, das Fenster bleibt bis zum expliziten Zurücksetzen
-     *  erhalten und übersteht so auch eintreffende Live-Messwerte. */
-    private Double viewMinX = null, viewMaxX = null, viewMinY = null, viewMaxY = null;
+    /** Aktuelles Zoom-/Auswahlfenster (Rubber-Band- oder Freihand-Auswahl) sowie Zoom-Faktor und
+     *  der flüchtige Zustand einer laufenden Maus-Interaktion - siehe {@link ChartViewport}.
+     *  Anders als früher wird dabei nie ein Datenpunkt aus {@link #originalData} gelöscht:
+     *  {@link #recomputeDisplayData()} leitet {@link #displayData} bei jeder Änderung (neue
+     *  Messwerte, neues Fenster, Reset) frisch aus {@link #originalData} ab, das Fenster bleibt
+     *  bis zum expliziten Zurücksetzen erhalten und übersteht so auch eintreffende Live-Messwerte. */
+    private final ChartViewport viewport = new ChartViewport();
 
     /** Zusätzliche, gleichzeitig dargestellte Kurven (siehe {@link Series}). Nehmen nicht an
      *  Zoom, Freihand-Auswahl, Fit oder Chi² teil - das bleibt der Hauptgröße vorbehalten. */
@@ -171,14 +171,7 @@ public class ChartPanel extends JPanel {
      */
     private boolean dualYAxisMode = false;
 
-    private double zoomFactor = 1.0;
     private Point mousePoint = null;
-
-    private Point dragStart = null;
-    private Point dragEnd = null;
-    private final List<Point> freehandPoints = new ArrayList<>();
-    private boolean isRightButtonDragging = false;
-    private boolean rightClickTriggered = false;
 
     /** Klickfläche des kleinen "i"-Symbols neben der Chi²-Anzeige, wird bei jedem Zeichnen aktualisiert. */
     private Rectangle infoButtonBounds = new Rectangle();
@@ -231,45 +224,44 @@ public class ChartPanel extends JPanel {
             @Override
             public void mousePressed(MouseEvent e) {
                 if (SwingUtilities.isLeftMouseButton(e)) {
-                    dragStart = e.getPoint();
-                    dragEnd = e.getPoint();
+                    viewport.beginRubberBand(e.getPoint());
                     repaint();
                 } else if (SwingUtilities.isRightMouseButton(e)) {
-                    isRightButtonDragging = true;
-                    rightClickTriggered = false;
-                    freehandPoints.clear();
-                    freehandPoints.add(e.getPoint());
+                    viewport.beginFreehand(e.getPoint());
                     repaint();
                 }
             }
 
             @Override
             public void mouseDragged(MouseEvent e) {
-                if (SwingUtilities.isLeftMouseButton(e) && dragStart != null) {
-                    dragEnd = e.getPoint();
+                if (SwingUtilities.isLeftMouseButton(e) && viewport.getDragStart() != null) {
+                    viewport.updateRubberBand(e.getPoint());
                     repaint();
-                } else if (SwingUtilities.isRightMouseButton(e) && isRightButtonDragging) {
-                    rightClickTriggered = true;
-                    freehandPoints.add(e.getPoint());
+                } else if (SwingUtilities.isRightMouseButton(e) && viewport.isRightButtonDragging()) {
+                    viewport.addFreehandPoint(e.getPoint());
                     repaint();
                 }
             }
 
             @Override
             public void mouseReleased(MouseEvent e) {
-                if (SwingUtilities.isLeftMouseButton(e) && dragStart != null && dragEnd != null) {
-                    applySelectionZoom(dragStart, dragEnd);
-                    dragStart = null;
-                    dragEnd = null;
+                if (SwingUtilities.isLeftMouseButton(e) && viewport.hasRubberBand()) {
+                    if (viewport.applySelectionZoom(viewport.getDragStart(), viewport.getDragEnd(),
+                            viewportGeometry(), originalData)) {
+                        onViewportWindowChanged();
+                    }
+                    viewport.clearRubberBand();
                     repaint();
                 } else if (SwingUtilities.isRightMouseButton(e)) {
-                    isRightButtonDragging = false;
-                    if (rightClickTriggered && freehandPoints.size() > 2) {
-                        applyFreehandSelection(freehandPoints);
+                    viewport.endFreehandDrag();
+                    if (viewport.isRightClickTriggered() && viewport.getFreehandPoints().size() > 2) {
+                        if (viewport.applyFreehandSelection(viewport.getFreehandPoints(), viewportGeometry(), originalData)) {
+                            onViewportWindowChanged();
+                        }
                     } else {
                         resetZoom();
                     }
-                    freehandPoints.clear();
+                    viewport.clearFreehand();
                     repaint();
                 }
             }
@@ -300,7 +292,7 @@ public class ChartPanel extends JPanel {
 
     /**
      * Setzt die anzuzeigenden Messdaten komplett neu (z. B. nach einem CSV-Import oder nach dem
-     * Empfang neuer Live-Messwerte). Ein aktives Zoom-/Auswahlfenster (siehe {@link #viewMinX})
+     * Empfang neuer Live-Messwerte). Ein aktives Zoom-/Auswahlfenster (siehe {@link #viewport})
      * bleibt dabei bewusst erhalten - sonst würde jeder neu eintreffende Live-Messwert den
      * gerade gesetzten Zoom sofort wieder aufheben. Zum Zurücksetzen dient {@link #resetZoom()}.
      *
@@ -315,23 +307,43 @@ public class ChartPanel extends JPanel {
     }
 
     /** Leitet {@link #displayData} aus {@link #originalData} ab: unverändert ohne aktives
-     *  Zoom-/Auswahlfenster, sonst auf {@link #viewMinX}/{@link #viewMaxX}/{@link #viewMinY}/
-     *  {@link #viewMaxY} eingeschränkt. {@link #originalData} selbst wird dabei nie verändert -
-     *  ein Zoom kann also jederzeit über {@link #resetZoom()} rückgängig gemacht werden, ohne
-     *  dass zwischenzeitlich Messwerte verloren gegangen wären. */
+     *  Zoom-/Auswahlfenster, sonst auf das Fenster aus {@link #viewport} eingeschränkt.
+     *  {@link #originalData} selbst wird dabei nie verändert - ein Zoom kann also jederzeit über
+     *  {@link #resetZoom()} rückgängig gemacht werden, ohne dass zwischenzeitlich Messwerte
+     *  verloren gegangen wären. */
     private void recomputeDisplayData() {
-        if (viewMinX == null) {
+        if (!viewport.isActive()) {
             displayData = new ArrayList<>(originalData);
             return;
         }
 
         List<double[]> filtered = new ArrayList<>();
         for (double[] pt : originalData) {
-            if (pt[0] >= viewMinX && pt[0] <= viewMaxX && pt[1] >= viewMinY && pt[1] <= viewMaxY) {
+            if (pt[0] >= viewport.getMinX() && pt[0] <= viewport.getMaxX()
+                    && pt[1] >= viewport.getMinY() && pt[1] <= viewport.getMaxY()) {
                 filtered.add(pt);
             }
         }
         displayData = filtered;
+    }
+
+    /** Wird aufgerufen, nachdem {@link #viewport} ein neues Zoom-/Auswahlfenster gesetzt hat
+     *  (Rubber-Band- oder Freihand-Auswahl) - zieht {@link #displayData} nach und invalidiert
+     *  Fit- und Sigma-Cache, analog zu {@link #resetZoom()}. */
+    private void onViewportWindowChanged() {
+        recomputeDisplayData();
+        fitDirty = true;
+        sigmaCacheDirty = true;
+    }
+
+    /** Baut die für {@link ChartViewport}s Pixel-zu-Daten-Umrechnung nötige, reduzierte Geometrie
+     *  aus der aktuellen {@link PlotGeometry}, oder {@code null}, wenn das Panel gerade zu klein
+     *  zum Zeichnen ist (siehe {@link #computePlotGeometry()}). */
+    private ChartViewport.Geometry viewportGeometry() {
+        PlotGeometry geo = computePlotGeometry();
+        if (geo == null) return null;
+        return new ChartViewport.Geometry(geo.padding, geo.plotWidth, geo.plotHeight, geo.height,
+                geo.minX, geo.rangeX, geo.minY, geo.rangeY);
     }
 
     /**
@@ -494,119 +506,23 @@ public class ChartPanel extends JPanel {
     public int getLocalSigmaNeighbors() { return localSigmaNeighbors; }
 
     public void zoomIn() {
-        zoomFactor *= 1.2;
+        viewport.zoomIn();
         repaint();
     }
 
     /** Verkleinert den angezeigten Ausschnitt um den Faktor 1.2 (Mindestfaktor 0.1). */
     public void zoomOut() {
-        zoomFactor /= 1.2;
-        if (zoomFactor < 0.1) zoomFactor = 0.1;
+        viewport.zoomOut();
         repaint();
     }
 
     /** Setzt Zoom-Faktor und Zoom-/Auswahlfenster zurück auf die vollständigen Messdaten. */
     public void resetZoom() {
-        zoomFactor = 1.0;
-        viewMinX = null;
-        viewMaxX = null;
-        viewMinY = null;
-        viewMaxY = null;
+        viewport.reset();
         recomputeDisplayData();
         fitDirty = true;
         sigmaCacheDirty = true;
         repaint();
-    }
-
-    /** Wertet ein per linker Maustaste gezogenes Rechteck aus: die Bounding-Box wird zum neuen
-     *  Zoom-Fenster (siehe {@link #viewMinX}). Die Pixel-zu-Daten-Umrechnung nutzt dieselbe
-     *  Geometrie wie das Zeichnen selbst ({@link #computePlotGeometry}), damit die Auswahl exakt
-     *  dem entspricht, was gerade sichtbar ist - auch wenn schon vorher gezoomt war. */
-    private void applySelectionZoom(Point p1, Point p2) {
-        if (originalData == null || originalData.isEmpty()) return;
-
-        PlotGeometry geo = computePlotGeometry();
-        if (geo == null) return;
-
-        int rectX = Math.min(p1.x, p2.x);
-        int rectY = Math.min(p1.y, p2.y);
-        int rectW = Math.abs(p1.x - p2.x);
-        int rectH = Math.abs(p1.y - p2.y);
-
-        if (rectW < 10 || rectH < 10) return;
-
-        double selMinX = geo.minX + ((double) (rectX - geo.padding) / geo.plotWidth) * geo.rangeX;
-        double selMaxX = geo.minX + ((double) (rectX + rectW - geo.padding) / geo.plotWidth) * geo.rangeX;
-
-        double selMaxY = geo.minY + ((double) ((geo.height - geo.padding) - rectY) / geo.plotHeight) * geo.rangeY;
-        double selMinY = geo.minY + ((double) ((geo.height - geo.padding) - (rectY + rectH)) / geo.plotHeight) * geo.rangeY;
-
-        int pointsInWindow = 0;
-        for (double[] pt : originalData) {
-            if (pt[0] >= selMinX && pt[0] <= selMaxX && pt[1] >= selMinY && pt[1] <= selMaxY) {
-                pointsInWindow++;
-            }
-        }
-
-        if (pointsInWindow >= 2) {
-            viewMinX = selMinX;
-            viewMaxX = selMaxX;
-            viewMinY = selMinY;
-            viewMaxY = selMaxY;
-            zoomFactor = 1.0;
-            recomputeDisplayData();
-            fitDirty = true;
-            sigmaCacheDirty = true;
-        }
-    }
-
-    /** Wertet eine per rechter Maustaste gezogene Freihand-Linie aus: die Bounding-Box der davon
-     *  eingeschlossenen Messpunkte wird zum neuen Zoom-Fenster (siehe {@link #applySelectionZoom}
-     *  und {@link #recomputeDisplayData()}) - {@link #originalData} bleibt unverändert, die
-     *  Freihandform dient nur der (ggf. nicht-rechteckigen) Auswahl des Zoom-Bereichs, nicht dem
-     *  dauerhaften Verwerfen der übrigen Punkte. */
-    private void applyFreehandSelection(List<Point> strokePoints) {
-        if (originalData == null || originalData.isEmpty() || strokePoints.size() < 3) return;
-
-        PlotGeometry geo = computePlotGeometry();
-        if (geo == null) return;
-
-        Path2D polygonPath = new Path2D.Double();
-        polygonPath.moveTo(strokePoints.get(0).x, strokePoints.get(0).y);
-        for (int i = 1; i < strokePoints.size(); i++) {
-            polygonPath.lineTo(strokePoints.get(i).x, strokePoints.get(i).y);
-        }
-        polygonPath.closePath();
-
-        double selMinX = Double.MAX_VALUE, selMaxX = -Double.MAX_VALUE;
-        double selMinY = Double.MAX_VALUE, selMaxY = -Double.MAX_VALUE;
-        int enclosedCount = 0;
-
-        for (double[] point : originalData) {
-            double px = geo.padding + ((point[0] - geo.minX) / geo.rangeX) * geo.plotWidth;
-            double py = (geo.height - geo.padding) - ((point[1] - geo.minY) / geo.rangeY) * geo.plotHeight;
-            if (polygonPath.contains(px, py)) {
-                enclosedCount++;
-                if (point[0] < selMinX) selMinX = point[0];
-                if (point[0] > selMaxX) selMaxX = point[0];
-                if (point[1] < selMinY) selMinY = point[1];
-                if (point[1] > selMaxY) selMaxY = point[1];
-            }
-        }
-
-        if (enclosedCount >= 2) {
-            if (selMinX == selMaxX) selMaxX = selMinX + 1.0;
-            if (selMinY == selMaxY) { selMinY -= 1.0; selMaxY += 1.0; }
-
-            viewMinX = selMinX;
-            viewMaxX = selMaxX;
-            viewMinY = selMinY;
-            viewMaxY = selMaxY;
-            zoomFactor = 1.0;
-            recomputeDisplayData();
-            fitDirty = true;
-            sigmaCacheDirty = true;
-        }
     }
 
     @Override
@@ -831,14 +747,14 @@ public class ChartPanel extends JPanel {
         double minX, maxX, minY, maxY;
         double minY2 = 0, maxY2 = 10;
 
-        if (viewMinX != null) {
+        if (viewport.isActive()) {
             // Ein Zoom-/Auswahlfenster ist aktiv: DAS ist die Achsen-Spanne für Kanal A (bzw. für
             // beide, im bisherigen Ein-Achsen-Modus). Würde man sie stattdessen wie unten aus den
             // Daten neu berechnen, würde die volle Ausdehnung der (nicht gefilterten) Zusatzserien
             // die Achse sofort wieder auf die Gesamtbreite aufziehen und den Zoom optisch
             // aufheben, obwohl displayData korrekt gefiltert ist.
-            minX = viewMinX; maxX = viewMaxX;
-            minY = viewMinY; maxY = viewMaxY;
+            minX = viewport.getMinX(); maxX = viewport.getMaxX();
+            minY = viewport.getMinY(); maxY = viewport.getMaxY();
 
             if (secondaryAxisActive) {
                 // Die zweite Achse ist bewusst NICHT an das (auf Kanal A bezogene) Zoom-Fenster
@@ -900,9 +816,9 @@ public class ChartPanel extends JPanel {
             }
         }
 
-        double rangeX = (maxX - minX) / zoomFactor;
-        double rangeY = (maxY - minY) / zoomFactor;
-        double rangeY2 = secondaryAxisActive ? (maxY2 - minY2) / zoomFactor : 0;
+        double rangeX = (maxX - minX) / viewport.getZoomFactor();
+        double rangeY = (maxY - minY) / viewport.getZoomFactor();
+        double rangeY2 = secondaryAxisActive ? (maxY2 - minY2) / viewport.getZoomFactor() : 0;
         double visibleMaxX = minX + rangeX;
 
         return new PlotGeometry(width, height, padding, rightPadding, plotWidth, plotHeight,
@@ -1280,6 +1196,8 @@ public class ChartPanel extends JPanel {
     /** Zeichnet das halbtransparente Auswahlrechteck während einer laufenden
      *  Rubber-Band-Zoom-Auswahl (falls der Nutzer gerade zieht). */
     private void drawSelectionRectangle(Graphics2D g2) {
+        Point dragStart = viewport.getDragStart();
+        Point dragEnd = viewport.getDragEnd();
         if (dragStart == null || dragEnd == null) return;
 
         int rectX = Math.min(dragStart.x, dragEnd.x);
@@ -1295,6 +1213,7 @@ public class ChartPanel extends JPanel {
     }
 
     private void drawFreehandStroke(Graphics2D g2) {
+        List<Point> freehandPoints = viewport.getFreehandPoints();
         if (freehandPoints.isEmpty()) return;
 
         Path2D path = new Path2D.Double();
@@ -1335,7 +1254,13 @@ public class ChartPanel extends JPanel {
      *             (siehe {@link #paintComponent}), sonst direkt oben in der Ecke
      */
     private void drawChiSquareOverlay(Graphics2D g2, int width, int rightPadding, int topY) {
-        String chiText = String.format("χ²_red = %.4f", currentReducedChiSquare);
+        // Bei nicht-positiven Freiheitsgraden liefert GoodnessOfFit#calculateReducedChiSquare
+        // bewusst NaN statt eines irreführenden Zahlenwerts (siehe dort) - "%.4f" auf NaN würde
+        // sonst wörtlich "χ²_red = NaN" anzeigen.
+        boolean evaluable = !Double.isNaN(currentReducedChiSquare);
+        String chiText = evaluable
+                ? String.format("χ²_red = %.4f", currentReducedChiSquare)
+                : "χ²_red = n/a";
         g2.setFont(new Font("SansSerif", Font.BOLD, 12));
         FontMetrics fm = g2.getFontMetrics();
 

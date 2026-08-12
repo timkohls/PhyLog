@@ -16,7 +16,9 @@ public class SensorRegistry {
             new HX711Sensor(),
             new MicrophoneSensor(),
             new MicrophoneSpectrumSensor(),
-            new HallEffectSensor()
+            new HallEffectSensor(),
+            new VoltageDividerSensor(),
+            new DS18B20Sensor()
     );
 
     /**

@@ -15,6 +15,14 @@ public class ChiSquareInfoDialog extends JDialog {
      *  werden auf diesen Wert begrenzt dargestellt. */
     private static final double BAR_REFERENCE_SCALE = 4.0;
 
+    /** Verzögerungs- bzw. eigentlicher Balken-Animations-Timer aus {@link #buildScaleBar} - als
+     *  Feld gehalten (statt lokal), damit {@link #initUI} sie beim Schließen des Dialogs stoppen
+     *  kann (siehe dortiger {@code WindowAdapter}, analog zu {@link SensorConfigDialog}s
+     *  {@code liveUpdateTimer}). Ohne das würde die bis zu 3s laufende Animation nach vorzeitigem
+     *  Schließen unnötig weiter auf dem dann unsichtbaren Panel {@code repaint()} aufrufen. */
+    private Timer settleDelay;
+    private Timer animationTimer;
+
     /**
      * Erstellt den Dialog mit Standard-Fehlermodus.
      *
@@ -57,21 +65,31 @@ public class ChiSquareInfoDialog extends JDialog {
         mainPanel.setBackground(Theme.BG);
 
         GoodnessOfFit.ChiRating rating = GoodnessOfFit.rate(reducedChiSquare);
-        Color ratingColor = GoodnessOfFit.colorFor(reducedChiSquare);
-        String ratingText = ratingText(rating);
 
         mainPanel.add(buildHeader(sigmaMode));
         mainPanel.add(Box.createVerticalStrut(16));
-        mainPanel.add(buildStatRow(reducedChiSquare, degreesOfFreedom, ratingText, ratingColor));
-        mainPanel.add(Box.createVerticalStrut(14));
-        mainPanel.add(buildFormulaCard());
-        mainPanel.add(Box.createVerticalStrut(14));
-        mainPanel.add(buildScaleBar(reducedChiSquare));
 
-        String tipText = tipText(rating);
-        if (tipText != null) {
+        if (rating == GoodnessOfFit.ChiRating.NOT_EVALUABLE) {
+            // Zahlenkarten, Formel und Farbskala würden hier einen konkreten (aber bedeutungslosen)
+            // Wert suggerieren - stattdessen eine Erklärung, warum sich für den aktuellen
+            // Datenausschnitt kein sinnvolles Chi² berechnen lässt (siehe
+            // GoodnessOfFit#calculateReducedChiSquare).
+            mainPanel.add(buildNotEvaluableCard(degreesOfFreedom));
+        } else {
+            Color ratingColor = GoodnessOfFit.colorFor(reducedChiSquare);
+            String ratingText = ratingText(rating);
+
+            mainPanel.add(buildStatRow(reducedChiSquare, degreesOfFreedom, ratingText, ratingColor));
             mainPanel.add(Box.createVerticalStrut(14));
-            mainPanel.add(buildTipCard(tipText, ratingColor));
+            mainPanel.add(buildFormulaCard());
+            mainPanel.add(Box.createVerticalStrut(14));
+            mainPanel.add(buildScaleBar(reducedChiSquare));
+
+            String tipText = tipText(rating);
+            if (tipText != null) {
+                mainPanel.add(Box.createVerticalStrut(14));
+                mainPanel.add(buildTipCard(tipText, ratingColor));
+            }
         }
 
         if (fitDescription != null) {
@@ -94,7 +112,43 @@ public class ChiSquareInfoDialog extends JDialog {
     }
 
     /**
+     * Baut die Ersatzanzeige für den Fall, dass sich mit den aktuell sichtbaren Datenpunkten kein
+     * sinnvolles reduziertes Chi² berechnen lässt (Freiheitsgrade &le; 0, siehe
+     * {@link GoodnessOfFit#calculateReducedChiSquare}) - z. B. nach einem Rubber-Band-Zoom auf nur
+     * zwei Punkte bei einem linearen Fit (2 Parameter). Zeigt eine klare Erklärung statt eines
+     * Fake-Wertepaars wie zuvor ("0.000" bei "1 Freiheitsgrad", fälschlich grün/gelb bewertet).
+     */
+    private JPanel buildNotEvaluableCard(int degreesOfFreedom) {
+        RoundedPanel card = new RoundedPanel(Theme.CARD, CARD_ARC);
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
+        card.setAlignmentX(Component.CENTER_ALIGNMENT);
+        card.setMaximumSize(new Dimension(CONTENT_WIDTH, Integer.MAX_VALUE));
+
+        JLabel title = new JLabel("Nicht auswertbar");
+        title.setFont(new Font("SansSerif", Font.BOLD, 13));
+        title.setForeground(Theme.MUTED);
+        title.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        String detail = "Für die gewählte Anpassung reichen die sichtbaren Datenpunkte nicht aus "
+                + "(Freiheitsgrade: " + degreesOfFreedom + ", nötig: mindestens 1).<br>"
+                + "Zoome heraus oder wähle einen Ausschnitt mit mehr Messpunkten.";
+        JLabel detailLabel = new JLabel("<html><div style='width: 340px;'>" + detail + "</div></html>");
+        detailLabel.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        detailLabel.setForeground(Theme.TEXT);
+        detailLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        card.add(title);
+        card.add(Box.createVerticalStrut(8));
+        card.add(detailLabel);
+        return card;
+    }
+
+    /**
      * Wandelt eine Chi-Bewertung in lesbaren Text um.
+     *
+     * @param rating niemals {@link GoodnessOfFit.ChiRating#NOT_EVALUABLE} - dieser Fall wird in
+     *               {@link #initUI} bereits vor dem Aufruf abgefangen (siehe {@link #buildNotEvaluableCard})
      */
     private String ratingText(GoodnessOfFit.ChiRating rating) {
         return switch (rating) {
@@ -102,18 +156,21 @@ public class ChiSquareInfoDialog extends JDialog {
             case GOOD -> "Sehr gut";
             case MODERATE -> "Mäßig";
             case UNDERFIT -> "Schlecht (Unteranpassung)";
+            case NOT_EVALUABLE -> "Nicht auswertbar";
         };
     }
 
     /**
      * Erzeugt Hinweistexte zur Verbesserung der Modellgüte basierend auf der Bewertung.
+     *
+     * @param rating niemals {@link GoodnessOfFit.ChiRating#NOT_EVALUABLE}, siehe {@link #ratingText}
      */
     private String tipText(GoodnessOfFit.ChiRating rating) {
         return switch (rating) {
             case OVERFIT -> "Die Fehlerbalken sind möglicherweise überschätzt, oder das Modell passt sich an das Rauschen an.";
             case MODERATE -> "Prüfe, ob der Funktionstyp zum Datenverlauf passt.<br>Bei einem zu hohen Polynomgrad droht Überanpassung.<br>Zoome näher an den relevanten Bereich heran.";
             case UNDERFIT -> "Das Modell weicht stark von den Daten ab.<br>Überprüfe die Messfehler und das gewählte Modell.";
-            case GOOD -> null;
+            case GOOD, NOT_EVALUABLE -> null;
         };
     }
 
@@ -265,7 +322,7 @@ public class ChiSquareInfoDialog extends JDialog {
             @Override
             public void windowOpened(WindowEvent e) {
 
-                Timer settleDelay = new Timer(100, null);
+                settleDelay = new Timer(100, null);
 
                 settleDelay.addActionListener(ev -> {
 
@@ -276,7 +333,7 @@ public class ChiSquareInfoDialog extends JDialog {
                     final double targetValue =
                             Math.min(reducedChiSquare, BAR_REFERENCE_SCALE);
 
-                    Timer animationTimer = new Timer(16, null);
+                    animationTimer = new Timer(16, null);
 
                     animationTimer.addActionListener(tick -> {
 
@@ -304,6 +361,16 @@ public class ChiSquareInfoDialog extends JDialog {
 
                 settleDelay.setRepeats(false);
                 settleDelay.start();
+            }
+
+            /** Stoppt beide Timer beim Schließen des Dialogs - ohne das würde insbesondere
+             *  {@code animationTimer} bis zu {@code durationMs} nach dem Schließen weiterlaufen
+             *  und {@code repaint()} auf dem dann unsichtbaren {@code panel} aufrufen (siehe
+             *  Feld-Dokumentation von {@link #animationTimer}). */
+            @Override
+            public void windowClosed(WindowEvent e) {
+                if (settleDelay != null) settleDelay.stop();
+                if (animationTimer != null) animationTimer.stop();
             }
         });
 

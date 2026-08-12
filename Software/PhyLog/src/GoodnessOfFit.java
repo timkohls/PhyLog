@@ -30,7 +30,12 @@ public final class GoodnessOfFit {
         /** Zwischen {@link #CHI_GOOD_THRESHOLD} und {@link #CHI_MODERATE_THRESHOLD}: mäßiger Fit. */
         MODERATE,
         /** &gt; {@link #CHI_MODERATE_THRESHOLD}: Modell passt schlecht (Unteranpassung). */
-        UNDERFIT
+        UNDERFIT,
+        /** Freiheitsgrade &le; 0 (siehe {@link #calculateReducedChiSquare}) - zu wenige Datenpunkte
+         *  für die Anzahl der Modellparameter, kein sinnvoller Chi²-Wert berechenbar. Tritt in der
+         *  Praxis vor allem nach starkem Hineinzoomen auf, z. B. ein Rubber-Band-Fenster mit genau
+         *  den laut {@link ChartViewport} minimal nötigen zwei Punkten bei einem linearen Fit. */
+        NOT_EVALUABLE
     }
 
     /**
@@ -87,8 +92,12 @@ public final class GoodnessOfFit {
 
     /**
      * Ordnet einen reduzierten Chi-Quadrat-Wert einer {@link ChiRating} zu.
+     *
+     * @param reducedChiSquare Wert aus {@link #calculateReducedChiSquare}; {@link Double#NaN}
+     *                         (Freiheitsgrade &le; 0, siehe dort) liefert {@link ChiRating#NOT_EVALUABLE}.
      */
     public static ChiRating rate(double reducedChiSquare) {
+        if (Double.isNaN(reducedChiSquare)) return ChiRating.NOT_EVALUABLE;
         if (reducedChiSquare < CHI_OVERFIT_THRESHOLD) return ChiRating.OVERFIT;
         if (reducedChiSquare <= CHI_GOOD_THRESHOLD) return ChiRating.GOOD;
         if (reducedChiSquare <= CHI_MODERATE_THRESHOLD) return ChiRating.MODERATE;
@@ -99,13 +108,15 @@ public final class GoodnessOfFit {
      * Liefert die Anzeigefarbe für einen reduzierten Chi-Quadrat-Wert, konsistent mit
      * {@link #rate(double)}.
      *
-     * @return Grün für einen guten Fit, Gelb für Über-/mäßige Anpassung, Rot für Unteranpassung
+     * @return Grün für einen guten Fit, Gelb für Über-/mäßige Anpassung, Rot für Unteranpassung,
+     *         Grau für {@link ChiRating#NOT_EVALUABLE}
      */
     public static Color colorFor(double reducedChiSquare) {
         return switch (rate(reducedChiSquare)) {
             case OVERFIT, MODERATE -> Theme.WARNING;
             case GOOD -> Theme.SUCCESS;
             case UNDERFIT -> Theme.DANGER;
+            case NOT_EVALUABLE -> Theme.MUTED;
         };
     }
 
@@ -117,14 +128,19 @@ public final class GoodnessOfFit {
      * @param func           die angepasste Funktion
      * @param parameterCount Anzahl der freien Parameter des Modells (für die Freiheitsgrade)
      * @param sigmaAt        liefert die Standardabweichung für den Punkt mit gegebenem Index
+     * @return bei nicht-positiven Freiheitsgraden (zu wenige Datenpunkte für die Parameterzahl,
+     *         z. B. nach starkem Hineinzoomen) {@link ChiSquareResult#reducedChiSquare} als
+     *         {@link Double#NaN} statt eines irreführenden Zahlenwerts - {@link #rate(double)}
+     *         bildet das auf {@link ChiRating#NOT_EVALUABLE} ab; {@code degreesOfFreedom} bleibt
+     *         dabei der tatsächliche (nicht-positive) Wert, nicht auf 1 gefälscht
      */
     public static ChiSquareResult calculateReducedChiSquare(List<double[]> data, CurveFitting.FunctionEvaluator func,
-                                                             int parameterCount, IntToDoubleFunction sigmaAt) {
+                                                            int parameterCount, IntToDoubleFunction sigmaAt) {
         int n = data.size();
         int dof = n - parameterCount;
 
         if (dof <= 0) {
-            return new ChiSquareResult(0.0, 1);
+            return new ChiSquareResult(Double.NaN, dof);
         }
 
         double sumChiSq = 0;
@@ -154,8 +170,8 @@ public final class GoodnessOfFit {
      * @param fallbackConstant  Rückfallwert ohne Fit bzw. bei zu wenig Daten
      */
     public static SigmaEstimate estimateSigma(List<double[]> data, CurveFitting.FunctionEvaluator func,
-                                               int parameterCount, SigmaMode mode, int localNeighbors,
-                                               double fallbackConstant) {
+                                              int parameterCount, SigmaMode mode, int localNeighbors,
+                                              double fallbackConstant) {
         int n = data.size();
         if (func == null || n == 0 || mode == SigmaMode.CONSTANT) {
             return new SigmaEstimate(null, null, 0);

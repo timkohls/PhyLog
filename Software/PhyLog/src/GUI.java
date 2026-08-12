@@ -39,9 +39,11 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     private JButton connectButton;
     private JLabel lblTriggerStatus;
 
-    /** Hält den Verbindungsstatus-Listener fest, damit er beim Schließen des Fensters wieder
-     *  abgemeldet werden kann (siehe {@link #dispose()}-Ersatz im WindowListener). */
-    private final Runnable connectionListener = this::updateStatusLabel;
+    /** Bündelt sämtlichen Zugriff auf die geteilte {@link DeviceConnection} (siehe
+     *  {@link ConnectionController}) - hält u. a. den Verbindungsstatus-Listener fest, der beim
+     *  Schließen des Fensters wieder abgemeldet werden muss (siehe {@link #dispose()}-Ersatz im
+     *  WindowListener). */
+    private final ConnectionController connectionController = new ConnectionController(this::updateStatusLabel);
 
     /** "Sensor konfigurieren..."-Menüeintrag - nur nutzbar, solange eine Verbindung zum ESP32
      *  besteht (siehe {@link #openSensorConfigDialog()} und {@link #updateStatusLabel()}), damit
@@ -100,8 +102,8 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                DeviceConnection.getInstance().removeConnectionListener(connectionListener);
-                DeviceConnection.getInstance().disconnect();
+                connectionController.dispose();
+                connectionController.disconnect();
             }
         });
 
@@ -109,17 +111,13 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         initToolBar();
         initMainArea();
 
-        // Hält die Button-Beschriftung synchron mit dem tatsächlichen Verbindungsstatus, auch
-        // wenn dieser über das Terminal-Fenster geändert wurde (siehe DeviceConnection).
-        DeviceConnection.getInstance().addConnectionListener(connectionListener);
-
         // Anfangszustand von Start/Stop, Sensor-Menüpunkt etc. korrekt setzen (siehe
         // #updateStatusLabel), statt bis zur ersten Verbindungsänderung auf die in initToolBar()
         // gesetzten Platzhalterwerte angewiesen zu sein.
         updateStatusLabel();
 
         // Läuft dauerhaft, nicht nur während einer Aufzeichnung - siehe AcquisitionEngine#ingestSample.
-        DeviceConnection.getInstance().addLineListener(acquisitionEngine::onLineReceived);
+        connectionController.addLineListener(acquisitionEngine::onLineReceived);
 
         liveViewRefreshTimer.start();
 
@@ -200,7 +198,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
         configSensorItem = new JMenuItem("Sensor konfigurieren...");
         configSensorItem.addActionListener(e -> openSensorConfigDialog());
-        configSensorItem.setEnabled(DeviceConnection.getInstance().isConnected());
+        configSensorItem.setEnabled(connectionController.isConnected());
         configSensorItem.setToolTipText("Erst mit dem ESP32 verbinden, dann Sensoren auswählen.");
         menuSensor.add(configSensorItem);
 
@@ -304,7 +302,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         portSelector.setEditable(true);
         portSelector.setMaximumSize(new Dimension(140, 25));
 
-        for (String name : DeviceConnection.getInstance().listPortNames()) {
+        for (String name : connectionController.listPortNames()) {
             portSelector.addItem(name);
         }
 
@@ -314,24 +312,24 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         btnRefreshPorts.setMargin(new Insets(2, 4, 2, 4));
         btnRefreshPorts.addActionListener(e -> {
             portSelector.removeAllItems();
-            for (String name : DeviceConnection.getInstance().listPortNames()) {
+            for (String name : connectionController.listPortNames()) {
                 portSelector.addItem(name);
             }
         });
 
-        connectButton = new JButton(DeviceConnection.getInstance().isConnected() ? "Trennen" : "Verbinden");
+        connectButton = new JButton(connectionController.isConnected() ? "Trennen" : "Verbinden");
         connectButton.setFocusPainted(false);
         connectButton.setMargin(new Insets(2, 8, 2, 8));
 
         connectButton.addActionListener(e -> {
-            if (DeviceConnection.getInstance().isConnected()) {
-                DeviceConnection.getInstance().disconnect();
+            if (connectionController.isConnected()) {
+                connectionController.disconnect();
             } else {
                 Object selectedItem = portSelector.getSelectedItem();
                 if (selectedItem != null) {
                     String portName = selectedItem.toString().trim();
                     if (!portName.isEmpty()) {
-                        boolean success = DeviceConnection.getInstance().connect(portName, BAUD_RATE);
+                        boolean success = connectionController.connect(portName, BAUD_RATE);
                         if (!success) {
                             JOptionPane.showMessageDialog(null,
                                     "Verbindung zu " + portName + " fehlgeschlagen.",
@@ -342,7 +340,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
                 }
             }
             // Kein manuelles connectButton.setText mehr hier: DeviceConnection#connect/#disconnect
-            // benachrichtigt bereits den in der Konstruktion registrierten connectionListener, der
+            // benachrichtigt bereits den in ConnectionController registrierten Listener, der
             // updateStatusLabel() (und damit die Beschriftung) aufruft - so bleibt dieser Button
             // auch dann korrekt, wenn die Verbindung stattdessen über das Terminal-Fenster
             // geändert wird.
@@ -529,15 +527,26 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         File file = chooser.getSelectedFile();
         clearData();
 
+        // Wird beim Einlesen ein Sensor aus der Kopfzeile erkannt, aktualisiert bereits dessen
+        // Callback über updateTableLayout() das Diagramm (siehe dort, ruft am Ende immer entweder
+        // renderSpectrumChart() oder updateChartData() auf) - der Flag verhindert in diesem Fall
+        // den sonst doppelten updateChartData()-Aufruf danach. Ohne erkannten Sensor (Callback
+        // feuert nie) bleibt der Aufruf am Ende die einzige Stelle, die das Diagramm überhaupt
+        // aktualisiert, und darf daher nicht ersatzlos entfallen.
+        boolean[] sensorDetected = {false};
+
         try {
             int columnCount = channelA.tableModel.getColumnCount();
             DataFileService.readCsv(file, columnCount,
                     row -> channelA.tableModel.addRow(row),
                     detectedSensor -> {
+                        sensorDetected[0] = true;
                         channelA.sensor = detectedSensor;
                         updateTableLayout();
                     });
-            updateChartData();
+            if (!sensorDetected[0]) {
+                updateChartData();
+            }
         } catch (IOException e) {
             JOptionPane.showMessageDialog(this, "Fehler beim Lesen der Datei: " + e.getMessage(),
                     "Fehler", JOptionPane.ERROR_MESSAGE);
@@ -545,7 +554,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     }
 
     private void openSensorConfigDialog() {
-        if (!DeviceConnection.getInstance().isConnected()) {
+        if (!connectionController.isConnected()) {
             JOptionPane.showMessageDialog(this,
                     "Bitte zuerst über 'Sensor \u2192 Verbindung (Bluetooth)...' bzw. den COM-Port oben rechts mit dem ESP32 verbinden.",
                     "Keine Verbindung", JOptionPane.WARNING_MESSAGE);
@@ -584,10 +593,10 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         if (ch.sensor != sensor) ch.tareOffset = 0.0;
         ch.sensor = sensor;
 
-        if (!DeviceConnection.getInstance().isConnected()) {
+        if (!connectionController.isConnected()) {
             return;
         }
-        DeviceConnection.getInstance().sendLine("SET," + channelId + "," + sensor.getFirmwareTypeName());
+        connectionController.sendLine("SET," + channelId + "," + sensor.getFirmwareTypeName());
     }
 
     private void onTareRequested(char channelId) {
@@ -604,7 +613,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     }
 
     private void startMeasurement() {
-        if (!DeviceConnection.getInstance().isConnected()) {
+        if (!connectionController.isConnected()) {
             JOptionPane.showMessageDialog(
                     this,
                     "Keine Verbindung zum Gerät! Bitte zuerst verbinden.",
@@ -760,7 +769,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     }
 
     private void updateStatusLabel() {
-        boolean connected = DeviceConnection.getInstance().isConnected();
+        boolean connected = connectionController.isConnected();
 
         if (connectButton != null) {
             connectButton.setText(connected ? "Trennen" : "Verbinden");
@@ -811,15 +820,23 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         btnStop.setEnabled(canStop);
         btnStop.setToolTipText(canStop ? "Laufende Messung stoppen" : "Es läuft aktuell keine Messung.");
 
-        // Eine Momentaufnahme ist unabhängig von einer laufenden Aufzeichnung möglich - sie
-        // braucht nur einen aktuellen Live-Wert, keinen Zeitbezug (siehe AcquisitionEngine#captureSnapshot).
+        // Eine Momentaufnahme braucht zwar selbst nur einen aktuellen Live-Wert, keinen Zeitbezug
+        // (siehe AcquisitionEngine#captureSnapshot) - sie teilt sich aber Tabelle und Spaltenkopf
+        // mit einer zeitbasierten Aufzeichnung. Der nötige Wechsel der Kopfzeile auf "Index" leert
+        // dabei die Tabelle (siehe #prepareSnapshotHeader), was während einer laufenden Aufzeichnung
+        // bzw. während auf den Trigger gewartet wird bereits vorhandene Messwerte zerstören würde -
+        // und AcquisitionEngine#ingestSample kennt snapshotMode nicht, würde also anschließend
+        // weiterhin zeitbasierte Zeilen unter der jetzt falschen "Index"-Überschrift anhängen.
+        // Deshalb hier zusätzlich zur Sensor-Prüfung von alreadyRunning abhängig.
         boolean hasSnapshotableSensor = (channelA.hasSensor() && !channelA.producesSpectrum())
                 || (channelB.hasSensor() && !channelB.producesSpectrum());
-        boolean canSnapshot = connected && hasSnapshotableSensor;
+        boolean canSnapshot = connected && hasSnapshotableSensor && !alreadyRunning;
         btnSnapshot.setEnabled(canSnapshot);
         btnSnapshot.setToolTipText(canSnapshot
                 ? "Aktuellen Messwert als einzelne Zeile (Index statt Zeit) übernehmen"
-                : "Erst mit dem ESP32 verbinden und einen (nicht-spektralen) Sensor auswählen.");
+                : (alreadyRunning
+                ? "Während einer laufenden Aufzeichnung nicht möglich (würde deren Daten löschen)."
+                : "Erst mit dem ESP32 verbinden und einen (nicht-spektralen) Sensor auswählen."));
 
         // Beides ergibt im Frequenzspektrum-Modus keinen Sinn: die Tabelle bleibt dort ohnehin
         // leer (siehe channelTitle()), und ein Trigger kann auf einem Spektrum-Kanal nicht
@@ -861,8 +878,15 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     /** Übernimmt für jeden Kanal mit nicht-spektralem Sensor den aktuellen Live-Wert als
      *  einzelne Tabellenzeile (Index statt Zeit, siehe {@link AcquisitionEngine#captureSnapshot()}).
      *  Schaltet die Spaltenüberschrift dafür bei Bedarf zuerst auf "Index" um - vor dem
-     *  eigentlichen Einfügen, damit die neue Zeile dabei nicht gleich wieder mitgelöscht wird. */
+     *  eigentlichen Einfügen, damit die neue Zeile dabei nicht gleich wieder mitgelöscht wird.
+     *  Bricht während einer laufenden Aufzeichnung bzw. während auf den Trigger gewartet wird
+     *  früh ab, statt Altdaten zu löschen (siehe {@link #prepareSnapshotHeader}) - eigentlich
+     *  bereits durch das Deaktivieren von {@link #btnSnapshot} in {@link #updateActionAvailability}
+     *  verhindert, hier zusätzlich als zweite Absicherung, falls der Aufruf je auf anderem Weg
+     *  (z. B. Tastenkürzel) erfolgt. */
     private void captureSnapshot() {
+        if (acquisitionEngine.isRecording() || acquisitionEngine.isWaitingForTrigger()) return;
+
         prepareSnapshotHeader(channelA);
         prepareSnapshotHeader(channelB);
         acquisitionEngine.captureSnapshot();
