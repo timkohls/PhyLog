@@ -82,6 +82,19 @@ public abstract class Sensor {
     }
 
     /**
+     * Realistische Obergrenze der Abtastrate für diesen Sensor in Hz (Standard: 1000). Manche
+     * Sensoren können hardware- oder protokollbedingt nicht beliebig schnell neue Werte liefern -
+     * schnelleres Abfragen würde dort nur wiederholt denselben (oder unsinnigen) Wert liefern,
+     * statt echte neue Information. {@link SensorConfigDialog} blendet entsprechend schnellere
+     * Schritte in der Abtastraten-Auswahl aus.
+     *
+     * @return maximale sinnvolle Abtastrate in Hz
+     */
+    public int getMaxSampleRateHz() {
+        return 1000;
+    }
+
+    /**
      * Liefert die anpassbaren Kalibrierparameter (Standard: leere Liste).
      *
      * @return Liste der {@link CalibrationParameter}.

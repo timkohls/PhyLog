@@ -16,6 +16,10 @@ TODO
 
 Standartabweichung möglichkeit für Variabler Anpassung
 
+Optimieren
+
+2 Achsen wenn nur 1 ssensor??
+
 Hallsonde
 
 Temperatursonde

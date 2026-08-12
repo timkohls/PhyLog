@@ -90,6 +90,14 @@ public class DeviceConnection {
             }
         });
 
+        // Aktiviert das kontinuierliche Streamen von Messwerten für die gesamte Dauer der
+        // Verbindung (siehe processCommand()/isStreaming in phylog_firmware.ino) - unabhängig
+        // von einer laufenden Aufzeichnung. AcquisitionEngine schreibt eingehende Werte je nach
+        // Aufzeichnungsstatus zwar nur bedingt in die Tabelle, aktualisiert aber immer
+        // MeasurementChannel#latestValue; Live-Anzeigen (Kalibrierdialog, Momentaufnahme-Knopf)
+        // brauchen dafür einen durchgehenden Strom vom Gerät, nicht nur während Start/Stop.
+        sendLine("START");
+
         return true;
     }
 
@@ -98,6 +106,7 @@ public class DeviceConnection {
      */
     public void disconnect() {
         if (activePort != null) {
+            sendLine("STOP");
             activePort.closePort();
             activePort = null;
         }

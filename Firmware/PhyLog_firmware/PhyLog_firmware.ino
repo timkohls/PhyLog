@@ -1,5 +1,5 @@
 /*
- * PhyLog ESP32 Firmware v7.7
+ * PhyLog ESP32 Firmware v7.9
  *
  * Sensortypen: I2C (INA219, VEML7700), HX711 (DOUT/SCK, kein I2C), Analog-Pin, sowie ein
  * INMP441-Mikrofon (I2S). Welcher Sensortyp auf Kanal A/B aktiv ist, wird ausschließlich über
@@ -51,6 +51,20 @@
  * erzwingt der Sensor-Dialog jetzt außerdem, dass ein Kanal automatisch auf "kein Sensor"
  * zurückfällt, sobald der andere Kanal ein Frequenzspektrum aufnimmt - zwei Mikrofon-Captures
  * gleichzeitig ergäben ohnehin nur unnötige Konkurrenz um dieselbe, jetzt knappere Bandbreite.</p>
+ *
+ * <p>v7.8: Neuer Sensortyp TYPE_HALL für das KY-003-Hall-Sensor-Modul - ein einfacher digitaler
+ * Eingang (nur Pin 0 genutzt), Rohwert ist direkt digitalRead(). Wie bei allen anderen Sensoren
+ * übernimmt die Java-Seite (HallEffectSensor) die Interpretation des Rohwerts, hier inklusive
+ * der Invertierung, da das Modul active-low ist.</p>
+ *
+ * <p>v7.9: Zwei Sensoren konnten die eingestellte Abtastrate faktisch nicht einhalten, egal wie
+ * hoch sie in der GUI gewählt wurde: Das Mikrofon (dB-Modus) las immer 256 I2S-Samples pro
+ * Zyklus, was allein schon 16ms dauert und die Rate hart auf ~62 Hz deckelte - jetzt liest
+ * {@link #microphoneReadSampleCount} dynamisch so viele Samples, wie in das aktuell eingestellte
+ * Intervall passen. Der VEML7700 hatte eine Integrationszeit von 100ms (max. 10 Hz) - jetzt auf
+ * die kürzeste verfügbare Einstellung (25ms, max. 40 Hz) reduziert. Java-seitig kennt jeder
+ * Sensor jetzt seine realistische Obergrenze ({@link Sensor#getMaxSampleRateHz}), damit die GUI
+ * gar nicht erst höhere Raten anbietet, als der jeweilige Sensor tatsächlich liefern kann.</p>
  */
 
 #include <Wire.h>
@@ -64,7 +78,8 @@ enum SensorType {
   TYPE_VEML7700 = 3,
   TYPE_HX711 = 4,
   TYPE_MICROPHONE = 5,
-  TYPE_MIC_SPECTRUM = 6
+  TYPE_MIC_SPECTRUM = 6,
+  TYPE_HALL = 7
 };
 
 SensorType configChannelA = TYPE_NONE;
@@ -73,7 +88,7 @@ SensorType configChannelB = TYPE_NONE;
 /** Die drei Signal-Pins eines Kanal-Ports (Steckerposition 2, 3, 4 - siehe pinout.md), deren
  *  Rolle vom gewählten Sensortyp abhängt (siehe {@link #configureChannelHardware}):
  *  I2C: [0]=SDA, [1]=SCL   HX711: [0]=DOUT, [1]=SCK   I2S: [0]=WS, [1]=BCLK, [2]=SD
- *  Analog: [0]=Eingang
+ *  Analog: [0]=Eingang   Hall (KY-003): [0]=Signal
  *
  *  ACHTUNG bei künftigen Pin-Änderungen: GPIO 0, 2, 5, 12 und 15 sind beim ESP32
  *  "Strapping-Pins" - ihr Pegel wird nur im Moment des Resets ausgelesen und beeinflusst u. a.
@@ -92,10 +107,17 @@ const uint8_t ADDR_VEML7700 = 0x10;
 /** Maximale Wartezeit in ms auf ein bereites HX711-Modul, bevor der Zyklus als Fehler gilt. */
 const unsigned long HX711_TIMEOUT_MS = 100;
 
-/** I2S-Abtastrate für das INMP441-Mikrofon und wie viele 32-Bit-Samples je Zyklus gelesen
- *  werden, um daraus einen einzelnen Spitzenwert zu bilden (siehe {@link #sampleMicrophone}). */
+/** I2S-Abtastrate für das INMP441-Mikrofon. Wie viele Rohsamples je Zyklus für den Spitzenwert
+ *  gelesen werden, ist NICHT fest, sondern richtet sich dynamisch nach der eingestellten
+ *  Abtastrate (siehe {@link #microphoneReadSampleCount}) - eine feste Anzahl hätte bei hoher
+ *  Abtastrate selbst zur Bremse werden können: 256 Samples brauchen bei 16kHz allein schon 16ms
+ *  Lesezeit, was die erreichbare Rate unabhängig von der GUI-Einstellung auf ca. 62 Hz gedeckelt
+ *  hätte. {@link #MIC_MIN_READ_SAMPLES} sorgt dafür, dass bei sehr hoher Abtastrate trotzdem noch
+ *  mindestens ein paar Samples für den Spitzenwert bleiben, {@link #MIC_MAX_READ_SAMPLES} dafür,
+ *  dass ein einzelner Lesevorgang bei niedriger Abtastrate nicht unnötig lange blockiert. */
 const int MIC_SAMPLE_RATE_HZ = 16000;
-const int MIC_READ_SAMPLES = 256;
+const int MIC_MIN_READ_SAMPLES = 16;
+const int MIC_MAX_READ_SAMPLES = 512;
 
 /** Serielle Baudrate zum PC. War lange 115200 - das begrenzte das Frequenzspektrum auf
  *  ~4 Bilder/Sekunde, da 512 Bins pro Bild schon ein paar KB sind (siehe SPECTRUM_INTERVAL_MS).
@@ -284,7 +306,13 @@ void configureSensorOnBus(TwoWire &bus, SensorType type, char channelName) {
   } else if (type == TYPE_VEML7700) {
     bus.beginTransmission(ADDR_VEML7700);
     bus.write(0x00); // ALS_CONF Register
-    bus.write(0x00); bus.write(0x00); // ALS enable, Gain 1, IT 100ms
+    // Gain 1x, Integrationszeit 25ms (kürzeste verfügbare Einstellung statt der 100ms im
+    // Standard-Reset-Zustand) - der Sensor liefert dadurch maximal alle 25ms (~40 Hz) einen
+    // neuen Messwert; schnelleres Abfragen würde nur wiederholt denselben Wert zurückgeben.
+    // Kürzere Integrationszeit bedeutet weniger gesammeltes Licht pro Messung, also etwas mehr
+    // Rauschen bzw. geringere Empfindlichkeit bei sehr wenig Licht - Tausch von Genauigkeit
+    // gegen Reaktionsgeschwindigkeit.
+    bus.write(0x00); bus.write(0x03);
     ok &= (bus.endTransmission() == 0);
   }
 
@@ -392,6 +420,12 @@ void configureChannelHardware(char channelName, SensorType newType, const int pi
       pinMode(pins[1], OUTPUT);
       digitalWrite(pins[1], LOW);
       break;
+    case TYPE_HALL:
+      // Nur Pin 0 genutzt (Signal-Pin des KY-003) - der interne Pull-up ist redundant, falls das
+      // Modul bereits einen eigenen besitzt, schadet aber nicht und macht die Beschaltung
+      // robuster gegen Module ohne eigenen Pull-up.
+      pinMode(pins[0], INPUT_PULLUP);
+      break;
     case TYPE_MICROPHONE:
     case TYPE_MIC_SPECTRUM:
       // Identische I2S-Hardware für beide Mikrofon-"Sensoren" - TYPE_MIC_SPECTRUM liefert nur
@@ -408,7 +442,7 @@ void processCommand(String command) {
   command.trim();
 
   if (command.equalsIgnoreCase("PING")) {
-    Serial.println("#HELLO,PhyLog-ESP32,fw=7.7");
+    Serial.println("#HELLO,PhyLog-ESP32,fw=7.9");
   } else if (command.equalsIgnoreCase("START")) {
     isStreaming = true;
     Serial.println("#OK,START");
@@ -437,6 +471,7 @@ void processCommand(String command) {
       else if (sensorTypeName.equalsIgnoreCase("HX711")) newType = TYPE_HX711;
       else if (sensorTypeName.equalsIgnoreCase("MIC")) newType = TYPE_MICROPHONE;
       else if (sensorTypeName.equalsIgnoreCase("MICSPEC")) newType = TYPE_MIC_SPECTRUM;
+      else if (sensorTypeName.equalsIgnoreCase("HALL")) newType = TYPE_HALL;
 
       if (targetChannel == 'A') {
         releaseChannelHardware('A', configChannelA);
@@ -590,6 +625,16 @@ void captureAndSendSpectrum(char channelName) {
   sendSpectrumPacket(channelName, real, imag);
 }
 
+/** Bestimmt, wie viele I2S-Rohsamples {@link #sampleMicrophone} pro Aufruf liest: so viele, wie
+ *  in ein Intervall bei der aktuell eingestellten Abtastrate ({@code sampleIntervalMs}) passen -
+ *  mehr Samples ergeben einen über einen größeren Zeitraum gemittelten, "ruhigeren" Spitzenwert,
+ *  weniger Samples einen unmittelbareren, aber verrauschteren. Nach unten/oben begrenzt auf
+ *  {@link #MIC_MIN_READ_SAMPLES}/{@link #MIC_MAX_READ_SAMPLES}. */
+int microphoneReadSampleCount() {
+  long samplesPerInterval = ((long) MIC_SAMPLE_RATE_HZ * sampleIntervalMs) / 1000;
+  return (int) constrain(samplesPerInterval, MIC_MIN_READ_SAMPLES, MIC_MAX_READ_SAMPLES);
+}
+
 /** Liest einen kurzen Block Rohsamples vom INMP441 und bildet daraus den Spitzenbetrag
  *  (Peak-Amplitude) - ein einzelner Wert pro Aufrufzyklus, genau wie bei allen anderen
  *  Sensortypen. Das hält das serielle Protokoll unverändert (ein Datenpaket pro Kanal und
@@ -602,10 +647,11 @@ void sampleMicrophone(char channelName) {
     return;
   }
 
-  int32_t buffer[MIC_READ_SAMPLES];
+  int samplesToRead = microphoneReadSampleCount();
+  int32_t buffer[MIC_MAX_READ_SAMPLES];
   size_t bytesRead = 0;
 
-  esp_err_t err = i2s_channel_read(handle, buffer, sizeof(buffer), &bytesRead, pdMS_TO_TICKS(20));
+  esp_err_t err = i2s_channel_read(handle, buffer, samplesToRead * sizeof(int32_t), &bytesRead, pdMS_TO_TICKS(50));
   if (err != ESP_OK || bytesRead == 0) {
     reportSensorError(channelName, "I2S");
     return;
@@ -662,6 +708,13 @@ void sampleChannel(char channelName, SensorType type, const int pins[3]) {
     } else {
       reportSensorError(channelName, "HX711");
     }
+  } else if (type == TYPE_HALL) {
+    // Kein Übertragungsfehler möglich wie bei I2C/HX711 - digitalRead() liefert immer einen
+    // Wert. Die Umrechnung "0/1 -> Magnetfeld ja/nein" (inkl. Invertierung, da das Modul
+    // active-low ist) übernimmt bewusst erst die Java-Seite (HallEffectSensor.decode), wie bei
+    // allen anderen Sensoren auch - die Firmware kennt nur Rohwerte.
+    int rawState = digitalRead(pins[0]);
+    sendDataPacket(channelName, 0, rawState);
   } else if (type == TYPE_MICROPHONE) {
     sampleMicrophone(channelName);
   } else if (type == TYPE_MIC_SPECTRUM) {
@@ -677,7 +730,7 @@ void setup() {
   // Bewusst KEINE Pin-/Bus-Initialisierung hier: welche Rolle die drei Kanal-Pins spielen,
   // hängt vom gewählten Sensortyp ab und wird erst bei SET über configureChannelHardware()
   // hergestellt - beide Kanäle starten unkonfiguriert bei TYPE_NONE.
-  Serial.println("#HELLO,PhyLog-ESP32,fw=7.7");
+  Serial.println("#HELLO,PhyLog-ESP32,fw=7.9");
 }
 
 void loop() {

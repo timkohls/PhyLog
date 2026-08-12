@@ -2,6 +2,8 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Dialog zur Konfiguration der Sensoren und der Abtastrate für Kanal A und B.
@@ -119,6 +121,7 @@ public class SensorConfigDialog extends JDialog {
 
         enforceSpectrumExclusivity();
         updateChannelStates();
+        refreshSampleRateOptions();
         startLiveUpdates();
 
         addWindowListener(new WindowAdapter() {
@@ -142,6 +145,7 @@ public class SensorConfigDialog extends JDialog {
         ch.comboSensor.addActionListener(e -> {
             enforceSpectrumExclusivity();
             updateChannelStates();
+            refreshSampleRateOptions();
             if (selectionListener != null) {
                 selectionListener.onSensorSelected(channelId, (Sensor) ch.comboSensor.getSelectedItem());
             }
@@ -279,14 +283,61 @@ public class SensorConfigDialog extends JDialog {
 
         updateChannel(channelA, live1, spectrumOnB);
         updateChannel(channelB, live2, spectrumOnA);
+    }
 
-        // Die Abtastrate wirkt sich nur auf normale Sensoren aus - das Frequenzspektrum läuft
-        // mit eigener, fest in der Firmware vorgegebener Taktung (siehe phylog_firmware.ino,
-        // SPECTRUM_INTERVAL_MS) und ignoriert diese Einstellung komplett.
+    /**
+     * Baut die Abtastraten-Auswahl neu auf und begrenzt sie auf das Minimum der von beiden
+     * gewählten Sensoren tatsächlich erreichbaren Obergrenzen (siehe {@link Sensor#getMaxSampleRateHz}) -
+     * schnellere Schritte werden erst gar nicht angeboten, statt eine Rate einstellbar zu lassen,
+     * die der Sensor ohnehin nicht einhalten kann. Solange mindestens ein Kanal ein
+     * Frequenzspektrum aufnimmt, ist die Auswahl komplett irrelevant und bleibt deaktiviert.
+     *
+     * <p>Bewusst nur bei einer echten Sensor-Auswahländerung aufgerufen (siehe Aufrufer), nicht
+     * bei jedem periodischen Live-Update von {@link #updateChannelStates} - ein wiederholtes
+     * Neuaufbauen des (inhaltlich unveränderten) Modells alle {@link #LIVE_REFRESH_MS} wäre
+     * unnötig, u. U. sogar störend, falls die Auswahlliste gerade aufgeklappt ist.</p>
+     */
+    private void refreshSampleRateOptions() {
+        Sensor selectedA = (Sensor) channelA.comboSensor.getSelectedItem();
+        Sensor selectedB = (Sensor) channelB.comboSensor.getSelectedItem();
+        boolean spectrumOnA = selectedA != null && selectedA.producesSpectrum();
+        boolean spectrumOnB = selectedB != null && selectedB.producesSpectrum();
+
+        int maxA = (selectedA != null) ? selectedA.getMaxSampleRateHz() : Integer.MAX_VALUE;
+        int maxB = (selectedB != null) ? selectedB.getMaxSampleRateHz() : Integer.MAX_VALUE;
+        int effectiveMax = Math.min(maxA, maxB);
+
+        int previousHz = parseRate((String) comboSampleRate.getSelectedItem());
+
+        List<String> allowed = new ArrayList<>();
+        for (String rate : SAMPLE_RATES) {
+            if (parseRate(rate) <= effectiveMax) allowed.add(rate);
+        }
+        if (allowed.isEmpty()) {
+            allowed.add(effectiveMax + " Hz"); // z. B. HX711 mit 80 Hz - kein Standard-Schritt passt darunter
+        }
+
+        comboSampleRate.setModel(new DefaultComboBoxModel<>(allowed.toArray(new String[0])));
+
+        if (previousHz > 0 && previousHz <= effectiveMax) {
+            selectSampleRate(previousHz);
+        } else {
+            comboSampleRate.setSelectedIndex(allowed.size() - 1);
+        }
+
         boolean sampleRateRelevant = !spectrumOnA && !spectrumOnB;
         comboSampleRate.setEnabled(sampleRateRelevant);
-        comboSampleRate.setToolTipText(sampleRateRelevant ? null
-                : "Wirkt sich nicht auf das Frequenzspektrum aus - dessen Bildrate ist fest in der Firmware vorgegeben.");
+
+        if (!sampleRateRelevant) {
+            // Die Abtastrate wirkt sich nur auf normale Sensoren aus - das Frequenzspektrum läuft
+            // mit eigener, fest in der Firmware vorgegebener Taktung (siehe phylog_firmware.ino,
+            // SPECTRUM_INTERVAL_MS) und ignoriert diese Einstellung komplett.
+            comboSampleRate.setToolTipText("Wirkt sich nicht auf das Frequenzspektrum aus - dessen Bildrate ist fest in der Firmware vorgegeben.");
+        } else if (effectiveMax < 1000) {
+            comboSampleRate.setToolTipText("Auf " + effectiveMax + " Hz begrenzt - schneller kann mindestens einer der gewählten Sensoren keine neuen Werte liefern.");
+        } else {
+            comboSampleRate.setToolTipText(null);
+        }
     }
 
     /**

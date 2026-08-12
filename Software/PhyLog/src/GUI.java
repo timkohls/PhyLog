@@ -35,7 +35,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     private ChartPanel chartPanel;
     private JSplitPane mainSplitPane;
 
-    private JButton btnStart, btnStop, btnTrigger, btnZoomIn, btnZoomOut, btnResetZoom, btnClear;
+    private JButton btnStart, btnStop, btnSnapshot, btnTrigger, btnZoomIn, btnZoomOut, btnResetZoom, btnClear;
     private JLabel lblTriggerStatus;
 
     /** "Sensor konfigurieren..."-Menüeintrag - nur nutzbar, solange eine Verbindung zum ESP32
@@ -56,6 +56,9 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
      *  teilen (siehe Menü "Ansicht" -&gt; "Y-Achsen" sowie {@link ChartPanel#setDualYAxisMode}).
      *  Wirkt sich nur auf Achsenbeschriftung/-skalierung aus, nicht auf Fit, Zoom oder Chi². */
     private boolean dualYAxisMode = false;
+    /** Ob beim letzten Aufruf von {@link #updateTableLayout()} beide Kanäle einen Sensor hatten -
+     *  dient nur dazu, den Übergang 1 -&gt; 2 (bzw. 2 -&gt; 1) aktive Sensoren zu erkennen, siehe dort. */
+    private boolean previousBothActive = false;
 
     /** {@code true}, solange das Diagramm aktuell im Frequenzspektrum-Modus zeigt (mindestens ein
      *  Kanal hat einen Spektrum-Sensor, siehe {@link Sensor#producesSpectrum()}) - dient nur dazu,
@@ -67,6 +70,19 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
      *  bzw. bevor das erste Paket eingetroffen ist (siehe {@link #onSpectrumFrame}). */
     private double[] lastSpectrumA, lastSpectrumB;
     private int lastSpectrumRateA = 16000, lastSpectrumRateB = 16000;
+
+    /** Fasst häufige Tabellen-Updates (bis zu 1000/s je Kanal bei hoher Abtastrate) auf eine
+     *  feste Bildwiederholrate zusammen, statt Diagramm und Auto-Scroll bei jeder einzelnen neu
+     *  eintreffenden Zeile sofort neu zu berechnen. Ohne diese Bündelung liest
+     *  {@link #updateChartData()} bei jedem einzelnen Messwert die komplette, bereits
+     *  vorhandene Tabelle neu ein - der Aufwand pro Messwert wächst also mit der Zeilenzahl, und
+     *  die Oberfläche beginnt nach einigen tausend Zeilen (bei 1000 Hz nach wenigen Sekunden)
+     *  spürbar zu ruckeln. Mit der Bündelung bleibt die Bildwiederholrate konstant, unabhängig
+     *  von der Abtastrate. */
+    private final Timer liveViewRefreshTimer = new Timer(50, e -> flushPendingUiUpdates());
+    private volatile boolean chartRefreshPending = false;
+    private volatile boolean scrollPendingA = false;
+    private volatile boolean scrollPendingB = false;
 
     public GUI() {
         super("PhyLog");
@@ -94,6 +110,8 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
         // Läuft dauerhaft, nicht nur während einer Aufzeichnung - siehe AcquisitionEngine#ingestSample.
         DeviceConnection.getInstance().addLineListener(acquisitionEngine::onLineReceived);
+
+        liveViewRefreshTimer.start();
 
         setSize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
         setLocationRelativeTo(null);
@@ -367,6 +385,11 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         btnStart.setEnabled(false);
         btnStop.setEnabled(false);
 
+        btnSnapshot = new JButton("Momentaufnahme");
+        btnSnapshot.setToolTipText("Aktuellen Messwert als einzelne Zeile (Index statt Zeit) übernehmen");
+        btnSnapshot.addActionListener(e -> captureSnapshot());
+        btnSnapshot.setEnabled(false);
+
         btnZoomIn = new JButton(" + ");
         btnZoomIn.setFont(new Font("SansSerif", Font.BOLD, 14));
         btnZoomIn.setMargin(new Insets(2, 6, 2, 6));
@@ -391,6 +414,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
         toolBar.add(btnStart);
         toolBar.add(btnStop);
+        toolBar.add(btnSnapshot);
         toolBar.addSeparator();
 
         toolBar.add(btnZoomIn);
@@ -436,17 +460,37 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         ch.table = new JTable(ch.tableModel);
         ch.table.setFillsViewportHeight(true);
         ch.tableModel.addTableModelListener(e -> {
-            updateChartData();
+            chartRefreshPending = true;
             if (e.getType() == TableModelEvent.INSERT) {
-                SwingUtilities.invokeLater(() -> {
-                    int lastRow = ch.table.getRowCount() - 1;
-                    if (lastRow >= 0) {
-                        ch.table.scrollRectToVisible(ch.table.getCellRect(lastRow, 0, true));
-                    }
-                });
+                if (ch.id == 'B') scrollPendingB = true; else scrollPendingA = true;
             }
         });
         ch.scrollPane = new JScrollPane(ch.table);
+    }
+
+    /** Vom {@link #liveViewRefreshTimer} aufgerufen: führt alle seit dem letzten Tick
+     *  angefallenen Oberflächen-Updates gebündelt aus, statt jedes für sich sofort bei jeder
+     *  einzelnen Tabellenänderung. */
+    private void flushPendingUiUpdates() {
+        if (chartRefreshPending) {
+            chartRefreshPending = false;
+            updateChartData();
+        }
+        if (scrollPendingA) {
+            scrollPendingA = false;
+            scrollToLastRow(channelA);
+        }
+        if (scrollPendingB) {
+            scrollPendingB = false;
+            scrollToLastRow(channelB);
+        }
+    }
+
+    private void scrollToLastRow(MeasurementChannel ch) {
+        int lastRow = ch.table.getRowCount() - 1;
+        if (lastRow >= 0) {
+            ch.table.scrollRectToVisible(ch.table.getCellRect(lastRow, 0, true));
+        }
     }
 
     private void resetLayout() {
@@ -482,6 +526,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
                         channelA.sensor = detectedSensor;
                         updateTableLayout();
                     });
+            updateChartData();
         } catch (IOException e) {
             JOptionPane.showMessageDialog(this, "Fehler beim Lesen der Datei: " + e.getMessage(),
                     "Fehler", JOptionPane.ERROR_MESSAGE);
@@ -499,17 +544,15 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         Sensor previousA = channelA.sensor;
         Sensor previousB = channelB.sensor;
 
-        boolean liveMonitoringStartedByDialog = ensureLiveDataFlowing();
-
+        // Kein manuelles Start/Stop der Live-Daten mehr nötig: Das Gerät streamt seit dem
+        // Verbindungsaufbau bereits durchgehend (siehe DeviceConnection#connect), unabhängig
+        // davon, ob gerade eine Aufzeichnung läuft - channelA/B.latestValue ist also immer
+        // aktuell, auch für diesen Dialog.
         SensorConfigDialog dialog = new SensorConfigDialog(this, channelA.sensor, channelB.sensor,
                 acquisitionEngine.getSampleRateHz(),
                 () -> channelA.latestValue, () -> channelB.latestValue,
                 this::pushSensorSelectionToFirmware, this::onTareRequested);
         dialog.setVisible(true);
-
-        if (liveMonitoringStartedByDialog) {
-            DeviceConnection.getInstance().sendLine("STOP");
-        }
 
         if (dialog.isApplied()) {
             channelA.sensor = dialog.getSelectedSensorA();
@@ -523,14 +566,6 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         }
 
         updateStatusLabel();
-    }
-
-    private boolean ensureLiveDataFlowing() {
-        if (!DeviceConnection.getInstance().isConnected() || acquisitionEngine.isRecording()) {
-            return false;
-        }
-        DeviceConnection.getInstance().sendLine("START");
-        return true;
     }
 
     private void pushSensorSelectionToFirmware(char channelId, Sensor sensor) {
@@ -605,6 +640,28 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     public void onDurationLimitReached() {
         lblTriggerStatus.setText("Maximale Messdauer erreicht - Aufnahme gestoppt");
         lblTriggerStatus.setForeground(Theme.POINT_A);
+    }
+
+    /** {@inheritDoc} Übernimmt für jeden Kanal mit Spektrum-Sensor das zuletzt empfangene
+     *  Spektrum als Momentaufnahme in dessen Tabelle - die live im Diagramm laufende Anzeige
+     *  liefert sonst nirgendwo Zeilen, die sich z. B. per CSV exportieren ließen (siehe
+     *  {@link #exportCsv}, der ausschließlich aus den Tabellen liest). */
+    @Override
+    public void onRecordingStopped() {
+        importSpectrumIntoTable(channelA, lastSpectrumA, lastSpectrumRateA);
+        importSpectrumIntoTable(channelB, lastSpectrumB, lastSpectrumRateB);
+    }
+
+    /** Schreibt ein Spektrum als (Frequenz, dB)-Zeilen in die Tabelle des Kanals - ersetzt einen
+     *  eventuell vorher enthaltenen älteren Snapshot. Tut nichts, wenn der Kanal aktuell keinen
+     *  Spektrum-Sensor hat oder noch kein Spektrum empfangen wurde. */
+    private void importSpectrumIntoTable(MeasurementChannel ch, double[] magnitudesDb, int sampleRateHz) {
+        if (!ch.producesSpectrum() || magnitudesDb == null) return;
+
+        ch.tableModel.setRowCount(0);
+        for (double[] point : toFrequencyPoints(magnitudesDb, sampleRateHz)) {
+            ch.tableModel.addRow(new Object[]{point[0], point[1]});
+        }
     }
 
     /** {@inheritDoc} Speichert das neue Spektrum für den jeweiligen Kanal und zeichnet es direkt
@@ -715,6 +772,16 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         btnStop.setEnabled(canStop);
         btnStop.setToolTipText(canStop ? "Laufende Messung stoppen" : "Es läuft aktuell keine Messung.");
 
+        // Eine Momentaufnahme ist unabhängig von einer laufenden Aufzeichnung möglich - sie
+        // braucht nur einen aktuellen Live-Wert, keinen Zeitbezug (siehe AcquisitionEngine#captureSnapshot).
+        boolean hasSnapshotableSensor = (channelA.hasSensor() && !channelA.producesSpectrum())
+                || (channelB.hasSensor() && !channelB.producesSpectrum());
+        boolean canSnapshot = connected && hasSnapshotableSensor;
+        btnSnapshot.setEnabled(canSnapshot);
+        btnSnapshot.setToolTipText(canSnapshot
+                ? "Aktuellen Messwert als einzelne Zeile (Index statt Zeit) übernehmen"
+                : "Erst mit dem ESP32 verbinden und einen (nicht-spektralen) Sensor auswählen.");
+
         // Beides ergibt im Frequenzspektrum-Modus keinen Sinn: die Tabelle bleibt dort ohnehin
         // leer (siehe channelTitle()), und ein Trigger kann auf einem Spektrum-Kanal nicht
         // feuern (siehe triggerChannelReady oben) - klar ausgegraut statt stillschweigend wirkungslos.
@@ -752,6 +819,29 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         return "Messung starten";
     }
 
+    /** Übernimmt für jeden Kanal mit nicht-spektralem Sensor den aktuellen Live-Wert als
+     *  einzelne Tabellenzeile (Index statt Zeit, siehe {@link AcquisitionEngine#captureSnapshot()}).
+     *  Schaltet die Spaltenüberschrift dafür bei Bedarf zuerst auf "Index" um - vor dem
+     *  eigentlichen Einfügen, damit die neue Zeile dabei nicht gleich wieder mitgelöscht wird. */
+    private void captureSnapshot() {
+        prepareSnapshotHeader(channelA);
+        prepareSnapshotHeader(channelB);
+        acquisitionEngine.captureSnapshot();
+
+        lblTriggerStatus.setText("Momentaufnahme aufgenommen");
+        lblTriggerStatus.setForeground(Theme.ACCENT);
+    }
+
+    /** Schaltet die Spalte auf "Index" um, falls der Kanal das noch nicht ist - eine dabei
+     *  eventuell noch vorhandene, zeitbasierte Aufzeichnung wird dabei verworfen, damit Index und
+     *  Zeit nicht in derselben Spalte gemischt werden. Ist der Kanal bereits im Momentaufnahme-
+     *  Modus, passiert nichts, damit bereits aufgenommene Momentaufnahmen erhalten bleiben. */
+    private void prepareSnapshotHeader(MeasurementChannel ch) {
+        if (!ch.hasSensor() || ch.producesSpectrum() || ch.snapshotMode) return;
+        ch.snapshotMode = true;
+        configureTableModel(ch);
+    }
+
     private void openTriggerDialog() {
         TriggerDialog dialog = new TriggerDialog(this, acquisitionEngine.getTriggerConfig());
         dialog.setVisible(true);
@@ -781,9 +871,27 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
             chartPanel.resetZoom();
         }
 
-        // Wenn 2 Sensoren ausgewählt sind, wird standardmäßig der Modus mit zwei Y-Achsen gesetzt.
-        boolean shouldBeDual = channelA.hasSensor() && channelB.hasSensor();
-        setDualYAxisMode(shouldBeDual);
+        // Zwei unabhängige Y-Achsen ergeben nur mit zwei aktiven Sensoren Sinn. Bewusst nur bei
+        // einem tatsächlichen Wechsel (1 <-> 2 aktive Sensoren) automatisch umgeschaltet, nicht
+        // bei jedem Aufruf erneut erzwungen - sonst würde eine bewusste manuelle Wahl (z. B.
+        // "eine gemeinsame Achse" trotz zwei Sensoren) beim nächsten Öffnen des Sensor-Dialogs
+        // wieder verworfen, auch wenn sich gar nichts geändert hat.
+        boolean bothActive = channelA.hasSensor() && channelB.hasSensor();
+        if (bothActive && !previousBothActive) {
+            setDualYAxisMode(true); // zweiter Sensor gerade aktiv geworden - sinnvoller Vorschlag
+        } else if (!bothActive && dualYAxisMode) {
+            setDualYAxisMode(false); // einer wurde deaktiviert - zwei Achsen ergeben keinen Sinn mehr
+        }
+        previousBothActive = bothActive;
+
+        // Muss bei jedem Layout-Update laufen, nicht nur beim 1<->2-Sensor-Übergang oben (der
+        // setDualYAxisMode() und darüber indirekt auch dies aufruft) - sonst behält das Diagramm
+        // z. B. beim Wechsel auf einen Spektrum-Sensor die vorherigen Achsentitel/-einheiten und
+        // die farbige Magnitude-Einfärbung (siehe #updateChartUnits) bei.
+        updateChartUnits();
+
+        yAxisDual.setEnabled(bothActive);
+        yAxisDual.setToolTipText(bothActive ? null : "Nur verfügbar, wenn auf beiden Kanälen ein Sensor aktiv ist.");
 
         channelA.scrollPane.setBorder(BorderFactory.createTitledBorder(
                 BorderFactory.createLineBorder(Theme.BORDER),
@@ -816,17 +924,31 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     }
 
     /** Titel für die Tabellen-Umrahmung eines Kanals - weist bei einem Spektrum-Sensor darauf
-     *  hin, dass die Tabelle hier leer bleibt und die Anzeige stattdessen im Diagramm läuft. */
+     *  hin, dass die Anzeige während der Aufnahme im Diagramm läuft und die Tabelle erst nach
+     *  dem Stoppen das letzte Spektrum als Momentaufnahme erhält (siehe {@link #onRecordingStopped}). */
     private String channelTitle(char id, MeasurementChannel ch) {
         String base = "Sensor " + id + ": " + ch.sensor.getName();
-        return ch.producesSpectrum() ? base + " - siehe Diagramm" : base;
+        return ch.producesSpectrum() ? base + " - live im Diagramm, letztes Bild nach Stopp hier" : base;
     }
 
+    /** Setzt die Spaltenköpfe der Tabelle passend zum aktuellen Sensor. Löscht bestehende Zeilen
+     *  bewusst nur, wenn sich die Spaltenköpfe dadurch tatsächlich ändern - sonst würde ein
+     *  gerade erst nach {@link #onRecordingStopped} importiertes Spektrum bei jedem erneuten
+     *  Aufruf (z. B. weil im Sensor-Dialog nur der jeweils andere Kanal geändert wurde) sofort
+     *  wieder verworfen. */
     private void configureTableModel(MeasurementChannel ch) {
         List<Sensor.Quantity> quantities = ch.sensor.getQuantities();
-        ch.tableModel.setRowCount(0);
-        String header = quantities.isEmpty() ? "Messwert" : quantities.getFirst().getColumnHeader();
-        ch.tableModel.setColumnIdentifiers(new Object[]{"Zeit (s)", header});
+        String yHeader = quantities.isEmpty() ? "Messwert" : quantities.getFirst().getColumnHeader();
+        String xHeader = ch.producesSpectrum() ? "Frequenz (Hz)" : (ch.snapshotMode ? "Index" : "Zeit (s)");
+
+        boolean columnsChanged = ch.tableModel.getColumnCount() != 2
+                || !xHeader.equals(ch.tableModel.getColumnName(0))
+                || !yHeader.equals(ch.tableModel.getColumnName(1));
+
+        if (columnsChanged) {
+            ch.tableModel.setRowCount(0);
+            ch.tableModel.setColumnIdentifiers(new Object[]{xHeader, yHeader});
+        }
     }
 
     private void setDualYAxisMode(boolean dualYAxisMode) {
@@ -978,6 +1100,10 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     public void clearData() {
         channelA.tableModel.setRowCount(0);
         channelB.tableModel.setRowCount(0);
+        channelA.snapshotMode = false;
+        channelB.snapshotMode = false;
+        configureTableModel(channelA);
+        configureTableModel(channelB);
     }
 
     private List<double[]> extractDataFromTable(DefaultTableModel model, int valueColumnIndex) {

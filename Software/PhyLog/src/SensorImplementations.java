@@ -129,7 +129,11 @@ class VEML7700Sensor extends Sensor {
 
     @Override
     public double decode(int slot, long rawValue) {
-        return (rawValue & 0xFFFF) * 0.0576; // Skalierung auf Lux bei Gain 1x / IT 100ms
+        // Skalierung auf Lux bei Gain 1x / IT 25ms (siehe configureSensorOnBus in der Firmware) -
+        // der Lux/Count-Faktor ist umgekehrt proportional zur Integrationszeit: bei 100ms wären
+        // es 0.0576 (kürzere Integration sammelt weniger Licht pro Count, ein Count entspricht
+        // also mehr Lux) - hier 4x kürzere Integrationszeit als früher, daher 4x höherer Faktor.
+        return (rawValue & 0xFFFF) * 0.2304;
     }
 
     @Override
@@ -140,6 +144,11 @@ class VEML7700Sensor extends Sensor {
     @Override
     public String getFirmwareTypeName() {
         return "VEML7700";
+    }
+
+    @Override
+    public int getMaxSampleRateHz() {
+        return 40; // Integrationszeit 25ms in der Firmware -> max. 40 Hz neue Messwerte
     }
 }
 
@@ -176,6 +185,17 @@ class HX711Sensor extends Sensor {
         return List.of(new CalibrationParameter("Kalibrierfaktor", "Counts/N",
                 () -> calibrationFactor, v -> calibrationFactor = v));
     }
+
+    @Override
+    public int getMaxSampleRateHz() {
+        // Der HX711-Chip liefert selbst nur 10 oder 80 neue Werte/Sekunde, fest per RATE-Pin auf
+        // dem jeweiligen Breakout-Board verdrahtet - das ist keine Firmware-Einstellung, sondern
+        // eine Hardware-Wahl auf dem Modul. 80 als Obergrenze angenommen (der schnellere der
+        // beiden gängigen Werte); bei den meisten Boards ohne verbundenen RATE-Pin sind es in
+        // Wirklichkeit nur 10 Hz - schnelleres Abfragen läuft dort ins Leere (siehe
+        // {@link #readHX711} in der Firmware, die ohnehin auf das nächste DRDY-Signal wartet).
+        return 80;
+    }
 }
 
 /**
@@ -210,6 +230,41 @@ class MicrophoneSpectrumSensor extends Sensor {
     @Override
     public boolean producesSpectrum() {
         return true;
+    }
+}
+
+/**
+ * KY-003-Hall-Sensor-Modul: ein digitaler Schalter, der 1 liefert, wenn ein Magnetfeld erkannt
+ * wird, sonst 0. Typischer Einsatz in der Physik: Drehzahl- oder Periodendauer-Messung, indem
+ * ein kleiner Magnet an einem rotierenden oder schwingenden Objekt bei jedem Durchgang den
+ * Sensor kurz auslöst - in Kombination mit dem Trigger (Schwellenwert 0,5) lässt sich damit
+ * z. B. automatisch bei jedem Durchgang eine Messung starten oder die Zeit zwischen zwei
+ * Durchgängen aus dem Diagramm ablesen.
+ */
+class HallEffectSensor extends Sensor {
+    /**
+     * Erstellt einen KY-003-Hall-Sensor.
+     */
+    public HallEffectSensor() {
+        super("KY-003 (Hall-Sensor)", "", List.of());
+    }
+
+    @Override
+    public double decode(int slot, long rawValue) {
+        // Das Modul ist active-low (zieht den Ausgang bei erkanntem Magnetfeld auf LOW) - hier
+        // invertiert, damit 1 intuitiv "Magnetfeld erkannt" bedeutet statt technisch korrekt,
+        // aber beim Anschauen des Diagramms verwirrend, 0.
+        return (rawValue == 0) ? 1.0 : 0.0;
+    }
+
+    @Override
+    public List<Quantity> getQuantities() {
+        return List.of(new Quantity("Magnetfeld erkannt", "", 0));
+    }
+
+    @Override
+    public String getFirmwareTypeName() {
+        return "HALL";
     }
 }
 
@@ -250,5 +305,11 @@ class MicrophoneSensor extends Sensor {
     public List<CalibrationParameter> getCalibrationParameters() {
         return List.of(new CalibrationParameter("Empfindlichkeit @ 94 dB SPL", "dBFS",
                 () -> sensitivityDbfsAt94db, v -> sensitivityDbfsAt94db = v));
+    }
+
+    @Override
+    public int getMaxSampleRateHz() {
+        return 1000; // Firmware liest dafür dynamisch so wenig I2S-Samples wie nötig, siehe
+                     // microphoneReadSampleCount() in phylog_firmware.ino
     }
 }

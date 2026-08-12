@@ -24,6 +24,12 @@ public class AcquisitionEngine {
         /** Ein neues Frequenzspektrum für einen Spektrum-Sensor (siehe {@link Sensor#producesSpectrum()})
          *  ist eingetroffen (siehe {@link #onLineReceived}). */
         void onSpectrumFrame(char channelId, double[] magnitudesDb, int sampleRateHz);
+
+        /** Eine laufende Aufzeichnung wurde gerade gestoppt (siehe {@link #stop()}) - im
+         *  Gegensatz zu {@link #onStatusChanged()} nur genau dann, nicht auch bei Start oder
+         *  Trigger-Auslösung, damit z. B. ein einmaliges "letztes Spektrum in die Tabelle
+         *  übernehmen" nicht bei jeder Statusänderung erneut passiert. */
+        void onRecordingStopped();
     }
 
     private final MeasurementChannel channelA;
@@ -91,6 +97,7 @@ public class AcquisitionEngine {
             ch.latestValue = null;
             ch.preTriggerBuffer.clear();
             ch.lastValueForEdge = null;
+            ch.snapshotMode = false;
         }
 
         if (triggerConfig.thresholdMode) {
@@ -102,7 +109,31 @@ public class AcquisitionEngine {
         }
         listener.onStatusChanged();
 
-        DeviceConnection.getInstance().sendLine("START");
+        // Kein sendLine("START") mehr hier: Das Gerät streamt seit dem Verbindungsaufbau bereits
+        // durchgehend (siehe DeviceConnection#connect) - hier wird nur noch lokal umgeschaltet,
+        // ob eingehende Werte in die Tabelle geschrieben werden (siehe #ingestSample).
+    }
+
+    /** Fügt für jeden Kanal mit aktivem, nicht-spektralem Sensor und vorliegendem Live-Wert genau
+     *  eine Zeile mit dem aktuellen Messwert in dessen Tabelle ein - unabhängig davon, ob gerade
+     *  eine reguläre Aufzeichnung läuft. Anders als bei {@link #ingestSample} steht in der ersten
+     *  Spalte dabei nicht die vergangene Zeit, sondern der fortlaufende Tabellenindex, da
+     *  einzelne, per Knopfdruck ausgelöste Momentaufnahmen (z. B. an mehreren manuell
+     *  eingestellten Positionen) keinen gemeinsamen Zeitbezug haben. */
+    public void captureSnapshot() {
+        captureSnapshotForChannel(channelA);
+        captureSnapshotForChannel(channelB);
+    }
+
+    private void captureSnapshotForChannel(MeasurementChannel ch) {
+        if (!ch.hasSensor() || ch.producesSpectrum()) return;
+
+        Double value = ch.latestValue;
+        if (value == null) return;
+
+        ch.snapshotMode = true;
+        int index = ch.tableModel.getRowCount();
+        ch.tableModel.addRow(new Object[]{(double) index, value});
     }
 
     /** Stoppt eine laufende Aufzeichnung bzw. das Warten auf den Trigger. */
@@ -110,7 +141,12 @@ public class AcquisitionEngine {
         recording = false;
         waitingForTrigger = false;
         listener.onStatusChanged();
-        DeviceConnection.getInstance().sendLine("STOP");
+        listener.onRecordingStopped();
+
+        // Kein sendLine("STOP") mehr hier: Das würde das Gerät komplett verstummen lassen (siehe
+        // DeviceConnection#connect/#disconnect) und damit MeasurementChannel#latestValue
+        // einfrieren - Live-Anzeigen und die Momentaufnahme-Funktion sollen aber gerade auch
+        // funktionieren, wenn gerade keine Aufzeichnung läuft.
     }
 
     /** Verarbeitet eine vom Gerät empfangene Zeile: Datenzeilen ("D,millis,Kanal,Slot,Rohwert")

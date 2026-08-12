@@ -15,7 +15,8 @@ public class SensorRegistry {
             new VEML7700Sensor(),
             new HX711Sensor(),
             new MicrophoneSensor(),
-            new MicrophoneSpectrumSensor()
+            new MicrophoneSpectrumSensor(),
+            new HallEffectSensor()
     );
 
     /**

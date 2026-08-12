@@ -30,6 +30,12 @@ public class MeasurementChannel {
      *  Vorzeichenwechsel zu erkennen. */
     public Double lastValueForEdge = null;
 
+    /** {@code true}, solange die erste Tabellenspalte den fortlaufenden Index einzelner
+     *  Momentaufnahmen enthält (siehe {@link AcquisitionEngine#captureSnapshot()}) statt der
+     *  vergangenen Zeit einer laufenden Aufzeichnung - steuert nur die Spaltenüberschrift in
+     *  {@link GUI}, wird beim Sensorwechsel bzw. Leeren der Tabelle zurückgesetzt. */
+    public boolean snapshotMode = false;
+
     public MeasurementChannel(char id) {
         this.id = id;
     }
