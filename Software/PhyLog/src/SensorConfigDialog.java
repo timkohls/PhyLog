@@ -315,16 +315,22 @@ public class SensorConfigDialog extends JDialog {
     }
 
     /**
-     * Baut die Abtastraten-Auswahl neu auf und begrenzt sie auf das Minimum der von beiden
-     * gewählten Sensoren tatsächlich erreichbaren Obergrenzen (siehe {@link Sensor#getMaxSampleRateHz}) -
-     * schnellere Schritte werden erst gar nicht angeboten, statt eine Rate einstellbar zu lassen,
-     * die der Sensor ohnehin nicht einhalten kann. Solange mindestens ein Kanal ein
-     * Frequenzspektrum aufnimmt, ist die Auswahl komplett irrelevant und bleibt deaktiviert.
+     * Baut die Abtastraten-Auswahl neu auf und begrenzt sie auf das Minimum aus den von beiden
+     * gewählten Sensoren tatsächlich erreichbaren Obergrenzen (siehe {@link Sensor#getMaxSampleRateHz})
+     * sowie, falls aktuell per Bluetooth statt per USB verbunden, {@link DeviceConnection#BLUETOOTH_MAX_SAMPLE_RATE_HZ}
+     * - schnellere Schritte werden erst gar nicht angeboten, statt eine Rate einstellbar zu lassen,
+     * die entweder der Sensor nicht liefern oder die Verbindung nicht mehr zuverlässig übertragen
+     * kann. Solange mindestens ein Kanal ein Frequenzspektrum aufnimmt, ist die Auswahl komplett
+     * irrelevant und bleibt deaktiviert (das Spektrum ignoriert diese Einstellung ohnehin, siehe
+     * unten - über Bluetooth wird es aber ebenfalls spürbar langsamer ankommen, dafür gibt es
+     * keine Drosselung, da die Bildrate fest in der Firmware steht).
      *
      * <p>Bewusst nur bei einer echten Sensor-Auswahländerung aufgerufen (siehe Aufrufer), nicht
      * bei jedem periodischen Live-Update von {@link #updateChannelStates} - ein wiederholtes
      * Neuaufbauen des (inhaltlich unveränderten) Modells alle {@link #LIVE_REFRESH_MS} wäre
-     * unnötig, u. U. sogar störend, falls die Auswahlliste gerade aufgeklappt ist.</p>
+     * unnötig, u. U. sogar störend, falls die Auswahlliste gerade aufgeklappt ist. Ein Wechsel der
+     * Verbindungsart selbst (USB/Bluetooth) kann während offenem Dialog ohnehin nicht passieren -
+     * dafür müsste man sich erst trennen, wofür der Dialog wieder schließt (siehe {@link GUI}).</p>
      */
     private void refreshSampleRateOptions() {
         Sensor selectedA = (Sensor) channelA.comboSensor.getSelectedItem();
@@ -334,7 +340,9 @@ public class SensorConfigDialog extends JDialog {
 
         int maxA = (selectedA != null) ? selectedA.getMaxSampleRateHz() : Integer.MAX_VALUE;
         int maxB = (selectedB != null) ? selectedB.getMaxSampleRateHz() : Integer.MAX_VALUE;
-        int effectiveMax = Math.min(maxA, maxB);
+        boolean bluetoothLimited = DeviceConnection.getInstance().isBluetoothConnection();
+        int maxConnection = bluetoothLimited ? DeviceConnection.BLUETOOTH_MAX_SAMPLE_RATE_HZ : Integer.MAX_VALUE;
+        int effectiveMax = Math.min(Math.min(maxA, maxB), maxConnection);
 
         int previousHz = parseRate((String) comboSampleRate.getSelectedItem());
 
@@ -362,6 +370,9 @@ public class SensorConfigDialog extends JDialog {
             // mit eigener, fest in der Firmware vorgegebener Taktung (siehe phylog_firmware.ino,
             // SPECTRUM_INTERVAL_MS) und ignoriert diese Einstellung komplett.
             comboSampleRate.setToolTipText("Wirkt sich nicht auf das Frequenzspektrum aus - dessen Bildrate ist fest in der Firmware vorgegeben.");
+        } else if (bluetoothLimited && maxConnection < Math.min(maxA, maxB)) {
+            comboSampleRate.setToolTipText("Auf " + effectiveMax + " Hz begrenzt, weil aktuell per Bluetooth verbunden - "
+                    + "die Verbindung schafft weniger Bandbreite als USB. Für höhere Raten per USB verbinden.");
         } else if (effectiveMax < 1000) {
             comboSampleRate.setToolTipText("Auf " + effectiveMax + " Hz begrenzt - schneller kann mindestens einer der gewählten Sensoren keine neuen Werte liefern.");
         } else {

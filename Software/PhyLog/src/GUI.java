@@ -5,6 +5,8 @@ import javax.swing.event.TableModelEvent;
 import java.awt.*;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
@@ -38,6 +40,10 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     private JButton btnStart, btnStop, btnSnapshot, btnTrigger, btnZoomIn, btnZoomOut, btnResetZoom, btnClear;
     private JButton connectButton;
     private JLabel lblTriggerStatus;
+    /** Kleiner Hinweis, der nur bei aktiver Bluetooth-Verbindung neben {@link #lblTriggerStatus}
+     *  eingeblendet wird - siehe {@link #updateStatusLabel()} und den Bluetooth-Hinweis in
+     *  SensorConfigDialog#refreshSampleRateOptions(). */
+    private JLabel lblBluetoothInfo;
 
     /** Bündelt sämtlichen Zugriff auf die geteilte {@link DeviceConnection} (siehe
      *  {@link ConnectionController}) - hält u. a. den Verbindungsstatus-Listener fest, der beim
@@ -302,20 +308,24 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         portSelector.setEditable(true);
         portSelector.setMaximumSize(new Dimension(140, 25));
 
-        for (String name : connectionController.listPortNames()) {
-            portSelector.addItem(name);
-        }
-
         JButton btnRefreshPorts = new JButton("↻");
         btnRefreshPorts.setToolTipText("Ports aktualisieren");
         btnRefreshPorts.setFocusPainted(false);
         btnRefreshPorts.setMargin(new Insets(2, 4, 2, 4));
-        btnRefreshPorts.addActionListener(e -> {
-            portSelector.removeAllItems();
-            for (String name : connectionController.listPortNames()) {
-                portSelector.addItem(name);
-            }
-        });
+
+        // SerialPort.getCommPorts() (in connectionController.listPortNames()) kann unter Windows
+        // mit registrierten Bluetooth-SPP-Ports mehrere Sekunden dauern - synchron auf dem Event-
+        // Dispatch-Thread aufgerufen fror das bisher beim Start der GUI (hier) und bei jedem Klick
+        // auf "↻" die komplette Oberfläche ein. Jetzt beides über SwingWorker im Hintergrund, ganz
+        // wie schon beim eigentlichen Verbindungsaufbau (siehe connectButton weiter unten).
+        refreshPortsAsync(portSelector, btnRefreshPorts);
+        btnRefreshPorts.addActionListener(e -> refreshPortsAsync(portSelector, btnRefreshPorts));
+
+        JButton btnIdentifyPort = new JButton("🔍");
+        btnIdentifyPort.setToolTipText("Passenden COM-Port automatisch finden und verbinden");
+        btnIdentifyPort.setFocusPainted(false);
+        btnIdentifyPort.setMargin(new Insets(2, 4, 2, 4));
+        btnIdentifyPort.addActionListener(e -> identifyPortAsync(portSelector, btnIdentifyPort));
 
         connectButton = new JButton(connectionController.isConnected() ? "Trennen" : "Verbinden");
         connectButton.setFocusPainted(false);
@@ -323,27 +333,33 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
         connectButton.addActionListener(e -> {
             if (connectionController.isConnected()) {
-                connectionController.disconnect();
-            } else {
-                Object selectedItem = portSelector.getSelectedItem();
-                if (selectedItem != null) {
-                    String portName = selectedItem.toString().trim();
-                    if (!portName.isEmpty()) {
-                        boolean success = connectionController.connect(portName, BAUD_RATE);
-                        if (!success) {
-                            JOptionPane.showMessageDialog(null,
-                                    "Verbindung zu " + portName + " fehlgeschlagen.",
-                                    "Verbindungsfehler",
-                                    JOptionPane.ERROR_MESSAGE);
-                        }
+                connectButton.setEnabled(false);
+                new SwingWorker<Void, Void>() {
+                    @Override
+                    protected Void doInBackground() {
+                        connectionController.disconnect();
+                        return null;
                     }
-                }
+
+                    @Override
+                    protected void done() {
+                        connectButton.setEnabled(true);
+                        // updateStatusLabel() (und damit die Beschriftung) läuft bereits über den
+                        // in ConnectionController registrierten Listener, ausgelöst direkt aus
+                        // DeviceConnection#disconnect - kein weiterer Aufruf hier nötig.
+                    }
+                }.execute();
+                return;
             }
-            // Kein manuelles connectButton.setText mehr hier: DeviceConnection#connect/#disconnect
-            // benachrichtigt bereits den in ConnectionController registrierten Listener, der
-            // updateStatusLabel() (und damit die Beschriftung) aufruft - so bleibt dieser Button
-            // auch dann korrekt, wenn die Verbindung stattdessen über das Terminal-Fenster
-            // geändert wird.
+
+            Object selectedItem = portSelector.getSelectedItem();
+            if (selectedItem == null) return;
+            // Anzeigetext kann eine angehängte Beschreibung enthalten (siehe
+            // DeviceConnection#listPortNames, z. B. "COM7 (PhyLog Bluetooth)") - connect()
+            // erwartet aber den reinen Systemnamen.
+            String portName = DeviceConnection.stripDescription(selectedItem.toString().trim());
+            if (portName.isEmpty()) return;
+            connectToPort(portName);
         });
 
         menuFit.add(itemNone);
@@ -365,10 +381,156 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         menuBar.add(Box.createRigidArea(new Dimension(5, 0)));
         menuBar.add(btnRefreshPorts);
         menuBar.add(Box.createRigidArea(new Dimension(5, 0)));
+        menuBar.add(btnIdentifyPort);
+        menuBar.add(Box.createRigidArea(new Dimension(5, 0)));
         menuBar.add(connectButton);
         menuBar.add(Box.createRigidArea(new Dimension(15, 0)));
 
         setJMenuBar(menuBar);
+    }
+
+    /**
+     * Baut die Verbindung zu {@code portName} auf - im Hintergrund, damit ein besonders bei
+     * Bluetooth-SPP-Ports langsames {@code openPort()} (siehe {@link DeviceConnection#connect})
+     * nicht den Event-Dispatch-Thread blockiert. Gemeinsam genutzt von {@link #connectButton}
+     * (manuelle Auswahl) und {@link #identifyPortAsync} (automatisch gefundener Port) - so verhält
+     * sich ein per Portsuche gefundener Port beim Verbinden exakt wie ein manuell ausgewählter,
+     * ohne zweiten Klick auf "Verbinden".
+     */
+    private void connectToPort(String portName) {
+        connectButton.setEnabled(false);
+        connectButton.setText("Verbinde...");
+        new SwingWorker<Boolean, Void>() {
+            @Override
+            protected Boolean doInBackground() {
+                return connectionController.connect(portName, BAUD_RATE);
+            }
+
+            @Override
+            protected void done() {
+                connectButton.setEnabled(true);
+                boolean success;
+                try {
+                    success = get();
+                } catch (Exception ex) {
+                    success = false;
+                }
+                if (!success) {
+                    connectButton.setText("Verbinden");
+                    JOptionPane.showMessageDialog(GUI.this,
+                            "Verbindung zu " + portName + " fehlgeschlagen.",
+                            "Verbindungsfehler",
+                            JOptionPane.ERROR_MESSAGE);
+                } else {
+                    JOptionPane.showMessageDialog(GUI.this,
+                            "Verbunden mit " + portName + ".",
+                            "Verbunden",
+                            JOptionPane.INFORMATION_MESSAGE);
+                }
+                // Bei Erfolg setzt updateStatusLabel() (über den ConnectionController-Listener,
+                // ausgelöst direkt aus DeviceConnection#connect) den Text auf "Trennen" - kein
+                // weiterer Aufruf hier nötig.
+            }
+        }.execute();
+    }
+
+    /** Füllt {@code portSelector} im Hintergrund neu, ohne den Event-Dispatch-Thread zu blockieren
+     *  (siehe Kommentar an der Aufrufstelle). {@code button} bleibt währenddessen deaktiviert,
+     *  damit kein zweiter Refresh dazwischenfunkt, solange der erste noch läuft. */
+    private void refreshPortsAsync(JComboBox<String> portSelector, JButton button) {
+        button.setEnabled(false);
+        new SwingWorker<List<String>, Void>() {
+            @Override
+            protected List<String> doInBackground() {
+                return connectionController.listPortNames();
+            }
+
+            @Override
+            protected void done() {
+                button.setEnabled(true);
+                try {
+                    Object previouslySelected = portSelector.getSelectedItem();
+                    portSelector.removeAllItems();
+                    for (String name : get()) {
+                        portSelector.addItem(name);
+                    }
+                    if (previouslySelected != null) {
+                        portSelector.setSelectedItem(previouslySelected);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        }.execute();
+    }
+
+    /**
+     * Startet {@link ConnectionController#identifyPhyLogPort} im Hintergrund und verbindet bei
+     * Erfolg direkt mit dem gefundenen Port (über {@link #connectToPort}) - kein zweiter Klick auf
+     * "Verbinden" nötig. Läuft nicht, solange bereits eine Verbindung aktiv ist (siehe Warnhinweis
+     * in {@link DeviceConnection#identifyPhyLogPort}).
+     *
+     * <p>Die Kandidatenliste wird vor dem Probieren so sortiert, dass bereits als PhyLog/Bluetooth
+     * erkannte Ports (siehe {@link DeviceConnection#listPortNames}, z. B. "COM7 (Bluetooth)")
+     * zuerst drankommen, unbeschriftete Ports (Drucker, Modems, ...) erst danach - im Normalfall
+     * (genau ein PhyLog-Gerät gepairt/verbunden) meist nur ein einziger Probe-Versuch statt
+     * potenziell vieler mit je bis zu {@code IDENTIFY_TIMEOUT_MS} Wartezeit.</p>
+     */
+    private void identifyPortAsync(JComboBox<String> portSelector, JButton button) {
+        if (connectionController.isConnected()) {
+            JOptionPane.showMessageDialog(this,
+                    "Bitte zuerst trennen, bevor die Portsuche startet.",
+                    "Noch verbunden", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        List<String> displayNames = connectionController.listPortNames();
+        List<String> candidates = new ArrayList<>();
+        for (String name : displayNames) {
+            if (name.contains("(")) candidates.add(DeviceConnection.stripDescription(name));
+        }
+        for (String name : displayNames) {
+            if (!name.contains("(")) candidates.add(name);
+        }
+        if (candidates.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Keine Ports gefunden.",
+                    "Portsuche", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        button.setEnabled(false);
+        button.setToolTipText("Suche läuft (probiert jeden Port kurz per PING aus)...");
+        new SwingWorker<String, Void>() {
+            @Override
+            protected String doInBackground() {
+                return connectionController.identifyPhyLogPort(candidates);
+            }
+
+            @Override
+            protected void done() {
+                button.setEnabled(true);
+                button.setToolTipText("Passenden COM-Port automatisch finden und verbinden");
+                String found;
+                try {
+                    found = get();
+                } catch (Exception ex) {
+                    found = null;
+                }
+                if (found == null) {
+                    JOptionPane.showMessageDialog(GUI.this,
+                            "Kein Port hat mit #HELLO geantwortet. ESP32 eingeschaltet und in Reichweite/gepairt?",
+                            "Nichts gefunden", JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+                for (int i = 0; i < portSelector.getItemCount(); i++) {
+                    String item = portSelector.getItemAt(i);
+                    if (DeviceConnection.stripDescription(item).equals(found)) {
+                        portSelector.setSelectedItem(item);
+                        break;
+                    }
+                }
+                connectToPort(found);
+            }
+        }.execute();
     }
 
     private void openStandardDeviationDialog() {
@@ -439,6 +601,33 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         toolBar.add(new JLabel("Status: "));
         lblTriggerStatus = new JLabel();
         toolBar.add(lblTriggerStatus);
+
+        // Kleines "i" für den Bluetooth-Bandbreiten-Hinweis - per Text statt Icon-Datei, damit
+        // kein zusätzliches Ressourcen-/Bildladen nötig ist (siehe auch die vorhandene
+        // try/catch-Fallback-Logik fürs Anwendungsicon an anderer Stelle in dieser Klasse). Per
+        // Default unsichtbar, siehe updateStatusLabel() - taucht nur bei tatsächlich aktiver
+        // Bluetooth-Verbindung auf.
+        lblBluetoothInfo = new JLabel(" \u24D8");
+        lblBluetoothInfo.setForeground(Theme.MUTED);
+        lblBluetoothInfo.setFont(lblBluetoothInfo.getFont().deriveFont(Font.BOLD));
+        lblBluetoothInfo.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        String bluetoothHint = "<html><div style='width:280px;'>Per Bluetooth steht weniger "
+                + "Bandbreite zur Verfügung als über USB - die Abtastrate ist deshalb auf "
+                + DeviceConnection.BLUETOOTH_MAX_SAMPLE_RATE_HZ + " Hz begrenzt (siehe Sensoren-"
+                + "Dialog). Für die volle Auflösung/Abtastrate stattdessen per USB verbinden.</div></html>";
+        lblBluetoothInfo.setToolTipText(bluetoothHint);
+        lblBluetoothInfo.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                // Zusätzlich zum Tooltip auch per Klick anzeigen - ein Tooltip allein wird leicht
+                // übersehen bzw. ist z. B. bei Touch-/Trackpad-Bedienung ohne echtes Hover gar
+                // nicht erreichbar.
+                JOptionPane.showMessageDialog(GUI.this, bluetoothHint, "Bluetooth-Verbindung", JOptionPane.INFORMATION_MESSAGE);
+            }
+        });
+        lblBluetoothInfo.setVisible(false);
+        toolBar.add(lblBluetoothInfo);
+
         toolBar.add(Box.createHorizontalStrut(8));
 
         add(toolBar, BorderLayout.NORTH);
@@ -780,6 +969,10 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         }
 
         updateActionAvailability(connected);
+
+        if (lblBluetoothInfo != null) {
+            lblBluetoothInfo.setVisible(connected && connectionController.isBluetoothConnection());
+        }
 
         if (lblTriggerStatus == null) return;
 

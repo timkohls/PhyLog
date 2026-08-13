@@ -167,25 +167,52 @@ public class Terminal extends JFrame {
     }
 
     /**
-     * Öffnet oder schließt die serielle Verbindung je nach Zustand.
+     * Öffnet oder schließt die serielle Verbindung je nach Zustand. Läuft im Hintergrund (siehe
+     * {@link #connect}) statt direkt im Swing-Event-Dispatch-Thread.
      */
     private void toggleConnection() {
-        if (DeviceConnection.getInstance().isConnected()) {
-            disconnect();
-        } else {
-            connect();
-        }
+        btnConnect.setEnabled(false);
+        boolean wasConnected = DeviceConnection.getInstance().isConnected();
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() {
+                if (wasConnected) {
+                    disconnectBlocking();
+                } else {
+                    connectBlocking();
+                }
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                btnConnect.setEnabled(true);
+                // updateConnectButtonLabel() läuft bereits über den im Konstruktor registrierten
+                // connectionListener, ausgelöst direkt aus DeviceConnection#connect/#disconnect -
+                // kein weiterer Aufruf hier nötig.
+            }
+        }.execute();
     }
 
     /**
-     * Stellt die Verbindung zum ausgewählten Port her.
+     * Stellt die Verbindung zum ausgewählten Port her. Läuft im Hintergrund-Thread von
+     * {@link #toggleConnection} - {@code openPort()} und das anschließende Senden von "START"
+     * (siehe {@link DeviceConnection#connect}) können, besonders bei einem frisch verbundenen
+     * Bluetooth-SPP-Port, mehrere Sekunden dauern; direkt im Event-Dispatch-Thread ausgeführt
+     * würde das die komplette Oberfläche für diese Zeit einfrieren. {@link #appendLog} springt
+     * selbst auf den Event-Dispatch-Thread um, der Aufruf hier aus dem Hintergrund-Thread ist
+     * also unproblematisch.
      */
-    private void connect() {
+    private void connectBlocking() {
         String portName = (String) comboPort.getSelectedItem();
         if (portName == null) {
             appendLog("# Kein Port ausgewählt.");
             return;
         }
+        // Anzeigetext kann eine angehängte Beschreibung enthalten (siehe
+        // DeviceConnection#listPortNames, z. B. "COM7 (PhyLog Bluetooth)") - connect() erwartet
+        // aber den reinen Systemnamen.
+        portName = DeviceConnection.stripDescription(portName);
 
         int baud;
         try {
@@ -205,12 +232,13 @@ public class Terminal extends JFrame {
     }
 
     /**
-     * Trennt die serielle Verbindung.
+     * Trennt die serielle Verbindung. Läuft im Hintergrund-Thread von {@link #toggleConnection},
+     * siehe dortigen Kommentar sowie {@link #connectBlocking}.
      */
-    private void disconnect() {
+    private void disconnectBlocking() {
         DeviceConnection.getInstance().disconnect();
         appendLog("# Verbindung getrennt.");
-        // Kein manuelles btnConnect.setText mehr hier, siehe #connect().
+        // Kein manuelles btnConnect.setText mehr hier, siehe #connectBlocking().
     }
 
     /**
@@ -239,12 +267,17 @@ public class Terminal extends JFrame {
     }
 
     /**
-     * Fügt eine Zeile zum Text-Log hinzu und scrollt automatisch nach unten.
+     * Fügt eine Zeile zum Text-Log hinzu und scrollt automatisch nach unten. Über
+     * {@link SwingUtilities#invokeLater} statt direktem Zugriff, damit dieser Aufruf auch aus
+     * einem Hintergrund-Thread heraus sicher ist - siehe {@link #connectBlocking}/
+     * {@link #disconnectBlocking}, die inzwischen nicht mehr im Event-Dispatch-Thread laufen.
      *
      * @param text Der auszugebende Text.
      */
     private void appendLog(String text) {
-        txtLog.append(text.endsWith("\n") ? text : text + "\n");
-        txtLog.setCaretPosition(txtLog.getDocument().getLength());
+        SwingUtilities.invokeLater(() -> {
+            txtLog.append(text.endsWith("\n") ? text : text + "\n");
+            txtLog.setCaretPosition(txtLog.getDocument().getLength());
+        });
     }
 }

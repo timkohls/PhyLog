@@ -38,8 +38,20 @@ class ConnectionController {
         return connection.isConnected();
     }
 
+    /** Durchreiche zu {@link DeviceConnection#isBluetoothConnection()} - siehe dort. Genutzt von
+     *  {@link GUI#updateStatusLabel()} für den Bluetooth-Bandbreiten-Hinweis. */
+    boolean isBluetoothConnection() {
+        return connection.isBluetoothConnection();
+    }
+
     List<String> listPortNames() {
         return connection.listPortNames();
+    }
+
+    /** Durchreiche zu {@link DeviceConnection#identifyPhyLogPort(List)} - siehe dort. Läuft
+     *  blockierend, der Aufrufer ({@link GUI}) muss selbst für einen Hintergrund-Thread sorgen. */
+    String identifyPhyLogPort(List<String> candidatePortNames) {
+        return connection.identifyPhyLogPort(candidatePortNames);
     }
 
     boolean connect(String portName, int baudRate) {

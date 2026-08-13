@@ -154,12 +154,48 @@
  * wenn auch kleinere, Verzögerung. Eine echte Entkopplung bräuchte einen eigenen FreeRTOS-Task
  * für die I2S-Lesevorgänge (mit Ringpuffer statt direktem Aufruf aus {@code loop()}) - das ist ein
  * größerer struktureller Umbau und hier bewusst nicht mitgemacht.</p>
+ *
+ * <p>v8.5: Bluetooth Classic (SPP) als zweiter, gleichberechtigter Weg zum PC - zusätzlich zur
+ * bisherigen USB-Verbindung, nicht als Ersatz. Der klassische ESP32 kann beides gleichzeitig
+ * betreiben (anders als ESP32-S2/S3/C3, die kein Classic-Bluetooth haben, nur BLE). Ein per SPP
+ * gepairtes Gerät erscheint auf dem PC als ganz normaler virtueller COM-Port - GUI.java/
+ * DeviceConnection.java brauchten dafür praktisch keine strukturelle Änderung (siehe dortiger
+ * Kommentar), da beide ohnehin nur mit einem Portnamen + Baudrate arbeiten, ohne zwischen "echtem"
+ * USB-COM-Port und einem SPP-COM-Port zu unterscheiden.</p>
+ * <p>Firmware-seitig lief bisher jede Ausgabe direkt über {@code Serial.print}/{@code println}/
+ * {@code write}, verstreut über {@link #reportSensorError}, {@link #sendDataPacket},
+ * {@link #sendSpectrumPacket} und {@link #processCommand}. Alle Stellen jetzt über die neuen
+ * {@link #hostWrite}/{@link #hostPrint}-Hilfsfunktionen, die konsequent an beide Schnittstellen
+ * schreiben (USB immer, Bluetooth nur falls {@link #SerialBT}.hasClient()) - so bekommt die
+ * Software dieselben Pakete unabhängig davon, über welchen der beiden Wege sie gerade verbunden
+ * ist, ohne dass die Firmware wissen müsste, welche der beiden Verbindungen gerade "die aktive"
+ * ist. Eingehende Kommandos entsprechend aus {@link #handleSerialCommunication} jetzt aus beiden
+ * Quellen in denselben Zeilenpuffer gelesen - bewusst kein getrennter Puffer je Schnittstelle: In
+ * der Praxis ist ohnehin nur eine der beiden Verbindungen tatsächlich benutzt, ein Client an
+ * beiden gleichzeitig aktiv sendend würde die Kommandos ineinander mischen, das wird hier nicht
+ * abgefangen.</p>
+ * <p>Bewusst nicht gemacht: Ein eigener "USB"/"Bluetooth"-Unterschied im seriellen Protokoll oder
+ * in der Portbezeichnung, die die Software sieht - das wäre reine GUI-Kosmetik (siehe
+ * DeviceConnection.java: {@code getDescriptivePortName()} statt {@code getSystemPortName()} für
+ * die Anzeige) und hat mit der Firmware nichts zu tun.</p>
+ * <p><b>Hardware-/Board-Hinweis:</b> Braucht in der Arduino-IDE unter Werkzeuge -&gt;
+ * "Partition Scheme" ein Schema mit genug Platz für den Bluetooth-Stack (z. B. "Default" statt
+ * eines reinen "No OTA (2MB APP...)"-Schemas) - der Bluedroid-Stack braucht deutlich mehr
+ * Flash/RAM als nur WLAN oder nur USB-Serial. Bei "Bluetooth is not enabled"-Kompilierfehlern:
+ * Board-Paket zu alt bzw. Bluetooth im Menü "Tools -&gt; Zusätzliche Boardinformationen" o.ä.
+ * deaktiviert.</p>
  */
 
 #include <Wire.h>
 #include <driver/i2s_std.h>
 #include <math.h>
 #include "soc/gpio_struct.h"
+#include "BluetoothSerial.h"
+
+#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+#error Bluetooth ist im Board-/Menuconfig-Profil deaktiviert - siehe Hardware-/Board-Hinweis \
+       zu v8.5 im Dateikopf (Partition Scheme mit Bluetooth-Unterstützung wählen).
+#endif
 
 enum SensorType {
   TYPE_NONE = 0,
@@ -229,6 +265,17 @@ const int MIC_MAX_READ_SAMPLES = 512;
  *  921600 probiert werden (weitere Verdopplung), das ist aber chipabhängig weniger garantiert. */
 const long BAUD_RATE = 460800;
 
+/** Name, unter dem der ESP32 beim Pairing in der Bluetooth-Geräteliste des PCs auftaucht -
+ *  landet je nach Betriebssystem/Treiber meist auch in der Beschreibung des daraus entstehenden
+ *  virtuellen COM-Ports (z. B. Windows: "Standard Serial over Bluetooth link (COMx)" plus
+ *  Gerätename in der Systemsteuerung; macOS/Linux oft direkt im Portnamen selbst) - siehe
+ *  {@code getDescriptivePortName()}-Hinweis in DeviceConnection.java. Bewusst unterscheidbar vom
+ *  reinen USB-Verbindungsnamen gewählt (der vom USB-Seriell-Chip vorgegeben wird, z. B. "CP2102
+ *  USB to UART Bridge", und sich firmware-seitig nicht umbenennen lässt). */
+const char *BT_DEVICE_NAME = "PhyLog Bluetooth";
+
+BluetoothSerial SerialBT;
+
 /** FFT-Größe für den Live-Frequenzspektrum-Modus (siehe {@link #captureAndSendSpectrum}) - eine
  *  Zweierpotenz, wie sie die iterative Radix-2-FFT ({@link #computeFFT}) voraussetzt. Ein reelles
  *  Signal liefert nur n/2 unabhängige Frequenz-Bins (die obere Hälfte ist bei reellem Eingang nur
@@ -273,6 +320,30 @@ int i2cFailStreakA = 0;
 int i2cFailStreakB = 0;
 const int I2C_FAIL_STREAK_RESET_THRESHOLD = 20;
 
+// --- Host-Kommunikation (USB + Bluetooth), siehe v8.5-Hinweis im Dateikopf ---
+//
+// Ab hier läuft jede Ausgabe an den PC über hostWrite()/hostPrint() statt direkter Serial.*-
+// Aufrufe: beide schreiben immer auf die USB-Verbindung und zusätzlich auf SerialBT, sofern
+// dort gerade ein Client (die PhyLog-Software) verbunden ist - die Firmware unterscheidet nicht,
+// über welchen Weg sie tatsächlich gerade "benutzt" wird, sondern schickt konsequent an beide.
+
+/** Schreibt {@code len} Bytes ab {@code data} auf die USB-Verbindung sowie, falls verbunden, auf
+ *  Bluetooth. {@code SerialBT.write()} ohne verbundenen Client kostet nur die interne
+ *  hasClient()-Prüfung und blockiert nicht - das explizite Prüfen hier spart trotzdem den
+ *  (unnötigen) Aufruf in den Bluetooth-Stack im reinen USB-Betrieb. */
+void hostWrite(const char *data, size_t len) {
+  Serial.write((const uint8_t *) data, len);
+  if (SerialBT.hasClient()) {
+    SerialBT.write((const uint8_t *) data, len);
+  }
+}
+
+/** Wie {@link #hostWrite}, aber für einen nullterminierten String (spart an den Aufrufstellen das
+ *  explizite Mitführen einer Länge für Konstanten wie {@code "#OK,START\n"}). */
+void hostPrint(const char *s) {
+  hostWrite(s, strlen(s));
+}
+
 /** Meldet einen fehlgeschlagenen Sensorzugriff auf einen Kanal, höchstens einmal pro Sekunde je
  *  Kanal, statt einen solchen Fehler stillschweigend zu verschlucken.
  *
@@ -284,10 +355,9 @@ void reportSensorError(char channelName, const char *errorTag) {
   unsigned long now = millis();
   if (now - lastReport >= 1000) {
     lastReport = now;
-    Serial.print("#ERR,");
-    Serial.print(errorTag);
-    Serial.print(",");
-    Serial.println(channelName);
+    char buf[48];
+    int len = snprintf(buf, sizeof(buf), "#ERR,%s,%c\n", errorTag, channelName);
+    hostWrite(buf, len);
   }
 }
 
@@ -821,18 +891,20 @@ void processCommand(String command) {
   command.trim();
 
   if (command.equalsIgnoreCase("PING")) {
-    Serial.println("#HELLO,PhyLog-ESP32,fw=8.4");
+    hostPrint("#HELLO,PhyLog-ESP32,fw=8.5\n");
   } else if (command.equalsIgnoreCase("START")) {
     isStreaming = true;
-    Serial.println("#OK,START");
+    hostPrint("#OK,START\n");
   } else if (command.equalsIgnoreCase("STOP")) {
     isStreaming = false;
-    Serial.println("#OK,STOP");
+    hostPrint("#OK,STOP\n");
   } else if (command.startsWith("RATE,")) {
     long rateHz = command.substring(5).toInt();
     if (rateHz >= 1 && rateHz <= 1000) {
       sampleIntervalMs = 1000 / rateHz;
-      Serial.print("#OK,RATE,"); Serial.println(rateHz);
+      char buf[32];
+      int len = snprintf(buf, sizeof(buf), "#OK,RATE,%ld\n", rateHz);
+      hostWrite(buf, len);
     }
   } else if (command.startsWith("SET,")) {
     // Format: SET,<Kanal>,<SensorTyp> (z.B. SET,A,INA219)
@@ -863,35 +935,45 @@ void processCommand(String command) {
         configureChannelHardware('B', newType, PINS_CHANNEL_B);
       }
 
-      Serial.print("#OK,SET,"); Serial.print(targetChannel); Serial.print(","); Serial.println(sensorTypeName);
+      char buf[64];
+      int len = snprintf(buf, sizeof(buf), "#OK,SET,%c,%s\n", targetChannel, sensorTypeName.c_str());
+      hostWrite(buf, len);
     }
+  }
+}
+
+/** Liest ein einzelnes Kommandozeichen aus einer der beiden Host-Schnittstellen (USB oder
+ *  Bluetooth) in {@code inputBuffer} ein und stößt bei einem Zeilenumbruch die Verarbeitung an -
+ *  gemeinsame Zeilen-Puffer-Logik für {@link #handleSerialCommunication}, das denselben Puffer
+ *  für beide Quellen nacheinander füttert (siehe v8.5-Hinweis im Dateikopf: kein getrennter
+ *  Puffer je Schnittstelle, ein gleichzeitig aktiv sendender Client auf beiden Wegen würde die
+ *  Kommandos ineinander mischen - in der Praxis ist ohnehin nur eine der beiden Verbindungen
+ *  tatsächlich benutzt). */
+void feedCommandChar(String &inputBuffer, char incomingChar) {
+  if (incomingChar == '\n' || incomingChar == '\r') {
+    if (inputBuffer.length() > 0) {
+      processCommand(inputBuffer);
+      inputBuffer = "";
+    }
+  } else {
+    inputBuffer += incomingChar;
   }
 }
 
 void handleSerialCommunication() {
   static String inputBuffer = "";
   while (Serial.available() > 0) {
-    char incomingChar = (char) Serial.read();
-    if (incomingChar == '\n' || incomingChar == '\r') {
-      if (inputBuffer.length() > 0) {
-        processCommand(inputBuffer);
-        inputBuffer = "";
-      }
-    } else {
-      inputBuffer += incomingChar;
-    }
+    feedCommandChar(inputBuffer, (char) Serial.read());
+  }
+  while (SerialBT.available() > 0) {
+    feedCommandChar(inputBuffer, (char) SerialBT.read());
   }
 }
 
 void sendDataPacket(char channel, int slot, long rawValue) {
-  Serial.print("D,");
-  Serial.print(millis());
-  Serial.print(",");
-  Serial.print(channel);
-  Serial.print(",");
-  Serial.print(slot);
-  Serial.print(",");
-  Serial.println(rawValue);
+  char buf[48];
+  int len = snprintf(buf, sizeof(buf), "D,%lu,%c,%d,%ld\n", millis(), channel, slot, rawValue);
+  hostWrite(buf, len);
 }
 
 /** Kehrt die Bit-Reihenfolge eines {@code bitCount}-Bit-Wertes um - Hilfsfunktion für die
@@ -951,7 +1033,8 @@ void computeFFT(float *real, float *imag, int n) {
  *  schnell ein Vielfaches an Übertragungszeit).
  *
  * <p>Baut das gesamte Paket in {@link #SPECTRUM_PACKET_BUF_SIZE} zusammen und verschickt es mit
- * einem einzigen {@code Serial.write()}, statt wie zuvor mit 512+ einzelnen {@code Serial.print()}
+ * einem einzigen {@code hostWrite()} (siehe v8.5-Hinweis im Dateikopf), statt wie zuvor mit 512+
+ * einzelnen {@code Serial.print()}
  * -Aufrufen (siehe v8.4-Hinweis im Dateikopf) - jeder einzelne Aufruf formatiert eine Zahl separat
  * und schreibt sie einzeln raus, was bei ~16 Bildern/Sekunde spürbar CPU-Zeit kostete, die dann
  * z. B. für die zeitkritische Abtastung des jeweils anderen Kanals fehlte. Der Puffer ist
@@ -977,7 +1060,7 @@ void sendSpectrumPacket(char channelName, float *real, float *imag) {
   }
 
   packetBuf[offset++] = '\n';
-  Serial.write((const uint8_t *) packetBuf, offset);
+  hostWrite(packetBuf, offset);
 }
 
 /** Nimmt {@link #SPECTRUM_FFT_SIZE} Samples vom Mikrofon des angegebenen Kanals auf, wendet ein
@@ -1127,12 +1210,13 @@ void sampleChannel(char channelName, SensorType type, const int pins[3]) {
 
 void setup() {
   Serial.begin(BAUD_RATE);
+  SerialBT.begin(BT_DEVICE_NAME);
   delay(200);
 
   // Bewusst KEINE Pin-/Bus-Initialisierung hier: welche Rolle die drei Kanal-Pins spielen,
   // hängt vom gewählten Sensortyp ab und wird erst bei SET über configureChannelHardware()
   // hergestellt - beide Kanäle starten unkonfiguriert bei TYPE_NONE.
-  Serial.println("#HELLO,PhyLog-ESP32,fw=8.4");
+  hostPrint("#HELLO,PhyLog-ESP32,fw=8.5\n");
 }
 
 void loop() {
