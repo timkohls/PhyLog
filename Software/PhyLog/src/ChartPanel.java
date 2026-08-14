@@ -6,6 +6,7 @@ import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Arrays;
 
 /**
  * Zeichnet ein X/Y-Diagramm (i. d. R. Zeit/Messwert, siehe {@link #setXAxisTitle} für Ausnahmen
@@ -325,11 +326,26 @@ public class ChartPanel extends JPanel {
      * @param data Liste von (Zeit, Messwert)-Paaren, {@code null} wird als leere Liste behandelt
      */
     public void setData(List<double[]> data) {
-        this.originalData = (data != null) ? new ArrayList<>(data) : new ArrayList<>();
+        List<double[]> newData = (data != null) ? new ArrayList<>(data) : new ArrayList<>();
+        boolean dataChanged = !dataEquivalent(this.originalData, newData);
+        this.originalData = newData;
         recomputeDisplayData();
-        fitDirty = true;
-        sigmaCacheDirty = true;
+        if (dataChanged) {
+            fitDirty = true;
+            sigmaCacheDirty = true;
+        }
         repaint();
+    }
+
+    /** Vergleicht zwei Datensätze günstig statt vollständig: gleiche Größe plus identischer erster
+     *  und letzter Punkt genügt, um ein bloßes "unverändert erneut gesetzt" (z. B. jeder 50ms-Tick
+     *  von GUI#liveViewRefreshTimer ohne neue Zeile) von einer echten Änderung (neue/entfernte
+     *  Zeilen) zu unterscheiden - ein vollständiger Elementvergleich wäre bei tausenden Punkten
+     *  selbst schon so teuer wie der zu vermeidende Refit. */
+    private static boolean dataEquivalent(List<double[]> a, List<double[]> b) {
+        if (a.size() != b.size()) return false;
+        if (a.isEmpty()) return true;
+        return Arrays.equals(a.get(0), b.get(0)) && Arrays.equals(a.get(a.size() - 1), b.get(b.size() - 1));
     }
 
     /** Leitet {@link #displayData} aus {@link #originalData} ab: unverändert ohne aktives

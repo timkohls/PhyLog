@@ -179,6 +179,15 @@ public class DeviceConnection {
     }
 
     /**
+     * @return Systemname des aktuell verbundenen Ports (z. B. "COM5"), oder {@code null} ohne
+     *         aktive Verbindung - unabhängig davon, über welches Fenster ({@link GUI} oder
+     *         {@link Terminal}) sie hergestellt wurde, da beide dieselbe Singleton-Instanz teilen.
+     */
+    public String getActivePortName() {
+        return isConnected() ? activePort.getSystemPortName() : null;
+    }
+
+    /**
      * Liefert die Kandidaten für {@link #identifyPhyLogPort}, priorisiert nach Trefferwahr-
      * scheinlichkeit statt in der von {@link SerialPort#getCommPorts()} gelieferten (Betriebs-
      * system-abhängigen, nicht aussagekräftigen) Reihenfolge: zuerst als {@link #SERIAL_LABEL}
@@ -386,6 +395,13 @@ public class DeviceConnection {
                         if (response.indexOf("#HELLO") >= 0) {
                             return true;
                         }
+                    }
+                } else {
+                    try {
+                        Thread.sleep(5);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return false;
                     }
                 }
             }

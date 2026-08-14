@@ -310,8 +310,10 @@ public final class CurveFitting {
             double trialCost = sinusCost(data, pTrial);
 
             if (trialCost < prevCost) {
-                boolean converged = Math.abs(dp[0]) < 1e-8 && Math.abs(dp[1]) < 1e-8
-                        && Math.abs(dp[2]) < 1e-8 && Math.abs(dp[3]) < 1e-8;
+                boolean converged = Math.abs(dp[0]) < 1e-8 * Math.max(1.0, Math.abs(p[0]))
+                        && Math.abs(dp[1]) < 1e-8 * Math.max(1.0, Math.abs(p[1]))
+                        && Math.abs(dp[2]) < 1e-8 * Math.max(1.0, Math.abs(p[2]))
+                        && Math.abs(dp[3]) < 1e-8 * Math.max(1.0, Math.abs(p[3]));
                 p = pTrial;
                 prevCost = trialCost;
                 lambda = Math.max(lambda / 10.0, 1e-10);

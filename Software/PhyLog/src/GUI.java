@@ -147,7 +147,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
     /** @return den Kanal 'A' oder 'B'; alles andere fällt auf Kanal A zurück. */
     private MeasurementChannel channel(char id) {
-        return (id == 'B') ? channelB : channelA;
+        return acquisitionEngine.channel(id);
     }
 
     private void loadWindowIcon() {
@@ -818,7 +818,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     }
 
     private void openTerminal() {
-        if (terminalWindow == null) {
+        if (terminalWindow == null || !terminalWindow.isDisplayable()) {
             terminalWindow = new Terminal();
         }
         terminalWindow.setVisible(true);

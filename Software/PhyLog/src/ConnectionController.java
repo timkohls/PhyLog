@@ -38,8 +38,6 @@ class ConnectionController {
         return connection.isConnected();
     }
 
-    /** Durchreiche zu {@link DeviceConnection#isBluetoothConnection()} - siehe dort. Genutzt von
-     *  {@link GUI#updateStatusLabel()} für den Bluetooth-Bandbreiten-Hinweis. */
     boolean isBluetoothConnection() {
         return connection.isBluetoothConnection();
     }
@@ -73,6 +71,16 @@ class ConnectionController {
 
     void addLineListener(Consumer<String> listener) {
         connection.addLineListener(listener);
+    }
+
+    /** Durchreiche zu {@link DeviceConnection#removeLineListener(Consumer)} - siehe dort. */
+    void removeLineListener(Consumer<String> listener) {
+        connection.removeLineListener(listener);
+    }
+
+    /** Durchreiche zu {@link DeviceConnection#getActivePortName()} - siehe dort. */
+    String getActivePortName() {
+        return connection.getActivePortName();
     }
 
     /** Meldet den Statuslistener wieder ab - muss beim Schließen des Fensters aufgerufen werden,

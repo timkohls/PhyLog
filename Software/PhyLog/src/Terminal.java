@@ -17,10 +17,10 @@ public class Terminal extends JFrame {
     private JTextField txtCommand;
 
     private final Consumer<String> lineListener = this::appendLog;
-    /** Hält den Button hier synchron mit dem tatsächlichen Verbindungsstatus - auch dann, wenn
-     *  die Verbindung über das Hauptfenster ({@link GUI}) auf- oder abgebaut wurde. */
-    private final Runnable connectionListener = this::updateConnectButtonLabel;
-
+    /** Bündelt Verbindungsauf-/-abbau, Portliste, Befehlsversand sowie den Verbindungsstatus-
+     *  Listener an einer Stelle (siehe GUI, das dieselbe Klasse nutzt) - Terminal griff zuvor an
+     *  gut einem Dutzend Stellen direkt auf DeviceConnection.getInstance() zu. */
+    private final ConnectionController connectionController = new ConnectionController(this::onConnectionStatusChanged);
     /**
      * Erstellt das Terminal-Fenster und initialisiert die UI.
      */
@@ -37,31 +37,24 @@ public class Terminal extends JFrame {
         add(buildCommandPanel(), BorderLayout.SOUTH);
 
         refreshPorts();
-        DeviceConnection.getInstance().addLineListener(lineListener);
-        DeviceConnection.getInstance().addConnectionListener(connectionListener);
+        connectionController.addLineListener(lineListener);
         updateConnectButtonLabel();
 
-        if (DeviceConnection.getInstance().isConnected()) {
+        if (connectionController.isConnected()) {
             appendLog("# Bereits verbunden (geteilte Verbindung mit dem Hauptfenster).");
         }
 
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                DeviceConnection.getInstance().removeLineListener(lineListener);
-                DeviceConnection.getInstance().removeConnectionListener(connectionListener);
+                connectionController.removeLineListener(lineListener);
+                connectionController.dispose();
             }
         });
     }
 
-    /**
-     * Setzt die Beschriftung von {@link #btnConnect} passend zum tatsächlichen Verbindungsstatus.
-     * Wird sowohl beim Aufbau dieses Fensters als auch bei jeder Statusänderung aufgerufen (siehe
-     * {@link #connectionListener}) - unabhängig davon, ob die Änderung von hier oder von {@link GUI}
-     * ausgelöst wurde.
-     */
     private void updateConnectButtonLabel() {
-        btnConnect.setText(DeviceConnection.getInstance().isConnected() ? "Trennen" : "Verbinden");
+        btnConnect.setText(connectionController.isConnected() ? "Trennen" : "Verbinden");
     }
 
     /**
@@ -156,23 +149,46 @@ public class Terminal extends JFrame {
         return button;
     }
 
-    /**
-     * Aktualisiert die Liste der verfügbaren seriellen Ports.
-     */
     private void refreshPorts() {
+        Object previouslySelected = comboPort.getSelectedItem();
         comboPort.removeAllItems();
-        for (String name : DeviceConnection.getInstance().listPortNames()) {
+        for (String name : connectionController.listPortNames()) {
             comboPort.addItem(name);
+        }
+        selectActivePortIfConnected(previouslySelected);
+    }
+
+    /** Wählt im Port-Auswahlfeld den tatsächlich verbundenen Port aus, falls eine Verbindung
+     *  besteht (z. B. über {@link GUI} hergestellt, bevor dieses Fenster geöffnet wurde) - sonst
+     *  bleibt die vorherige Auswahl erhalten, sofern sie noch in der aktualisierten Liste vorkommt. */
+    private void selectActivePortIfConnected(Object previouslySelected) {
+        String activePort = connectionController.getActivePortName();
+        if (activePort != null) {
+            for (int i = 0; i < comboPort.getItemCount(); i++) {
+                String item = comboPort.getItemAt(i);
+                if (DeviceConnection.stripDescription(item).equals(activePort)) {
+                    comboPort.setSelectedItem(item);
+                    return;
+                }
+            }
+        }
+        if (previouslySelected != null) {
+            comboPort.setSelectedItem(previouslySelected);
         }
     }
 
-    /**
-     * Öffnet oder schließt die serielle Verbindung je nach Zustand. Läuft im Hintergrund (siehe
-     * {@link #connect}) statt direkt im Swing-Event-Dispatch-Thread.
-     */
+    /** Wird bei jeder Verbindungsstatusänderung aufgerufen (siehe {@link #connectionController}) -
+     *  egal ob hier oder über {@link GUI} ausgelöst. Aktualisiert Button-Beschriftung UND welcher
+     *  Port markiert ist - sonst bliebe nach einer über GUI hergestellten Verbindung der hier zuvor
+     *  (u. U. falsch) ausgewählte Port stehen. */
+    private void onConnectionStatusChanged() {
+        updateConnectButtonLabel();
+        selectActivePortIfConnected(comboPort.getSelectedItem());
+    }
+
     private void toggleConnection() {
         btnConnect.setEnabled(false);
-        boolean wasConnected = DeviceConnection.getInstance().isConnected();
+        boolean wasConnected = connectionController.isConnected();
         new SwingWorker<Void, Void>() {
             @Override
             protected Void doInBackground() {
@@ -187,9 +203,6 @@ public class Terminal extends JFrame {
             @Override
             protected void done() {
                 btnConnect.setEnabled(true);
-                // updateConnectButtonLabel() läuft bereits über den im Konstruktor registrierten
-                // connectionListener, ausgelöst direkt aus DeviceConnection#connect/#disconnect -
-                // kein weiterer Aufruf hier nötig.
             }
         }.execute();
     }
@@ -209,9 +222,6 @@ public class Terminal extends JFrame {
             appendLog("# Kein Port ausgewählt.");
             return;
         }
-        // Anzeigetext kann eine angehängte Beschreibung enthalten (siehe
-        // DeviceConnection#listPortNames, z. B. "COM7 (PhyLog Bluetooth)") - connect() erwartet
-        // aber den reinen Systemnamen.
         portName = DeviceConnection.stripDescription(portName);
 
         int baud;
@@ -222,13 +232,11 @@ public class Terminal extends JFrame {
             return;
         }
 
-        if (DeviceConnection.getInstance().connect(portName, baud)) {
+        if (connectionController.connect(portName, baud)) {
             appendLog("# Verbunden mit " + portName + " @ " + baud + " Baud");
         } else {
             appendLog("# Verbindung zu " + portName + " fehlgeschlagen.");
         }
-        // Kein manuelles btnConnect.setText mehr hier: DeviceConnection#connect benachrichtigt
-        // bereits connectionListener (siehe Konstruktor), der die Beschriftung aktualisiert.
     }
 
     /**
@@ -236,9 +244,8 @@ public class Terminal extends JFrame {
      * siehe dortigen Kommentar sowie {@link #connectBlocking}.
      */
     private void disconnectBlocking() {
-        DeviceConnection.getInstance().disconnect();
+        connectionController.disconnect();
         appendLog("# Verbindung getrennt.");
-        // Kein manuelles btnConnect.setText mehr hier, siehe #connectBlocking().
     }
 
     /**
@@ -258,11 +265,11 @@ public class Terminal extends JFrame {
      * @param command Der zu sendende Befehl.
      */
     private void sendLine(String command) {
-        if (!DeviceConnection.getInstance().isConnected()) {
+        if (!connectionController.isConnected()) {
             appendLog("# Nicht verbunden - zuerst einen Port auswählen und 'Verbinden' klicken.");
             return;
         }
-        DeviceConnection.getInstance().sendLine(command);
+        connectionController.sendLine(command);
         appendLog("> " + command);
     }
 

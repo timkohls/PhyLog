@@ -178,6 +178,19 @@
  * in der Portbezeichnung, die die Software sieht - das wäre reine GUI-Kosmetik (siehe
  * DeviceConnection.java: {@code getDescriptivePortName()} statt {@code getSystemPortName()} für
  * die Anzeige) und hat mit der Firmware nichts zu tun.</p>
+ * <p>v8.6: Zwei redundante Berechnungen im Spektrum-Pfad entfernt, keine davon durch beobachtete
+ * Fehlfunktion ausgelöst, sondern beim Review gefunden - beide betreffen nur {@code cosf()}/
+ * {@code sinf()}-Aufrufe, die block- bzw. frame-unabhängig immer dasselbe Ergebnis lieferten.
+ * Erstens berechnete {@link #captureAndSendSpectrum} das Hann-Fenster bisher bei jedem Frame neu
+ * (1024x {@code cosf()}, bei ~16 Bildern/Sekunde also ~16.000 Aufrufe/Sekunde für dieselben 1024
+ * Werte) - jetzt einmalig in {@link #hannWindow} vorberechnet ({@link #ensureHannWindow}).
+ * Zweitens berechnete {@link #computeFFT} die Twiddle-Faktoren (wr/wi) mit der start-Schleife
+ * außen und der k-Schleife innen - wr/wi hängen aber nur von size und k ab, nicht von start,
+ * wurden also für dieselbe (size,k)-Kombination pro Block neu berechnet. Mit k außen und start
+ * innen sinkt die Zahl der Trig-Aufrufe pro FFT von 5120 auf 1023 (Faktor ~5, bei
+ * SPECTRUM_FFT_SIZE=1024). Beides spart CPU-Zeit, die sonst für die zeitkritische Abtastung des
+ * jeweils anderen Kanals fehlte (siehe auch v8.4-Hinweis oben zu {@link #sendSpectrumPacket}).</p>
+ *
  * <p><b>Hardware-/Board-Hinweis:</b> Braucht in der Arduino-IDE unter Werkzeuge -&gt;
  * "Partition Scheme" ein Schema mit genug Platz für den Bluetooth-Stack (z. B. "Default" statt
  * eines reinen "No OTA (2MB APP...)"-Schemas) - der Bluedroid-Stack braucht deutlich mehr
@@ -891,7 +904,7 @@ void processCommand(String command) {
   command.trim();
 
   if (command.equalsIgnoreCase("PING")) {
-    hostPrint("#HELLO,PhyLog-ESP32,fw=8.5\n");
+    hostPrint("#HELLO,PhyLog-ESP32,fw=8.6\n");
   } else if (command.equalsIgnoreCase("START")) {
     isStreaming = true;
     hostPrint("#OK,START\n");
@@ -1005,13 +1018,20 @@ void computeFFT(float *real, float *imag, int n) {
     }
   }
 
+  // k-Schleife bewusst außen, start-Schleife innen (nicht umgekehrt wie in einer früheren
+  // Version): wr/wi hängen nur von size und k ab, nicht von start - bei start außen wurden sie
+  // für dieselbe (size,k)-Kombination bei jedem Block per cosf()/sinf() neu berechnet, obwohl sie
+  // block-unabhängig identisch sind. Mit k außen sinkt die Zahl der Trig-Aufrufe pro FFT von
+  // sum(n/2 je Stufe) auf sum(halfSize je Stufe) - bei SPECTRUM_FFT_SIZE=1024 von 5120 auf 1023,
+  // also etwa Faktor 5 weniger cosf()/sinf() (auf dem ESP32 ohne Hardware-Trig-Einheit spürbar
+  // teurer als die reine Butterfly-Arithmetik) bei den ~16 FFTs/Sekunde im Spektrum-Modus.
   for (int size = 2; size <= n; size *= 2) {
     int halfSize = size / 2;
     float angleStep = -2.0f * PI / size;
-    for (int start = 0; start < n; start += size) {
-      for (int k = 0; k < halfSize; k++) {
-        float angle = angleStep * k;
-        float wr = cosf(angle), wi = sinf(angle);
+    for (int k = 0; k < halfSize; k++) {
+      float angle = angleStep * k;
+      float wr = cosf(angle), wi = sinf(angle);
+      for (int start = 0; start < n; start += size) {
         int evenIdx = start + k;
         int oddIdx = evenIdx + halfSize;
 
@@ -1063,6 +1083,23 @@ void sendSpectrumPacket(char channelName, float *real, float *imag) {
   hostWrite(packetBuf, offset);
 }
 
+/** Vorberechnetes Hann-Fenster für {@link #captureAndSendSpectrum} - hängt nur von {@code i} und
+ *  der fest kompilierten {@link #SPECTRUM_FFT_SIZE} ab, ist also für jeden Frame identisch. Ohne
+ *  diese Vorberechnung rief captureAndSendSpectrum bei jedem Frame 1024x {@code cosf()} auf, bei
+ *  ~16 Bildern/Sekunde (siehe {@link #SPECTRUM_INTERVAL_MS}) also ~16.000 unnötige Aufrufe pro
+ *  Sekunde derselben 1024 Werte - CPU-Zeit, die dann für die Abtastung des jeweils anderen Kanals
+ *  fehlte (siehe auch v8.4-Hinweis im Dateikopf zu {@link #sendSpectrumPacket}). */
+float hannWindow[SPECTRUM_FFT_SIZE];
+bool hannWindowReady = false;
+
+void ensureHannWindow() {
+  if (hannWindowReady) return;
+  for (int i = 0; i < SPECTRUM_FFT_SIZE; i++) {
+    hannWindow[i] = 0.5f - 0.5f * cosf(2.0f * PI * i / (SPECTRUM_FFT_SIZE - 1));
+  }
+  hannWindowReady = true;
+}
+
 /** Nimmt {@link #SPECTRUM_FFT_SIZE} Samples vom Mikrofon des angegebenen Kanals auf, wendet ein
  *  Hann-Fenster an (reduziert den "Leckeffekt" durch den scharfen Rand des Ausschnitts, der sonst
  *  als zusätzliche, falsche Frequenzanteile im Spektrum erscheinen würde), berechnet per FFT das
@@ -1091,10 +1128,10 @@ void captureAndSendSpectrum(char channelName) {
   static float real[SPECTRUM_FFT_SIZE];
   static float imag[SPECTRUM_FFT_SIZE];
 
+  ensureHannWindow();
   for (int i = 0; i < SPECTRUM_FFT_SIZE; i++) {
     int32_t sample = rawBuffer[i] >> 8; // 24 gültige Bits linksbündig, siehe sampleMicrophone
-    float window = 0.5f - 0.5f * cosf(2.0f * PI * i / (SPECTRUM_FFT_SIZE - 1)); // Hann-Fenster
-    real[i] = sample * window;
+    real[i] = sample * hannWindow[i];
     imag[i] = 0;
   }
 
@@ -1216,7 +1253,7 @@ void setup() {
   // Bewusst KEINE Pin-/Bus-Initialisierung hier: welche Rolle die drei Kanal-Pins spielen,
   // hängt vom gewählten Sensortyp ab und wird erst bei SET über configureChannelHardware()
   // hergestellt - beide Kanäle starten unkonfiguriert bei TYPE_NONE.
-  hostPrint("#HELLO,PhyLog-ESP32,fw=8.5\n");
+  hostPrint("#HELLO,PhyLog-ESP32,fw=8.6\n");
 }
 
 void loop() {
