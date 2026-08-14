@@ -54,6 +54,11 @@ class ConnectionController {
         return connection.identifyPhyLogPort(candidatePortNames);
     }
 
+    /** Durchreiche zu {@link DeviceConnection#orderedIdentifyCandidates()} - siehe dort. */
+    List<String> orderedIdentifyCandidates() {
+        return connection.orderedIdentifyCandidates();
+    }
+
     boolean connect(String portName, int baudRate) {
         return connection.connect(portName, baudRate);
     }

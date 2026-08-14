@@ -9,7 +9,6 @@ import java.util.List;
  */
 public class ChiSquareInfoDialog extends JDialog {
 
-    private static final int CARD_ARC = 12;
     private static final int CONTENT_WIDTH = 420;
     /** Obere Grenze der animierten Farbskala (siehe {@link #buildScaleBar}); Werte darüber
      *  werden auf diesen Wert begrenzt dargestellt. */
@@ -119,7 +118,7 @@ public class ChiSquareInfoDialog extends JDialog {
      * Fake-Wertepaars wie zuvor ("0.000" bei "1 Freiheitsgrad", fälschlich grün/gelb bewertet).
      */
     private JPanel buildNotEvaluableCard(int degreesOfFreedom) {
-        RoundedPanel card = new RoundedPanel(Theme.CARD, CARD_ARC);
+        RoundedPanel card = new RoundedPanel(Theme.CARD, Theme.CARD_ARC);
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
         card.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
         card.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -234,7 +233,7 @@ public class ChiSquareInfoDialog extends JDialog {
      * Baut eine einzelne Kennzahl-Karte mit Beschriftung und Wert auf.
      */
     private JPanel buildStatCard(String caption, String value, Color valueColor) {
-        RoundedPanel card = new RoundedPanel(Theme.CARD, CARD_ARC);
+        RoundedPanel card = new RoundedPanel(Theme.CARD, Theme.CARD_ARC);
         card.setLayout(new BorderLayout(0, 4));
         card.setBorder(BorderFactory.createEmptyBorder(8, 6, 8, 6));
 
@@ -257,7 +256,7 @@ public class ChiSquareInfoDialog extends JDialog {
      * Baut die Karte zur Darstellung der mathematischen Formel auf.
      */
     private JPanel buildFormulaCard() {
-        RoundedPanel card = new RoundedPanel(Theme.CARD, CARD_ARC);
+        RoundedPanel card = new RoundedPanel(Theme.CARD, Theme.CARD_ARC);
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
         card.setBorder(BorderFactory.createEmptyBorder(10, 14, 10, 14));
         card.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -407,7 +406,7 @@ public class ChiSquareInfoDialog extends JDialog {
         accentStripe.setBackground(accentColor);
         accentStripe.setPreferredSize(new Dimension(4, 10));
 
-        RoundedPanel card = new RoundedPanel(Theme.CARD, CARD_ARC);
+        RoundedPanel card = new RoundedPanel(Theme.CARD, Theme.CARD_ARC);
         card.setLayout(new BorderLayout());
         card.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
 
@@ -425,7 +424,7 @@ public class ChiSquareInfoDialog extends JDialog {
      * Baut den Detailbereich für die gefittete Funktion auf.
      */
     private JPanel buildFitDescriptionPanel(CurveFitting.FitDescription fitDescription) {
-        RoundedPanel panel = new RoundedPanel(Theme.CARD, CARD_ARC);
+        RoundedPanel panel = new RoundedPanel(Theme.CARD, Theme.CARD_ARC);
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setBorder(BorderFactory.createEmptyBorder(10, 14, 10, 14));
         panel.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -462,29 +461,5 @@ public class ChiSquareInfoDialog extends JDialog {
         }
 
         return panel;
-    }
-
-    /**
-     * Panel-Komponente mit abgerundeten Ecken und Hintergrundfarbe.
-     */
-    private static class RoundedPanel extends JPanel {
-        private final Color background;
-        private final int arc;
-
-        RoundedPanel(Color background, int arc) {
-            this.background = background;
-            this.arc = arc;
-            setOpaque(false);
-        }
-
-        @Override
-        protected void paintComponent(Graphics g) {
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g2.setColor(background);
-            g2.fillRoundRect(0, 0, getWidth(), getHeight(), arc, arc);
-            g2.dispose();
-            super.paintComponent(g);
-        }
     }
 }

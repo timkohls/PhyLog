@@ -61,6 +61,12 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     private JRadioButtonMenuItem yAxisShared;
     private JRadioButtonMenuItem yAxisDual;
 
+    /** Menüeinträge für das Fit-Ziel (siehe {@link ChartPanel.FitTarget}) - "Kanal B" und "Beide
+     *  Kanäle" ergeben nur mit einem aktiven Sensor auf Kanal B Sinn, siehe {@link #updateTableLayout()}. */
+    private JRadioButtonMenuItem fitTargetA;
+    private JRadioButtonMenuItem fitTargetB;
+    private JRadioButtonMenuItem fitTargetBoth;
+
     /** Referenz auf ein bereits geöffnetes Terminal-Fenster. */
     private Terminal terminalWindow;
 
@@ -194,14 +200,6 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
             }
         });
 
-        // Bluetooth-Verbindung ist noch nicht implementiert (der bisherige Menüpunkt öffnete nur
-        // einen Platzhalter-Dialog ohne echte Funktion) - statt Nutzer:innen mit einem Fake-Dialog
-        // in die Irre zu führen, bleibt der Punkt sichtbar, aber deaktiviert, mit erklärendem Tooltip.
-        JMenuItem connectionItem = new JMenuItem("Verbindung (Bluetooth)...");
-        connectionItem.setEnabled(false);
-        connectionItem.setToolTipText("Noch nicht implementiert - Verbindung aktuell nur per COM-Port oben rechts möglich.");
-        menuSensor.add(connectionItem);
-
         configSensorItem = new JMenuItem("Sensor konfigurieren...");
         configSensorItem.addActionListener(e -> openSensorConfigDialog());
         configSensorItem.setEnabled(connectionController.isConnected());
@@ -299,6 +297,25 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         itemExp.addActionListener(e -> chartPanel.setFitMode(ChartPanel.FitMode.EXPONENTIAL));
         fitButtonGroup.add(itemExp);
 
+        // --- Fit-Bezug (auf welche Messgröße(n) sich Fit & Chi² beziehen) ---
+        JMenu menuFitTarget = new JMenu("Fit bezieht sich auf");
+        ButtonGroup fitTargetGroup = new ButtonGroup();
+
+        fitTargetA = new JRadioButtonMenuItem("Kanal A", true);
+        fitTargetA.addActionListener(e -> chartPanel.setFitTarget(ChartPanel.FitTarget.A));
+        fitTargetGroup.add(fitTargetA);
+        menuFitTarget.add(fitTargetA);
+
+        fitTargetB = new JRadioButtonMenuItem("Kanal B");
+        fitTargetB.addActionListener(e -> chartPanel.setFitTarget(ChartPanel.FitTarget.B));
+        fitTargetGroup.add(fitTargetB);
+        menuFitTarget.add(fitTargetB);
+
+        fitTargetBoth = new JRadioButtonMenuItem("Beide Kanäle (A+B)");
+        fitTargetBoth.addActionListener(e -> chartPanel.setFitTarget(ChartPanel.FitTarget.BOTH));
+        fitTargetGroup.add(fitTargetBoth);
+        menuFitTarget.add(fitTargetBoth);
+
         JMenuItem itemStdDev = new JMenuItem("Standardabweichung...");
         itemStdDev.addActionListener(e -> openStandardDeviationDialog());
 
@@ -367,6 +384,8 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         menuFit.add(itemSinus);
         menuFit.add(itemExp);
         menuFit.addSeparator();
+        menuFit.add(menuFitTarget);
+        menuFit.addSeparator();
         menuFit.add(itemStdDev);
 
         menuBar.add(menuFile);
@@ -417,6 +436,10 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
                 }
                 if (!success) {
                     connectButton.setText("Verbinden");
+                    // Falls der Aufruf über die Portsuche kam, stand hier noch "Suche nach
+                    // passendem Port …" (siehe identifyPortAsync) - zurücksetzen, sonst bliebe das
+                    // nach einem fehlgeschlagenen Verbindungsversuch stehen.
+                    updateStatusLabel();
                     JOptionPane.showMessageDialog(GUI.this,
                             "Verbindung zu " + portName + " fehlgeschlagen.",
                             "Verbindungsfehler",
@@ -469,11 +492,12 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
      * "Verbinden" nötig. Läuft nicht, solange bereits eine Verbindung aktiv ist (siehe Warnhinweis
      * in {@link DeviceConnection#identifyPhyLogPort}).
      *
-     * <p>Die Kandidatenliste wird vor dem Probieren so sortiert, dass bereits als PhyLog/Bluetooth
-     * erkannte Ports (siehe {@link DeviceConnection#listPortNames}, z. B. "COM7 (Bluetooth)")
-     * zuerst drankommen, unbeschriftete Ports (Drucker, Modems, ...) erst danach - im Normalfall
-     * (genau ein PhyLog-Gerät gepairt/verbunden) meist nur ein einziger Probe-Versuch statt
-     * potenziell vieler mit je bis zu {@code IDENTIFY_TIMEOUT_MS} Wartezeit.</p>
+     * <p>Die Kandidatenliste kommt bereits priorisiert aus {@link ConnectionController#orderedIdentifyCandidates()}:
+     * zuerst als "PhyLog Seriell" erkannte USB-Ports, danach "PhyLog Bluetooth", zuletzt alle
+     * übrigen - im Normalfall (genau ein PhyLog-Gerät gepairt/verbunden) meist nur ein einziger
+     * Probe-Versuch statt potenziell vieler mit je bis zu {@code IDENTIFY_TIMEOUT_MS} Wartezeit,
+     * und bei gleichzeitig per USB und Bluetooth erreichbarem Board bevorzugt die schnellere,
+     * ohne Verbindungsaufbau-Verzögerung antwortende serielle Verbindung.</p>
      */
     private void identifyPortAsync(JComboBox<String> portSelector, JButton button) {
         if (connectionController.isConnected()) {
@@ -483,14 +507,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
             return;
         }
 
-        List<String> displayNames = connectionController.listPortNames();
-        List<String> candidates = new ArrayList<>();
-        for (String name : displayNames) {
-            if (name.contains("(")) candidates.add(DeviceConnection.stripDescription(name));
-        }
-        for (String name : displayNames) {
-            if (!name.contains("(")) candidates.add(name);
-        }
+        List<String> candidates = connectionController.orderedIdentifyCandidates();
         if (candidates.isEmpty()) {
             JOptionPane.showMessageDialog(this, "Keine Ports gefunden.",
                     "Portsuche", JOptionPane.INFORMATION_MESSAGE);
@@ -499,6 +516,13 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
         button.setEnabled(false);
         button.setToolTipText("Suche läuft (probiert jeden Port kurz per PING aus)...");
+        // Zusätzlich zum Tooltip auch im Status-Label sichtbar, das sonst Verbindungs-/Trigger-
+        // status zeigt (siehe updateStatusLabel()) - der Tooltip allein fällt leicht nicht auf,
+        // gerade weil die Suche je nach Kandidatenzahl mehrere Sekunden dauern kann.
+        if (lblTriggerStatus != null) {
+            lblTriggerStatus.setText("Suche nach passendem Port …");
+            lblTriggerStatus.setForeground(Theme.WARNING);
+        }
         new SwingWorker<String, Void>() {
             @Override
             protected String doInBackground() {
@@ -516,6 +540,9 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
                     found = null;
                 }
                 if (found == null) {
+                    // Kein Treffer - Status-Label wieder auf den normalen "Nicht verbunden"-Zustand
+                    // zurücksetzen, sonst bliebe "Suche nach passendem Port …" stehen.
+                    updateStatusLabel();
                     JOptionPane.showMessageDialog(GUI.this,
                             "Kein Port hat mit #HELLO geantwortet. ESP32 eingeschaltet und in Reichweite/gepairt?",
                             "Nichts gefunden", JOptionPane.WARNING_MESSAGE);
@@ -642,10 +669,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         tableContainerPanel.setBackground(Theme.BG);
 
         chartPanel = new ChartPanel();
-        chartPanel.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createLineBorder(Theme.BORDER),
-                "Diagramm",
-                0, 0, null, Theme.TEXT));
+        chartPanel.setBorder(Theme.titledPanelBorder("Diagramm"));
 
         mainSplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, tableContainerPanel, chartPanel);
         mainSplitPane.setResizeWeight(0.25);
@@ -745,7 +769,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     private void openSensorConfigDialog() {
         if (!connectionController.isConnected()) {
             JOptionPane.showMessageDialog(this,
-                    "Bitte zuerst über 'Sensor \u2192 Verbindung (Bluetooth)...' bzw. den COM-Port oben rechts mit dem ESP32 verbinden.",
+                    "Bitte zuerst über den COM-Port oben rechts mit dem ESP32 verbinden.",
                     "Keine Verbindung", JOptionPane.WARNING_MESSAGE);
             return;
         }
@@ -848,7 +872,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     @Override
     public void onDurationLimitReached() {
         lblTriggerStatus.setText("Maximale Messdauer erreicht - Aufnahme gestoppt");
-        lblTriggerStatus.setForeground(Theme.POINT_A);
+        lblTriggerStatus.setForeground(Theme.WARNING);
     }
 
     /** {@inheritDoc} Im Gegensatz zu {@link #onDurationLimitReached()} kein regulär erreichtes
@@ -983,7 +1007,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
             lblTriggerStatus.setForeground(Theme.MUTED);
         } else if (acquisitionEngine.isWaitingForTrigger()) {
             lblTriggerStatus.setText("Warte auf Trigger (Kanal " + triggerConfig.channel + ") …");
-            lblTriggerStatus.setForeground(Theme.POINT_A);
+            lblTriggerStatus.setForeground(Theme.WARNING);
         } else if (acquisitionEngine.isRecording()) {
             lblTriggerStatus.setText(triggerConfig.thresholdMode ? "Aufnahme läuft (getriggert)" : "Aufnahme läuft");
             lblTriggerStatus.setForeground(Theme.SUCCESS);
@@ -1149,6 +1173,21 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         yAxisDual.setEnabled(bothActive);
         yAxisDual.setToolTipText(bothActive ? null : "Nur verfügbar, wenn auf beiden Kanälen ein Sensor aktiv ist.");
 
+        // "Kanal B" bzw. "Beide Kanäle" als Fit-Ziel ergeben nur mit einem aktiven Sensor auf
+        // Kanal B Sinn - analog zu yAxisDual oben. War eine der beiden gerade ausgewählt und
+        // Kanal B fällt weg, wird bewusst auf "Kanal A" zurückgeschaltet, statt stillschweigend
+        // mit einem inzwischen leeren Datensatz weiterzufitten.
+        boolean hasBSensor = channelB.hasSensor();
+        fitTargetB.setEnabled(hasBSensor);
+        fitTargetBoth.setEnabled(hasBSensor);
+        String noBTooltip = hasBSensor ? null : "Nur verfügbar, wenn auf Kanal B ein Sensor aktiv ist.";
+        fitTargetB.setToolTipText(noBTooltip);
+        fitTargetBoth.setToolTipText(noBTooltip);
+        if (!hasBSensor && (fitTargetB.isSelected() || fitTargetBoth.isSelected())) {
+            fitTargetA.setSelected(true);
+            chartPanel.setFitTarget(ChartPanel.FitTarget.A);
+        }
+
         // Nur die Tabelle(n) der Kanäle anzeigen, die tatsächlich einen Sensor haben - bisher
         // wurde die Split-Ansicht schon gezeigt, sobald Kanal B einen Sensor hatte, unabhängig
         // davon, ob Kanal A überhaupt aktiv war (Bug: bei nur Kanal B erschienen trotzdem beide
@@ -1159,16 +1198,10 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         boolean hasB = channelB.hasSensor();
 
         if (hasA) {
-            channelA.scrollPane.setBorder(BorderFactory.createTitledBorder(
-                    BorderFactory.createLineBorder(Theme.BORDER),
-                    channelTitle('A', channelA),
-                    0, 0, null, Theme.TEXT));
+            channelA.scrollPane.setBorder(Theme.titledPanelBorder(channelTitle('A', channelA)));
         }
         if (hasB) {
-            channelB.scrollPane.setBorder(BorderFactory.createTitledBorder(
-                    BorderFactory.createLineBorder(Theme.BORDER),
-                    channelTitle('B', channelB),
-                    0, 0, null, Theme.TEXT));
+            channelB.scrollPane.setBorder(Theme.titledPanelBorder(channelTitle('B', channelB)));
         }
 
         if (hasA && hasB) {
@@ -1181,10 +1214,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
             // Weder A noch B aktiv: Kanal A bleibt als Platzhalter sichtbar (bisheriges Verhalten
             // ohne Sensorauswahl); ist nur A aktiv, ist es ohnehin die richtige Tabelle.
             if (!hasA) {
-                channelA.scrollPane.setBorder(BorderFactory.createTitledBorder(
-                        BorderFactory.createLineBorder(Theme.BORDER),
-                        channelTitle('A', channelA),
-                        0, 0, null, Theme.TEXT));
+                channelA.scrollPane.setBorder(Theme.titledPanelBorder(channelTitle('A', channelA)));
             }
             tableContainerPanel.add(channelA.scrollPane, BorderLayout.CENTER);
         }
@@ -1262,11 +1292,26 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         chartPanel.setColorByMagnitude(false);
         chartPanel.setXAxisTitle("Zeit");
 
-        List<Sensor.Quantity> quantitiesA = channelA.sensor.getQuantities();
-        boolean hasSecondSensor = channelB.hasSensor();
-        boolean useSpecificAxisLabels = dualYAxisMode && hasSecondSensor;
+        boolean hasA = channelA.hasSensor();
+        boolean hasB = channelB.hasSensor();
 
-        String axisLabel = (hasSecondSensor && !useSpecificAxisLabels)
+        if (!hasA && hasB) {
+            // Nur Kanal B aktiv: dessen konkrete Messgröße wird direkt zum Achsentitel - der
+            // generische "Messwerte"-Titel (siehe unten) ist nur nötig, um Platz für zwei
+            // gleichzeitig dargestellte Größen zu lassen, deren jeweilige Bezeichnung sonst über
+            // die Legende läuft. Mit nur einer Größe ist eine Legende dafür redundant (siehe auch
+            // {@link ChartPanel#legendVisible()}) - die Bezeichnung gehört direkt an die Achse.
+            List<Sensor.Quantity> quantitiesB = channelB.sensor.getQuantities();
+            String axisLabel = quantitiesB.isEmpty() ? "Messwert" : quantitiesB.get(0).getColumnHeader();
+            chartPanel.setUnits("s", axisLabel);
+            chartPanel.setMainLabel(quantitiesB.isEmpty() ? "Kanal B" : "Kanal B: " + quantitiesB.get(0).getColumnHeader());
+            return;
+        }
+
+        List<Sensor.Quantity> quantitiesA = channelA.sensor.getQuantities();
+        boolean useSpecificAxisLabels = dualYAxisMode && hasB;
+
+        String axisLabel = (hasB && !useSpecificAxisLabels)
                 ? "Messwerte"
                 : (quantitiesA.isEmpty() ? "Messwert" : quantitiesA.get(0).getColumnHeader());
         chartPanel.setUnits("s", axisLabel);
@@ -1274,7 +1319,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         String labelA = quantitiesA.isEmpty() ? "Kanal A" : "Kanal A: " + quantitiesA.get(0).getColumnHeader();
         chartPanel.setMainLabel(labelA);
 
-        if (hasSecondSensor) {
+        if (hasB) {
             List<Sensor.Quantity> quantitiesB = channelB.sensor.getQuantities();
             String secondaryLabel = quantitiesB.isEmpty()
                     ? channelB.sensor.getName()

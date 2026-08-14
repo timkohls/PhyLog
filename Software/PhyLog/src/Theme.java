@@ -30,10 +30,49 @@ public class Theme {
 
     /** Status "gut/erfolgreich" (z. B. laufende Aufzeichnung, guter Chi²-Fit). */
     public static final Color SUCCESS = new Color(46, 204, 113);
-    /** Status "Warnung/mäßig" (z. B. Über- oder mäßige Anpassung). */
+    /** Status "Warnung/mäßig" (z. B. Über- oder mäßige Anpassung, Trigger wartet). */
     public static final Color WARNING = new Color(241, 196, 15);
-    /** Status "Fehler/schlecht" (z. B. Unteranpassung). */
+    /** Status "Fehler/schlecht" (z. B. Unteranpassung, Verbindung verloren). */
     public static final Color DANGER = new Color(231, 76, 60);
+
+    // --- Typografie ---
+    // Zentral definiert, statt an jeder Stelle einzeln "new Font(...)" zu schreiben - damit
+    // sich Schriftgrößen/-schnitte künftig an einer Stelle ändern lassen und alle Dialoge
+    // gleich aussehen (siehe FormDialog, ChiSquareInfoDialog).
+
+    /** Überschriften in Dialogen (z. B. {@link ChiSquareInfoDialog}). */
+    public static final Font FONT_TITLE = new Font(Font.SANS_SERIF, Font.BOLD, 15);
+    /** Standard-UI-Text (Labels, Buttons, Formularfelder). */
+    public static final Font FONT_UI = new Font(Font.SANS_SERIF, Font.PLAIN, 13);
+    /** Wie {@link #FONT_UI}, aber fett - für Zwischenüberschriften/Kartentitel. */
+    public static final Font FONT_UI_BOLD = new Font(Font.SANS_SERIF, Font.BOLD, 13);
+    /** Kleine, gedämpfte Hinweistexte unterhalb von Formularfeldern. */
+    public static final Font FONT_HINT = new Font(Font.SANS_SERIF, Font.PLAIN, 11);
+    /** Dicktengleiche Schrift für Terminal-Log und Fit-Gleichungen. */
+    public static final Font FONT_MONO = new Font(Font.MONOSPACED, Font.PLAIN, 12);
+
+    /** Eckenradius für Karten-/Info-Panels (siehe {@link RoundedPanel}), etwas dezenter als der
+     *  Radius von Buttons/Textfeldern ({@code Component.arc} unten), damit größere Flächen nicht
+     *  überrundet wirken. */
+    public static final int CARD_ARC = 12;
+    /** Einheitlicher Außenabstand zwischen Formularzeilen bzw. Karten-Inhalt und -Rand. */
+    public static final int SPACING = 10;
+
+    /**
+     * Baut den einheitlichen "Panel-mit-Titel"-Rahmen für die Haupt-Arbeitsflächen (Diagramm,
+     * Kanal-Tabellen) - bisher an jeder dieser Stellen einzeln als
+     * {@code createTitledBorder(createLineBorder(...), ...)} dupliziert. Ergänzt gegenüber dem
+     * bloßen Titled-Border zusätzlich etwas Innenabstand, damit z. B. Tabelleninhalt nicht direkt
+     * an der Rahmenlinie klebt.
+     *
+     * @param title Anzeigetitel, z. B. "Diagramm" oder ein Kanalname.
+     */
+    public static javax.swing.border.Border titledPanelBorder(String title) {
+        return BorderFactory.createCompoundBorder(
+                BorderFactory.createTitledBorder(
+                        BorderFactory.createLineBorder(BORDER), title, 0, 0, FONT_UI_BOLD, TEXT),
+                BorderFactory.createEmptyBorder(4, 6, 6, 6));
+    }
 
     /**
      * Initialisiert das Dark-Theme und setzt die UI-Defaults.
@@ -45,6 +84,10 @@ public class Theme {
         UIManager.put("Button.arc", 15);
         UIManager.put("TextComponent.arc", 15);
         UIManager.put("ScrollBar.thumbArc", 999);
+
+        // Einheitliche Basis-Schriftart für alle FlatLaf-Komponenten (Buttons, Labels, Felder,
+        // Menüs, Tabellen, ...), statt sie einzeln je Komponente zu setzen.
+        UIManager.put("defaultFont", FONT_UI);
 
         UIManager.put("Panel.background", BG);
         UIManager.put("Viewport.background", BG);

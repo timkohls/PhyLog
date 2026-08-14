@@ -1,10 +1,9 @@
 import javax.swing.*;
-import java.awt.*;
 
 /**
  * Dialog zur Konfiguration von Mess-Triggern und Messdauer.
  */
-public class TriggerDialog extends JDialog {
+public class TriggerDialog extends FormDialog {
 
     /**
      * Datenhaltung für Trigger-Konfigurationseinstellungen.
@@ -41,72 +40,42 @@ public class TriggerDialog extends JDialog {
      * @param current Aktuelle Konfiguration als Startwert.
      */
     public TriggerDialog(JFrame parent, Config current) {
-        super(parent, "Trigger konfigurieren", true);
-        setSize(400, 340);
-        setLocationRelativeTo(parent);
-        setLayout(new BorderLayout(10, 10));
+        super(parent, "Trigger konfigurieren");
 
-        JPanel formPanel = new JPanel(new GridBagLayout());
-        formPanel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.insets = new Insets(8, 8, 8, 8);
-        gbc.weightx = 1.0;
-
-        gbc.gridx = 0; gbc.gridy = 0;
-        formPanel.add(new JLabel("Trigger-Modus:"), gbc);
         cbTriggerMode = new JComboBox<>(new String[]{"Manuell (Start-Button)", "Schwellenwert"});
         cbTriggerMode.setSelectedIndex(current.thresholdMode ? 1 : 0);
-        gbc.gridx = 1;
-        formPanel.add(cbTriggerMode, gbc);
+        addRow("Trigger-Modus:", cbTriggerMode);
 
-        gbc.gridx = 0; gbc.gridy = 1;
-        formPanel.add(new JLabel("Kanal:"), gbc);
         cbChannel = new JComboBox<>(new String[]{"Kanal A", "Kanal B"});
         cbChannel.setSelectedIndex(current.channel == 'B' ? 1 : 0);
-        gbc.gridx = 1;
-        formPanel.add(cbChannel, gbc);
+        addRow("Kanal:", cbChannel);
 
-        gbc.gridx = 0; gbc.gridy = 2;
-        formPanel.add(new JLabel("Flanke:"), gbc);
-        cbEdge = new JComboBox<>(new String[]{"Steigend (▲)", "Fallend (▼)"});
+        cbEdge = new JComboBox<>(new String[]{"Steigend (\u25B2)", "Fallend (\u25BC)"});
         cbEdge.setSelectedIndex(current.risingEdge ? 0 : 1);
-        gbc.gridx = 1;
-        formPanel.add(cbEdge, gbc);
+        addRow("Flanke:", cbEdge);
 
-        gbc.gridx = 0; gbc.gridy = 3;
-        formPanel.add(new JLabel("Schwellenwert:"), gbc);
         txtThreshold = new JTextField(String.valueOf(current.threshold));
-        gbc.gridx = 1;
-        formPanel.add(txtThreshold, gbc);
+        addRow("Schwellenwert:", txtThreshold);
 
-        gbc.gridx = 0; gbc.gridy = 4;
-        formPanel.add(new JLabel("Vorlaufzeit (ms):"), gbc);
         spPreTrigger = new JSpinner(new SpinnerNumberModel(current.preTriggerMs, 0, 5000, 50));
-        gbc.gridx = 1;
-        formPanel.add(spPreTrigger, gbc);
+        addRow("Vorlaufzeit (ms):", spPreTrigger);
 
-        gbc.gridx = 0; gbc.gridy = 5;
         cbLimitDuration = new JCheckBox("Messdauer:");
+        cbLimitDuration.setFont(Theme.FONT_UI);
+        cbLimitDuration.setOpaque(false);
         cbLimitDuration.setSelected(current.maxDurationMs > 0);
-        formPanel.add(cbLimitDuration, gbc);
 
         int initialSeconds = (current.maxDurationMs > 0) ? Math.max(1, current.maxDurationMs / 1000) : 60;
         spMaxDuration = new JSpinner(new SpinnerNumberModel(initialSeconds, 1, 36000, 1));
         spMaxDuration.setEnabled(cbLimitDuration.isSelected());
-        gbc.gridx = 1;
-        formPanel.add(spMaxDuration, gbc);
+        addRow(cbLimitDuration, spMaxDuration);
 
         cbLimitDuration.addActionListener(e -> spMaxDuration.setEnabled(cbLimitDuration.isSelected()));
-
         cbTriggerMode.addActionListener(e -> updateFieldStates());
         updateFieldStates();
 
-        add(formPanel, BorderLayout.CENTER);
-
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         JButton btnCancel = new JButton("Abbrechen");
-        JButton btnApply = new JButton("Übernehmen");
+        JButton btnApply = new JButton("\u00dcbernehmen");
 
         btnCancel.addActionListener(e -> dispose());
         btnApply.addActionListener(e -> {
@@ -114,9 +83,7 @@ public class TriggerDialog extends JDialog {
             dispose();
         });
 
-        buttonPanel.add(btnCancel);
-        buttonPanel.add(btnApply);
-        add(buttonPanel, BorderLayout.SOUTH);
+        finishLayout(btnCancel, btnApply);
     }
 
     /**

@@ -1,10 +1,9 @@
 import javax.swing.*;
-import java.awt.*;
 
 /**
  * Dialog zur Konfiguration der Messunsicherheit (Standardabweichung/Sigma).
  */
-public class StandardDeviationDialog extends JDialog {
+public class StandardDeviationDialog extends FormDialog {
 
     private final JRadioButton rbConstant;
     private final JRadioButton rbAutoGaussian;
@@ -26,67 +25,41 @@ public class StandardDeviationDialog extends JDialog {
      * @param currentNeighbors Aktuelle Anzahl an Nachbarn für den lokalen Modus.
      */
     public StandardDeviationDialog(JFrame parent, double currentVal, GoodnessOfFit.SigmaMode currentMode, int currentNeighbors) {
-        super(parent, "Standardabweichung einstellen", true);
-        setSize(560, 400);
-        setLocationRelativeTo(parent);
-        setLayout(new BorderLayout(10, 10));
-
-        JPanel formPanel = new JPanel(new GridBagLayout());
-        formPanel.setBorder(BorderFactory.createEmptyBorder(15, 15, 5, 15));
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.insets = new Insets(6, 6, 6, 6);
-        gbc.weightx = 1.0;
+        super(parent, "Standardabweichung einstellen");
 
         ButtonGroup group = new ButtonGroup();
 
         // --- Konstant ---
         rbConstant = new JRadioButton("Konstant (manueller Wert)");
         group.add(rbConstant);
-        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 2;
-        formPanel.add(rbConstant, gbc);
+        addFullWidthRow(rbConstant);
 
-        gbc.gridwidth = 1;
-        gbc.gridx = 0; gbc.gridy = 1;
-        formPanel.add(new JLabel("     Wert (s):"), gbc);
         tfValue = new JTextField(String.valueOf(currentVal));
-        gbc.gridx = 1;
-        formPanel.add(tfValue, gbc);
+        addRow("     Wert (s):", tfValue);
 
         // --- Automatisch, Gauß-gewichtet ---
         rbAutoGaussian = new JRadioButton("Automatisch \u2013 gewichtet (Gau\u00df-Kernel)");
         group.add(rbAutoGaussian);
-        gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 2;
-        formPanel.add(rbAutoGaussian, gbc);
-
-        JLabel lblAutoGaussianHint = hintLabel("Wie 'lokal', aber mit weichem statt hartem Übergang: nahe Punkte gehen stärker, entfernte schwächer ein (Gewicht nimmt mit dem Abstand gaußförmig ab) - dadurch verläuft die Fehlerbreite glatt statt stufig, auch bei ungleichmäßig verteilten Messpunkten.");
-        gbc.gridy = 3;
-        formPanel.add(lblAutoGaussianHint, gbc);
+        addFullWidthRow(rbAutoGaussian);
+        addFullWidthRow(hintLabel("Wie 'lokal', aber mit weichem statt hartem Übergang: nahe Punkte gehen "
+                + "stärker, entfernte schwächer ein (Gewicht nimmt mit dem Abstand gaußförmig ab) - dadurch "
+                + "verläuft die Fehlerbreite glatt statt stufig, auch bei ungleichmäßig verteilten "
+                + "Messpunkten.", 380));
 
         // --- Automatisch, lokal (hartes Fenster) ---
         rbAutoLocal = new JRadioButton("Automatisch \u2013 lokal, hartes Fenster (nächste Nachbarn)");
         group.add(rbAutoLocal);
-        gbc.gridy = 4;
-        formPanel.add(rbAutoLocal, gbc);
+        addFullWidthRow(rbAutoLocal);
+        addFullWidthRow(hintLabel("Ein eigener Wert je Punkt, aus dessen nächsten Nachbarn geschätzt - passt "
+                + "sich ungleichmäßig verteiltem Rauschen entlang der Messreihe an.", 380));
 
-        JLabel lblAutoLocalHint = hintLabel("Ein eigener Wert je Punkt, aus dessen nächsten Nachbarn geschätzt - passt sich ungleichmäßig verteiltem Rauschen entlang der Messreihe an.");
-        gbc.gridy = 5;
-        formPanel.add(lblAutoLocalHint, gbc);
-
-        gbc.gridwidth = 1;
-        gbc.gridx = 0; gbc.gridy = 6;
-        formPanel.add(new JLabel("     Nachbarschaftsgröße (k):"), gbc);
         spNeighbors = new JSpinner(new SpinnerNumberModel(Math.max(2, currentNeighbors), 2, 100, 1));
-        gbc.gridx = 1;
-        formPanel.add(spNeighbors, gbc);
+        addRow("     Nachbarschaftsgröße (k):", spNeighbors);
 
-        gbc.gridwidth = 2;
-        gbc.gridx = 0; gbc.gridy = 7;
-        JLabel lblFallback = hintLabel("Alle automatischen Modi benötigen einen Funktions-Fit; ohne Fit gilt der konstante Wert.");
+        JLabel lblFallback = hintLabel("Alle automatischen Modi benötigen einen Funktions-Fit; ohne Fit gilt "
+                + "der konstante Wert.", 380);
         lblFallback.setForeground(Theme.ACCENT);
-        formPanel.add(lblFallback, gbc);
-
-        add(formPanel, BorderLayout.CENTER);
+        addFullWidthRow(lblFallback);
 
         // --- Vorbelegung ---
         sigmaMode = (currentMode != null) ? currentMode : GoodnessOfFit.SigmaMode.CONSTANT;
@@ -102,28 +75,13 @@ public class StandardDeviationDialog extends JDialog {
         rbAutoLocal.addActionListener(e -> updateFieldStates());
 
         // --- Buttons ---
-        JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        JButton btnOk = new JButton("Übernehmen");
+        JButton btnOk = new JButton("\u00dcbernehmen");
         JButton btnCancel = new JButton("Abbrechen");
 
         btnOk.addActionListener(e -> tryApplyAndClose());
         btnCancel.addActionListener(e -> dispose());
 
-        btnPanel.add(btnCancel);
-        btnPanel.add(btnOk);
-        add(btnPanel, BorderLayout.SOUTH);
-    }
-
-    /**
-     * Erstellt ein formatiertes Hinweis-Label.
-     *
-     * @param text Der Hinweistext.
-     * @return Das Hinweis-Label.
-     */
-    private JLabel hintLabel(String text) {
-        JLabel label = new JLabel("<html><div style='width:380px;'>" + text + "</div></html>");
-        label.setFont(label.getFont().deriveFont(Font.PLAIN, 11f));
-        return label;
+        finishLayout(btnCancel, btnOk);
     }
 
     /**

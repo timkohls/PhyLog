@@ -102,33 +102,32 @@ public class DeviceConnection {
     }
 
     /**
-     * Ordnet einem Port, sofern er wahrscheinlich zu PhyLog gehört, eine Anzeigebeschriftung zu.
-     * Für Bluetooth zweistufig: Enthält die Beschreibung tatsächlich {@link #BLUETOOTH_DEVICE_NAME},
-     * ist es sicher der PhyLog-ESP32. In der Praxis (siehe Erfahrungsbericht, Windows) liefert der
-     * Bluetooth-SPP-Treiber dort aber meist nur eine generische Beschreibung wie "Standard Serial
-     * over Bluetooth link" - der beim Pairing vergebene Gerätename taucht darin gar nicht auf,
+     * Ordnet einem Port, sofern er sicher zu PhyLog gehört, eine Anzeigebeschriftung zu - alle
+     * anderen Ports (Drucker, Modems, fremde Bluetooth-Geräte wie Kopfhörer, ...) bleiben bewusst
+     * unbeschriftet und zeigen in {@link #listPortNames} nur ihren nackten Systemnamen
+     * ("COM7" statt z. B. "COM7 (Bluetooth)"), statt mit einer Vermutung aufzuwarten, die sich
+     * ohnehin nicht zuverlässig verifizieren lässt (siehe unten). Für Bluetooth zweistufig:
+     * Enthält die Beschreibung tatsächlich {@link #BLUETOOTH_DEVICE_NAME}, ist es sicher der
+     * PhyLog-ESP32. In der Praxis (siehe Erfahrungsbericht, Windows) liefert der Bluetooth-SPP-
+     * Treiber dort aber meist nur eine generische Beschreibung wie "Standard Serial over
+     * Bluetooth link" - der beim Pairing vergebene Gerätename taucht darin gar nicht auf,
      * jSerialComm hat keinen Zugriff auf die eigentliche Bluetooth-API, um das nachzuschlagen. In
-     * diesem (häufigeren) Fall erkennen wir zwar zuverlässig "das ist irgendein Bluetooth-Port",
-     * aber nicht sicher, ob es wirklich PhyLog ist (falls mehrere Bluetooth-Geräte gepairt sind,
-     * z. B. Kopfhörer) - deshalb dann nur "Bluetooth" statt "PhyLog Bluetooth", um nichts
-     * fälschlich zu behaupten. Nachteil: nach Aktivieren von Bluetooth am PC können dadurch auch
-     * mit PhyLog nichts zu tun habende Ports ein "(Bluetooth)" bekommen - eine zuverlässigere
-     * Unterscheidung bräuchte Zugriff auf die native Windows-Bluetooth-API (welches Gerät hinter
-     * welchem COM-Port steckt), was jSerialComm nicht bietet.
+     * diesem (häufigeren) Fall bleibt der Port unbeschriftet: {@link #looksLikeBluetooth} erkennt
+     * zwar zuverlässig "das ist irgendein Bluetooth-Port", aber nicht, ob es wirklich PhyLog ist
+     * (falls mehrere Bluetooth-Geräte gepairt sind, z. B. Kopfhörer) - eine Beschriftung würde
+     * hier also mehr behaupten, als sich tatsächlich weiß. Die zuverlässige Unterscheidung
+     * übernimmt stattdessen die echte Handshake-Probe in {@link #identifyPhyLogPort}.
      *
      * <p>{@link #SERIAL_LABEL} für ein USB-verbundenes Board mit bekanntem Brückenchip (siehe
-     * {@link #KNOWN_USB_SERIAL_VID_PID}), sonst {@code null} - alle anderen Ports bleiben dann
-     * unbeschriftet.</p>
+     * {@link #KNOWN_USB_SERIAL_VID_PID}), sonst {@code null}.</p>
      *
-     * @return Anzeigebeschriftung oder {@code null}, falls der Port nicht als PhyLog/Bluetooth erkannt wurde.
+     * @return Anzeigebeschriftung ({@link #BLUETOOTH_DEVICE_NAME} oder {@link #SERIAL_LABEL}),
+     *         oder {@code null}, falls der Port nicht sicher als PhyLog erkannt wurde.
      */
     private static String detectPhyLogLabel(SerialPort port) {
         String description = port.getDescriptivePortName();
         if (description != null && description.contains(BLUETOOTH_DEVICE_NAME)) {
             return BLUETOOTH_DEVICE_NAME;
-        }
-        if (looksLikeBluetooth(port)) {
-            return "Bluetooth";
         }
         String vidPid = String.format("%04X:%04X", port.getVendorID(), port.getProductID());
         if (KNOWN_USB_SERIAL_VID_PID.contains(vidPid)) {
@@ -158,11 +157,10 @@ public class DeviceConnection {
 
     /**
      * Liefert die Anzeigenamen aller verfügbaren COM-Ports - im Format
-     * {@code "<Systemname> (<Beschriftung>)"} für als PhyLog erkannte Ports (siehe
-     * {@link #detectPhyLogLabel}), sonst nur der reine Systemname. Damit lassen sich der per
-     * Bluetooth-SPP gepairte ESP32 und ein per USB verbundenes Board auf einen Blick erkennen,
-     * ohne die - insbesondere nach Aktivieren von Bluetooth am PC oft zahlreichen - Ports zu
-     * verwirrenden, mit PhyLog nichts zu tun habenden System-/Treiberbeschreibungen zu überladen.
+     * {@code "<Systemname> (<Beschriftung>)"} für sicher als PhyLog erkannte Ports (siehe
+     * {@link #detectPhyLogLabel}: nur "PhyLog Bluetooth" oder "PhyLog Seriell"), sonst nur der
+     * reine Systemname - auch für sonstige, nicht sicher zuordenbare Bluetooth-Ports (Kopfhörer,
+     * andere gepairte Geräte, ...), die dadurch nicht mit einer bloßen Vermutung aufwarten.
      *
      * <p>{@link #connect} erwartet weiterhin den reinen Systemnamen (z. B. "COM5") - siehe
      * {@link #stripDescription}, das ein Aufrufer (aktuell {@link GUI} und {@link Terminal}) auf
@@ -178,6 +176,46 @@ public class DeviceConnection {
             names.add(label != null ? systemName + " (" + label + ")" : systemName);
         }
         return names;
+    }
+
+    /**
+     * Liefert die Kandidaten für {@link #identifyPhyLogPort}, priorisiert nach Trefferwahr-
+     * scheinlichkeit statt in der von {@link SerialPort#getCommPorts()} gelieferten (Betriebs-
+     * system-abhängigen, nicht aussagekräftigen) Reihenfolge: zuerst als {@link #SERIAL_LABEL}
+     * erkannte USB-Ports, danach als {@link #BLUETOOTH_DEVICE_NAME} erkannte Bluetooth-Ports,
+     * zuletzt alle übrigen (unbeschrifteten) Ports. Die serielle USB-Verbindung kommt bewusst
+     * zuerst: sie antwortet ohne die bei frisch geöffneten Bluetooth-SPP-Links üblichen
+     * Verzögerungen (siehe {@link #connect}) meist binnen Millisekunden, während ein Probe-
+     * Versuch an einem noch nicht verbindungsbereiten Bluetooth-Port im ungünstigen Fall die
+     * volle {@link #IDENTIFY_TIMEOUT_MS} braucht, bevor der nächste Kandidat drankommt - ist ein
+     * PhyLog-Board also gleichzeitig per USB und Bluetooth erreichbar, findet die Suche es so im
+     * Regelfall deutlich schneller.
+     *
+     * @return reine Systemnamen (kein Klammerzusatz) in Prioritätsreihenfolge, direkt an
+     *         {@link #identifyPhyLogPort} übergebbar.
+     */
+    public List<String> orderedIdentifyCandidates() {
+        List<String> serial = new ArrayList<>();
+        List<String> bluetooth = new ArrayList<>();
+        List<String> others = new ArrayList<>();
+
+        for (SerialPort port : SerialPort.getCommPorts()) {
+            String systemName = port.getSystemPortName();
+            String label = detectPhyLogLabel(port);
+            if (SERIAL_LABEL.equals(label)) {
+                serial.add(systemName);
+            } else if (BLUETOOTH_DEVICE_NAME.equals(label)) {
+                bluetooth.add(systemName);
+            } else {
+                others.add(systemName);
+            }
+        }
+
+        List<String> ordered = new ArrayList<>(serial.size() + bluetooth.size() + others.size());
+        ordered.addAll(serial);
+        ordered.addAll(bluetooth);
+        ordered.addAll(others);
+        return ordered;
     }
 
     /**

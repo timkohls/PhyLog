@@ -9,67 +9,38 @@ import java.util.List;
  * Kalibrierbedarf muss dafür nur {@link Sensor#getCalibrationParameters()} überschreiben - der
  * Dialog selbst kennt keine sensorspezifischen Details.
  */
-public class CalibrationDialog extends JDialog {
+public class CalibrationDialog extends FormDialog {
 
     private final List<Sensor.CalibrationParameter> parameters;
     private final List<JTextField> fields = new ArrayList<>();
 
     public CalibrationDialog(Window owner, Sensor sensor) {
-        super(owner, "Kalibrieren: " + sensor.getName(), ModalityType.APPLICATION_MODAL);
+        super(owner, "Kalibrieren: " + sensor.getName());
         this.parameters = sensor.getCalibrationParameters();
         initUI();
     }
 
     private void initUI() {
-        setLayout(new BorderLayout(10, 10));
-
-        JPanel formPanel = new JPanel(new GridBagLayout());
-        formPanel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.insets = new Insets(6, 6, 6, 6);
-        gbc.weightx = 1.0;
-
         if (parameters.isEmpty()) {
-            formPanel.add(new JLabel("Dieser Sensor hat keine Kalibrierwerte."), gbc);
+            addFullWidthRow(labelComponent("Dieser Sensor hat keine Kalibrierwerte."));
         } else {
-            int row = 0;
             for (Sensor.CalibrationParameter param : parameters) {
-                gbc.gridx = 0;
-                gbc.gridy = row;
-                gbc.weightx = 0.5;
-                formPanel.add(new JLabel(param.label + ":"), gbc);
-
                 JTextField field = new JTextField(String.valueOf(param.get()));
                 fields.add(field);
-                gbc.gridx = 1;
-                gbc.weightx = 0.3;
-                formPanel.add(field, gbc);
-
-                gbc.gridx = 2;
-                gbc.weightx = 0.2;
-                formPanel.add(new JLabel(param.unit), gbc);
-
-                row++;
+                addRow(labelComponent(param.label + ":"), field, labelComponent(param.unit));
             }
         }
 
-        add(formPanel, BorderLayout.CENTER);
-
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         JButton btnCancel = new JButton("Abbrechen");
         btnCancel.addActionListener(e -> dispose());
-        buttonPanel.add(btnCancel);
 
-        if (!parameters.isEmpty()) {
-            JButton btnApply = new JButton("Übernehmen");
+        if (parameters.isEmpty()) {
+            finishLayout(btnCancel);
+        } else {
+            JButton btnApply = new JButton("\u00dcbernehmen");
             btnApply.addActionListener(e -> applyAndClose());
-            buttonPanel.add(btnApply);
+            finishLayout(btnCancel, btnApply);
         }
-        add(buttonPanel, BorderLayout.SOUTH);
-
-        pack();
-        setLocationRelativeTo(getOwner());
     }
 
     /** Parst alle Eingabefelder und übernimmt sie erst, wenn keines einen Fehler hat - so
