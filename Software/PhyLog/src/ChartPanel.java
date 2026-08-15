@@ -5,8 +5,8 @@ import java.awt.event.MouseEvent;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
 import java.util.ArrayList;
-import java.util.List;
 import java.util.Arrays;
+import java.util.List;
 
 /**
  * Zeichnet ein X/Y-Diagramm (i. d. R. Zeit/Messwert, siehe {@link #setXAxisTitle} für Ausnahmen
@@ -337,11 +337,11 @@ public class ChartPanel extends JPanel {
         repaint();
     }
 
-    /** Vergleicht zwei Datensätze günstig statt vollständig: gleiche Größe plus identischer erster
-     *  und letzter Punkt genügt, um ein bloßes "unverändert erneut gesetzt" (z. B. jeder 50ms-Tick
-     *  von GUI#liveViewRefreshTimer ohne neue Zeile) von einer echten Änderung (neue/entfernte
-     *  Zeilen) zu unterscheiden - ein vollständiger Elementvergleich wäre bei tausenden Punkten
-     *  selbst schon so teuer wie der zu vermeidende Refit. */
+    /** Vergleicht zwei Datensätze günstig statt vollständig: gleiche Größe plus identischer
+     *  erster und letzter Punkt genügt, um ein bloßes "unverändert erneut gesetzt" (z. B. jeder
+     *  50ms-Tick von GUI#liveViewRefreshTimer ohne neue Zeile) von einer echten Änderung
+     *  (neue/entfernte Zeilen) zu unterscheiden - ein vollständiger Elementvergleich wäre bei
+     *  tausenden Punkten selbst schon so teuer wie der zu vermeidende Refit (siehe #setData). */
     private static boolean dataEquivalent(List<double[]> a, List<double[]> b) {
         if (a.size() != b.size()) return false;
         if (a.isEmpty()) return true;

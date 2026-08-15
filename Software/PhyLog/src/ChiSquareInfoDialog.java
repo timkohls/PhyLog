@@ -273,9 +273,6 @@ public class ChiSquareInfoDialog extends JDialog {
         return card;
     }
 
-    /**
-     * Erstellt die animierte Farbskala mit Marker zur visuellen Einordnung.
-     */
     private JComponent buildScaleBar(double reducedChiSquare) {
         double[] markerValue = {0.0};
 
@@ -361,11 +358,6 @@ public class ChiSquareInfoDialog extends JDialog {
                 settleDelay.setRepeats(false);
                 settleDelay.start();
             }
-
-            /** Stoppt beide Timer beim Schließen des Dialogs - ohne das würde insbesondere
-             *  {@code animationTimer} bis zu {@code durationMs} nach dem Schließen weiterlaufen
-             *  und {@code repaint()} auf dem dann unsichtbaren {@code panel} aufrufen (siehe
-             *  Feld-Dokumentation von {@link #animationTimer}). */
             @Override
             public void windowClosed(WindowEvent e) {
                 if (settleDelay != null) settleDelay.stop();

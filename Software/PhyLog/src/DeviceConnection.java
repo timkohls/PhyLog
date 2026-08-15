@@ -3,6 +3,7 @@ import com.fazecast.jSerialComm.SerialPortDataListener;
 import com.fazecast.jSerialComm.SerialPortEvent;
 
 import javax.swing.SwingUtilities;
+import javax.swing.Timer;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -79,6 +80,51 @@ public class DeviceConnection {
      *  genug für einen frisch geöffneten Bluetooth-SPP-Link (siehe Zeitproblem im Kommentar bei
      *  {@link #connect}), kurz genug, um mehrere Ports in vertretbarer Gesamtzeit durchzuprobieren. */
     private static final long IDENTIFY_TIMEOUT_MS = 1500;
+
+    /** Wie lange ohne jegliche empfangene Daten (siehe {@link #feed}) toleriert wird, bevor eine
+     *  laut {@code activePort.isOpen()} weiterhin offene Verbindung trotzdem als verloren gilt -
+     *  Rückfallebene zu {@code LISTENING_EVENT_PORT_DISCONNECTED} (siehe {@link #onPortDisconnected}),
+     *  das nicht in jedem Fall feuert: Wird z. B. nur die Stromversorgung des ESP32 gekappt, während
+     *  das USB-Kabel physisch gesteckt bzw. der Bluetooth-Link auf Betriebssystemebene bestehen
+     *  bleibt, meldet das Betriebssystem den Port unverändert als vorhanden - ohne diese
+     *  Rückfallebene blieb {@link #isConnected()} in diesem Fall für immer fälschlich {@code true},
+     *  obwohl nie wieder eine Zeile eintraf. Eine laufende bzw. auf den Trigger wartende
+     *  Aufzeichnung (siehe {@code AcquisitionEngine#checkTriggerCondition}) blieb dadurch
+     *  scheinbar unbeteiligt hängen: nicht, weil der Trigger selbst nicht auslöste, sondern weil
+     *  {@code AcquisitionEngine#ingestSample} mangels eintreffender Datenzeilen schlicht nie wieder
+     *  aufgerufen wurde. Das Gerät streamt durchgehend ab dem Verbindungsaufbau (siehe
+     *  {@link #connect}, {@code writeBlocking(activePort, "START")}) - eine so lange Funkstille bei
+     *  laut Betriebssystem bestehender Verbindung ist deshalb selbst bei niedriger Abtastrate ein
+     *  klares Signal für einen tatsächlichen Verbindungsverlust, nicht für eine regulär langsame
+     *  Messung. Bewusst konservativ gewählt, ganz wie {@link #BLUETOOTH_SAFE_BAUD_RATE} oder
+     *  {@link #IDENTIFY_TIMEOUT_MS} - bei Bedarf hier anpassen. */
+    private static final long DATA_TIMEOUT_MS = 5000;
+
+    /** Prüfintervall für {@link #DATA_TIMEOUT_MS} - deutlich kürzer als der Timeout selbst, damit
+     *  ein tatsächlicher Verbindungsverlust zeitnah erkannt wird, aber lang genug, um keine
+     *  spürbare Last zu erzeugen (die Prüfung selbst kostet ohnehin nur einen Vergleich zweier
+     *  long-Werte, siehe {@link #checkDataTimeout}). */
+    private static final int DATA_WATCHDOG_INTERVAL_MS = 1000;
+
+    /** Läuft über {@link Timer} statt eines eigenen Hintergrund-Threads: die Prüfung selbst ist
+     *  trivial, und ein etwaiges Ergebnis (Verbindung als verloren behandeln, siehe
+     *  {@link #onPortDisconnected}) darf/soll direkt auf dem Event-Dispatch-Thread laufen - anders
+     *  als der tatsächliche serielle Datenempfang in {@link #connect} (dortiger
+     *  {@code SerialPortDataListener}), der auf einem jSerialComm-eigenen Hintergrund-Thread
+     *  feuert und deshalb selbst erst über {@link SwingUtilities#invokeLater} auf den EDT wechseln
+     *  muss. Wird in {@link #connect} gestartet und in {@link #onPortDisconnected}/
+     *  {@link #disconnect} wieder gestoppt, damit kein Timer über das Ende der jeweiligen
+     *  Verbindung hinaus weiterläuft. */
+    private Timer dataWatchdog;
+
+    /** Zeitpunkt ({@link System#currentTimeMillis()}) der zuletzt über {@link #feed} empfangenen
+     *  Daten, ausgewertet von {@link #checkDataTimeout}. Sowohl der schreibende Zugriff (in
+     *  {@link #feed}, aufgerufen über {@link SwingUtilities#invokeLater} aus dem
+     *  {@code SerialPortDataListener}) als auch der lesende Zugriff (im {@link #dataWatchdog},
+     *  eigentlich ebenfalls EDT) laufen zwar praktisch immer auf dem Event-Dispatch-Thread -
+     *  {@code volatile} schadet aber nicht und schützt zusätzlich gegen einen versehentlich
+     *  außerhalb des EDT erfolgenden Zugriff. */
+    private volatile long lastDataReceivedMillis;
 
     /** Eigener Hintergrund-Thread für alle über {@link #sendLine} verschickten Kommandos. Ohne das
      *  würde ein blockierender {@code OutputStream#write()} (siehe {@code TIMEOUT_WRITE_BLOCKING}
@@ -179,15 +225,6 @@ public class DeviceConnection {
     }
 
     /**
-     * @return Systemname des aktuell verbundenen Ports (z. B. "COM5"), oder {@code null} ohne
-     *         aktive Verbindung - unabhängig davon, über welches Fenster ({@link GUI} oder
-     *         {@link Terminal}) sie hergestellt wurde, da beide dieselbe Singleton-Instanz teilen.
-     */
-    public String getActivePortName() {
-        return isConnected() ? activePort.getSystemPortName() : null;
-    }
-
-    /**
      * Liefert die Kandidaten für {@link #identifyPhyLogPort}, priorisiert nach Trefferwahr-
      * scheinlichkeit statt in der von {@link SerialPort#getCommPorts()} gelieferten (Betriebs-
      * system-abhängigen, nicht aussagekräftigen) Reihenfolge: zuerst als {@link #SERIAL_LABEL}
@@ -259,6 +296,15 @@ public class DeviceConnection {
     }
 
     /**
+     * @return Systemname des aktuell verbundenen Ports (z. B. "COM5"), oder {@code null} ohne
+     *         aktive Verbindung - unabhängig davon, über welches Fenster ({@link GUI} oder
+     *         {@link Terminal}) sie hergestellt wurde, da beide dieselbe Singleton-Instanz teilen.
+     */
+    public String getActivePortName() {
+        return isConnected() ? activePort.getSystemPortName() : null;
+    }
+
+    /**
      * Öffnet den angegebenen seriellen Port.
      *
      * @param portName Name des Ports (z. B. "COM5").
@@ -305,11 +351,26 @@ public class DeviceConnection {
         activePort.addDataListener(new SerialPortDataListener() {
             @Override
             public int getListeningEvents() {
-                return SerialPort.LISTENING_EVENT_DATA_AVAILABLE;
+                // Ohne LISTENING_EVENT_PORT_DISCONNECTED blieb ein physischer Verbindungsabbruch
+                // (Kabel gezogen, Board ausgeschaltet, Bluetooth-Link weg) bisher vollständig
+                // unbemerkt: activePort.isOpen() liefert je nach Betriebssystem/Treiber nach so
+                // einem Abbruch nicht zuverlässig sofort false, und ohne ein Event feuert
+                // notifyConnectionListeners() nie - #isConnected() blieb also dauerhaft (fälschlich)
+                // true, GUI/AcquisitionEngine erfuhren nie davon (siehe #onPortDisconnected unten,
+                // AcquisitionEngine#onConnectionStatusChanged). Ein laufendes/wartendes Trigger-
+                // Aufzeichnung blieb dadurch für immer im "läuft"-Zustand hängen, ohne dass je
+                // wieder ein Messwert eintraf - nur ein per Firmware gemeldeter Sensorfehler
+                // (#ERR, z. B. I2C/HX711) wurde bisher überhaupt erkannt (siehe
+                // AcquisitionEngine#onErrorLine), ein kompletter Verbindungsverlust dagegen nicht.
+                return SerialPort.LISTENING_EVENT_DATA_AVAILABLE | SerialPort.LISTENING_EVENT_PORT_DISCONNECTED;
             }
 
             @Override
             public void serialEvent(SerialPortEvent event) {
+                if (event.getEventType() == SerialPort.LISTENING_EVENT_PORT_DISCONNECTED) {
+                    SwingUtilities.invokeLater(DeviceConnection.this::onPortDisconnected);
+                    return;
+                }
                 byte[] chunk = new byte[activePort.bytesAvailable()];
                 int read = activePort.readBytes(chunk, chunk.length);
                 if (read > 0) {
@@ -329,8 +390,47 @@ public class DeviceConnection {
         // #connect läuft ohnehin schon in einem eigenen Hintergrund-Thread der Aufrufer.
         writeBlocking(activePort, "START");
 
+        // Zählt ab jetzt als "letzte Daten", nicht erst ab der ersten tatsächlich empfangenen
+        // Zeile - sonst würde #checkDataTimeout eine frisch aufgebaute, aber noch nicht Sekunden
+        // alte Verbindung sofort fälschlich als Timeout werten (lastDataReceivedMillis stünde
+        // sonst noch auf 0 bzw. dem Wert der letzten, ggf. lange zurückliegenden Verbindung).
+        lastDataReceivedMillis = System.currentTimeMillis();
+        startDataWatchdog();
+
         notifyConnectionListeners();
         return true;
+    }
+
+    /** Startet {@link #dataWatchdog} (siehe {@link #DATA_TIMEOUT_MS}), nachdem ein zuvor
+     *  eventuell noch laufender Watchdog (z. B. von einer vorherigen Verbindung) zuerst gestoppt
+     *  wurde. */
+    private void startDataWatchdog() {
+        stopDataWatchdog();
+        dataWatchdog = new Timer(DATA_WATCHDOG_INTERVAL_MS, e -> checkDataTimeout());
+        dataWatchdog.start();
+    }
+
+    /** Stoppt {@link #dataWatchdog}, falls einer läuft - aufgerufen bei jedem Verbindungsende
+     *  ({@link #onPortDisconnected}, {@link #disconnect}), damit kein Timer über das Ende der
+     *  jeweiligen Verbindung hinaus weiterläuft und z. B. nach einem regulären {@link #disconnect}
+     *  fälschlich noch einmal {@link #onPortDisconnected} auslöst. */
+    private void stopDataWatchdog() {
+        if (dataWatchdog != null) {
+            dataWatchdog.stop();
+            dataWatchdog = null;
+        }
+    }
+
+    /** Vom {@link #dataWatchdog} periodisch aufgerufen (siehe {@link #DATA_WATCHDOG_INTERVAL_MS}):
+     *  behandelt eine laut {@link #activePort} weiterhin offene, aber seit {@link #DATA_TIMEOUT_MS}
+     *  ohne jegliche Daten gebliebene Verbindung wie einen über
+     *  {@code LISTENING_EVENT_PORT_DISCONNECTED} erkannten physischen Abbruch - siehe
+     *  {@link #DATA_TIMEOUT_MS} für die Begründung. */
+    private void checkDataTimeout() {
+        if (activePort == null) return;
+        if (System.currentTimeMillis() - lastDataReceivedMillis >= DATA_TIMEOUT_MS) {
+            onPortDisconnected();
+        }
     }
 
     /**
@@ -397,6 +497,11 @@ public class DeviceConnection {
                         }
                     }
                 } else {
+                    // Ohne diese Pause pollt die Schleife bytesAvailable() so schnell wie
+                    // möglich und frisst dabei einen ganzen CPU-Kern, bis zu IDENTIFY_TIMEOUT_MS
+                    // je Port - multipliziert mit der Kandidatenzahl in identifyPhyLogPort. 5ms
+                    // Pause eliminiert die CPU-Last praktisch, ohne die Reaktionszeit spürbar zu
+                    // verschlechtern.
                     try {
                         Thread.sleep(5);
                     } catch (InterruptedException ie) {
@@ -413,6 +518,36 @@ public class DeviceConnection {
         }
     }
 
+    /** Reagiert auf {@code LISTENING_EVENT_PORT_DISCONNECTED} (siehe {@link #connect}): der Port
+     *  ist bereits physisch weg (Kabel gezogen, Board aus, Bluetooth-Link verloren). Anders als
+     *  bei {@link #disconnect()} ergibt ein STOP-Schreibversuch hier keinen Sinn mehr (das Gerät
+     *  ist nicht mehr ansprechbar) - {@code closePort()} dagegen schon, und zwar unbedingt: es
+     *  gibt erst den systemweiten Handle auf den COM-Port frei, den jSerialComm beim Öffnen belegt
+     *  hat. Ohne diesen Aufruf blieb der Port aus Sicht des Betriebssystems weiterhin durch diesen
+     *  Prozess reserviert, obwohl {@code activePort} hier lokal schon auf {@code null} gesetzt
+     *  wurde - ein Wiedereinstecken des Kabels und erneutes {@link #connect} auf denselben
+     *  Systemnamen schlug dadurch mit "Verbindung fehlgeschlagen" fehl, bis die gesamte Anwendung
+     *  neu gestartet wurde (das Betriebssystem gibt den Handle spätestens beim Prozessende frei).
+     *  {@code closePort()} auf einem bereits physisch getrennten Port ist unkritisch - jSerialComm
+     *  räumt in diesem Fall nur noch lokale Ressourcen auf, ohne zu blockieren; rein zur
+     *  Absicherung trotzdem in try/catch, statt einen sonst funktionierenden Abbau daran scheitern
+     *  zu lassen. Danach wie zuvor: lokalen Zustand aufräumen und Listener benachrichtigen, damit
+     *  z. B. {@link Terminal}/{@link GUI} sofort auf "nicht verbunden" umschalten und eine
+     *  laufende Aufzeichnung in {@link AcquisitionEngine} abgebrochen wird (siehe dortiges
+     *  {@code onConnectionStatusChanged}). */
+    private void onPortDisconnected() {
+        if (activePort == null) return;
+        SerialPort port = activePort;
+        activePort = null;
+        receiveBuffer.setLength(0);
+        stopDataWatchdog();
+        try {
+            port.closePort();
+        } catch (Exception ignored) {
+        }
+        notifyConnectionListeners();
+    }
+
     /**
      * Schließt den aktuell geöffneten Port.
      */
@@ -425,6 +560,7 @@ public class DeviceConnection {
             writeBlocking(activePort, "STOP");
             activePort.closePort();
             activePort = null;
+            stopDataWatchdog();
             notifyConnectionListeners();
         }
     }
@@ -516,6 +652,11 @@ public class DeviceConnection {
      * Fügt Text zum Puffer hinzu und verteilt vollständige Zeilen an Listener.
      */
     private void feed(String chunk) {
+        // Zählt als Lebenszeichen für #checkDataTimeout, sobald überhaupt Bytes ankommen - auch
+        // wenn der Chunk (noch) keine vollständige Zeile enthält. Genauer als erst beim
+        // Vervollständigen einer Zeile zu aktualisieren, und unkritisch: ein noch unvollständiger
+        // Rest im Puffer ist selbst schon ein Beleg dafür, dass das Gerät gerade aktiv sendet.
+        lastDataReceivedMillis = System.currentTimeMillis();
         receiveBuffer.append(chunk);
 
         int newlineIndex;

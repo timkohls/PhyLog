@@ -2,6 +2,8 @@ import com.formdev.flatlaf.FlatDarkLaf;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.ActionListener;
+import java.util.Map;
 
 /**
  * Farbpalette und Look-and-Feel-Konfiguration der Anwendung. Einzige Quelle der Wahrheit für
@@ -113,5 +115,53 @@ public class Theme {
         UIManager.put("Label.foreground", TEXT);
 
         UIManager.put("TitledBorder.titleColor", TEXT);
+    }
+
+    /** Kompakter Symbol-/Icon-Button (Zoom, Port-Refresh, ...): einheitliches Margin, kein
+     *  Fokus-Rahmen, optional eigene Schrift für größere Symbole (z. B. "+"/"−"). Zentralisiert das
+     *  bisher an mehreren Stellen in GUI wiederholte Font/Margin/FocusPainted-Trio.
+     *
+     * @param symbol   Beschriftung des Buttons (kurzes Symbol/Zeichen)
+     * @param tooltip  Tooltip-Text, {@code null} für keinen
+     * @param boldFont {@code true} für größere, fette Schrift (z. B. Zoom-Buttons),
+     *                 {@code false} für die Standard-UI-Schrift (z. B. Emoji-Buttons)
+     */
+    public static JButton compactButton(String symbol, String tooltip, boolean boldFont) {
+        JButton button = new JButton(symbol);
+        button.setFocusPainted(false);
+        if (boldFont) {
+            button.setFont(new Font("SansSerif", Font.BOLD, 14));
+            button.setMargin(new Insets(2, 6, 2, 6));
+        } else {
+            button.setMargin(new Insets(2, 4, 2, 4));
+        }
+        if (tooltip != null) button.setToolTipText(tooltip);
+        return button;
+    }
+
+    /**
+     * Baut eine Gruppe sich gegenseitig ausschließender {@link JRadioButtonMenuItem}s, fügt sie in
+     * Reihenfolge zu {@code targetMenu} hinzu und verdrahtet jeden Eintrag mit seinem Listener.
+     * Zentralisiert das in GUI mehrfach wiederholte Muster (ButtonGroup anlegen, je Item erzeugen,
+     * zu Gruppe UND Menü hinzufügen) - der Aufrufer bekommt die Items als Array zurück, falls er
+     * (wie bei Y-Achsen/Fit-Ziel) später programmatisch die Auswahl synchronisieren muss.
+     *
+     * @param targetMenu     Menü, in das die Items eingehängt werden
+     * @param selectedIndex  Index des initial ausgewählten Eintrags, -1 für keinen
+     * @param entries        Beschriftung + Listener je Eintrag, in Anzeigereihenfolge
+     */
+    @SafeVarargs
+    public static JRadioButtonMenuItem[] radioMenuGroup(JMenu targetMenu, int selectedIndex,
+                                                        Map.Entry<String, ActionListener>... entries) {
+        ButtonGroup group = new ButtonGroup();
+        JRadioButtonMenuItem[] items = new JRadioButtonMenuItem[entries.length];
+        for (int i = 0; i < entries.length; i++) {
+            JRadioButtonMenuItem item = new JRadioButtonMenuItem(entries[i].getKey(), i == selectedIndex);
+            item.addActionListener(entries[i].getValue());
+            group.add(item);
+            targetMenu.add(item);
+            items[i] = item;
+        }
+        return items;
     }
 }

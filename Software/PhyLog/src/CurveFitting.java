@@ -310,6 +310,12 @@ public final class CurveFitting {
             double trialCost = sinusCost(data, pTrial);
 
             if (trialCost < prevCost) {
+                // Relativ statt absolut (siehe Klassenkommentar zu unterschiedlichen
+                // Größenordnungen der vier Parameter, z. B. Amplitude in hunderten Lux vs.
+                // Kreisfrequenz im Bereich von 0.001 rad/s): ein Schritt gilt erst als
+                // vernachlässigbar, wenn er klein ist relativ zur Größe des jeweiligen
+                // Parameters selbst - Math.max(1.0, ...) verhindert dabei nur, dass ein Parameter
+                // nahe 0 die Schwelle auf (fast) 0 herunterzieht.
                 boolean converged = Math.abs(dp[0]) < 1e-8 * Math.max(1.0, Math.abs(p[0]))
                         && Math.abs(dp[1]) < 1e-8 * Math.max(1.0, Math.abs(p[1]))
                         && Math.abs(dp[2]) < 1e-8 * Math.max(1.0, Math.abs(p[2]))
