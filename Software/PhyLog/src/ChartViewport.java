@@ -4,29 +4,18 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Kapselt den Zoom-/Auswahlzustand von {@link ChartPanel}: das aktuelle Zoom-/Auswahlfenster in
- * Datenraum-Koordinaten (gesetzt per Rubber-Band- oder Freihand-Auswahl), den kontinuierlichen
- * Zoom-Faktor (Buttons, siehe {@link ChartPanel#zoomIn()}/{@link ChartPanel#zoomOut()}) sowie den
- * flüchtigen Zustand einer gerade laufenden Maus-Interaktion (Drag-Rechteck bzw. Freihand-Stift).
- *
- * <p>Kennt weder Zeichen- noch Fit-/Chi²-Logik: {@link ChartPanel} liest nur das aktuelle Fenster
- * aus ({@link #isActive()}, {@link #getMinX()} etc.) und stößt bei jeder Änderung selbst ein
- * Neuberechnen von {@code displayData} sowie des Fit-/Sigma-Caches an - {@link #applySelectionZoom}
- * und {@link #applyFreehandSelection} geben dafür lediglich per Rückgabewert zurück, ob sich das
- * Fenster tatsächlich geändert hat.</p>
+ * Zoom-/Auswahlzustand von {@link ChartPanel}: das aktuelle Zoom-/Auswahlfenster in
+ * Datenraum-Koordinaten, der kontinuierliche Zoom-Faktor sowie der flüchtige Zustand einer
+ * laufenden Maus-Interaktion (Rubber-Band bzw. Freihand). Kennt weder Zeichen- noch Fit-Logik.
  */
 class ChartViewport {
 
-    /** Minimale Pixel-Ausdehnung eines Rubber-Band-Rechtecks, damit ein winziger, versehentlicher
-     *  Klick nicht bereits als Zoom-Auswahl gilt. */
     private static final int MIN_DRAG_PIXELS = 10;
     private static final double MIN_ZOOM_FACTOR = 0.1;
     private static final double ZOOM_STEP = 1.2;
 
-    /** Für die Pixel-zu-Daten-Umrechnung von {@link #applySelectionZoom}/{@link #applyFreehandSelection}
-     *  benötigte Ausschnitts-Geometrie - ein schmaler, auf das Nötigste reduzierter Ausschnitt aus
-     *  {@link ChartPanel}s vollständiger Plot-Geometrie, damit diese Klasse deren privaten
-     *  PlotGeometry-Typ nicht kennen muss. Von {@link ChartPanel} bei Bedarf frisch gebaut. */
+    /** Auf das Nötigste reduzierter Ausschnitt aus der Plot-Geometrie des Aufrufers, für die
+     *  Pixel-zu-Daten-Umrechnung in {@link #applySelectionZoom}/{@link #applyFreehandSelection}. */
     static final class Geometry {
         final int padding, plotWidth, plotHeight, height;
         final double minX, rangeX, minY, rangeY;
@@ -44,8 +33,7 @@ class ChartViewport {
         }
     }
 
-    /** Aktuelles Zoom-/Auswahlfenster, {@code null} (bei {@code minX}) = kein Fenster gesetzt, es
-     *  wird der volle Datenbereich verwendet. */
+    /** {@code null} = kein Zoom-/Auswahlfenster gesetzt, es gilt der volle Datenbereich. */
     private Double minX = null, maxX = null, minY = null, maxY = null;
     private double zoomFactor = 1.0;
 
@@ -55,7 +43,6 @@ class ChartViewport {
     private boolean rightButtonDragging = false;
     private boolean rightClickTriggered = false;
 
-    /** @return {@code true}, wenn aktuell ein Zoom-/Auswahlfenster aktiv ist. */
     boolean isActive() {
         return minX != null;
     }
@@ -74,7 +61,7 @@ class ChartViewport {
         zoomFactor = Math.max(MIN_ZOOM_FACTOR, zoomFactor / ZOOM_STEP);
     }
 
-    /** Setzt Zoom-Faktor und Zoom-/Auswahlfenster zurück auf die vollständigen Messdaten. */
+    /** Setzt Zoom-Faktor und Zoom-/Auswahlfenster auf die vollständigen Messdaten zurück. */
     void reset() {
         zoomFactor = 1.0;
         minX = null;
@@ -134,16 +121,9 @@ class ChartViewport {
 
     /**
      * Wertet ein per linker Maustaste gezogenes Rechteck aus: die Bounding-Box wird zum neuen
-     * Zoom-Fenster, sofern mindestens zwei Punkte aus {@code originalData} hineinfallen. Die
-     * Pixel-zu-Daten-Umrechnung nutzt dieselbe Geometrie wie das Zeichnen selbst, damit die
-     * Auswahl exakt dem entspricht, was gerade sichtbar ist - auch wenn schon vorher gezoomt war.
+     * Zoom-Fenster, sofern mindestens zwei Punkte aus {@code originalData} hineinfallen.
      *
-     * @param p1           erste Ecke des gezogenen Rechtecks (Bildschirmkoordinaten)
-     * @param p2           gegenüberliegende Ecke (Bildschirmkoordinaten)
-     * @param geo          aktuelle Plot-Geometrie des Aufrufers
-     * @param originalData ungefilterte Messdaten, gegen die die Mindestpunktzahl geprüft wird
-     * @return {@code true}, wenn ein neues Zoom-Fenster gesetzt wurde (der Aufrufer muss dann
-     *         Anzeige-Daten sowie Fit-/Sigma-Cache selbst neu berechnen)
+     * @return {@code true}, wenn ein neues Zoom-Fenster gesetzt wurde
      */
     boolean applySelectionZoom(Point p1, Point p2, Geometry geo, List<double[]> originalData) {
         if (originalData == null || originalData.isEmpty() || geo == null) return false;
@@ -179,20 +159,15 @@ class ChartViewport {
 
     /**
      * Wertet eine per rechter Maustaste gezogene Freihand-Linie aus: die Bounding-Box der davon
-     * eingeschlossenen Messpunkte wird zum neuen Zoom-Fenster - {@code originalData} bleibt
-     * unverändert, die Freihandform dient nur der (ggf. nicht-rechteckigen) Auswahl des
-     * Zoom-Bereichs, nicht dem dauerhaften Verwerfen der übrigen Punkte.
+     * eingeschlossenen Messpunkte wird zum neuen Zoom-Fenster.
      *
-     * @param strokePoints vom Nutzer gezogene Freihand-Linie (Bildschirmkoordinaten)
-     * @param geo          aktuelle Plot-Geometrie des Aufrufers
-     * @param originalData ungefilterte Messdaten, aus denen die eingeschlossenen Punkte bestimmt werden
      * @return {@code true}, wenn ein neues Zoom-Fenster gesetzt wurde
      */
     boolean applyFreehandSelection(List<Point> strokePoints, Geometry geo, List<double[]> originalData) {
         if (originalData == null || originalData.isEmpty() || strokePoints.size() < 3 || geo == null) return false;
 
         Path2D polygonPath = new Path2D.Double();
-        polygonPath.moveTo(strokePoints.get(0).x, strokePoints.get(0).y);
+        polygonPath.moveTo(strokePoints.getFirst().x, strokePoints.getFirst().y);
         for (int i = 1; i < strokePoints.size(); i++) {
             polygonPath.lineTo(strokePoints.get(i).x, strokePoints.get(i).y);
         }

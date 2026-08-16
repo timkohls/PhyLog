@@ -3,7 +3,6 @@ import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.event.TableModelEvent;
 import java.awt.*;
-import java.awt.event.ActionListener;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.awt.event.MouseAdapter;
@@ -15,20 +14,16 @@ import java.util.ArrayList;
 import java.util.Map;
 
 /**
- * Hauptfenster von PhyLog: Menüleiste, Werkzeugleiste, Messwerttabellen für Kanal A/B mit
- * automatischem Scrollen sowie das {@link ChartPanel}. Die eigentliche Datenaufnahme inkl.
- * Trigger-Logik übernimmt {@link AcquisitionEngine}, CSV-/PNG-Im- und -Export {@link DataFileService}
- * - diese Klasse verdrahtet nur noch UI-Elemente mit beiden und hält den pro Kanal nötigen
- * UI-Zustand ({@link MeasurementChannel}).
+ * Hauptfenster von PhyLog: Menüleiste, Werkzeugleiste, Messwerttabellen für Kanal A/B sowie
+ * das {@link ChartPanel}. Verdrahtet die UI mit {@link AcquisitionEngine} (Datenaufnahme) und
+ * {@link DataFileService} (CSV-/PNG-Export) und hält den pro Kanal nötigen UI-Zustand
+ * ({@link MeasurementChannel}).
  */
 public class GUI extends JFrame implements AcquisitionEngine.Listener {
-
     private static final int DEFAULT_WIDTH = 1280;
     private static final int DEFAULT_HEIGHT = 720;
 
-    /** Muss exakt zur Firmware passen (siehe BAUD_RATE in phylog_firmware.ino) - sonst
-     *  verbindet sich nichts mehr. 460800 statt der früheren 115200, damit vor allem das
-     *  Frequenzspektrum (Kanal A/B) deutlich flüssiger übertragen werden kann. */
+    /** Muss zur Firmware passen (siehe BAUD_RATE in phylog_firmware.ino). */
     private static final int BAUD_RATE = 460800;
 
     private final MeasurementChannel channelA = new MeasurementChannel('A');
@@ -39,68 +34,51 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     private ChartPanel chartPanel;
     private JSplitPane mainSplitPane;
 
-    private JButton btnStart, btnStop, btnSnapshot, btnTrigger, btnZoomIn, btnZoomOut, btnResetZoom, btnClear;
+    private JButton btnStart;
+    private JButton btnStop;
+    private JButton btnSnapshot;
+    private JButton btnTrigger;
+    private JButton btnClear;
     private JButton connectButton;
     private JLabel lblTriggerStatus;
-    /** Kleiner Hinweis, der nur bei aktiver Bluetooth-Verbindung neben {@link #lblTriggerStatus}
-     *  eingeblendet wird - siehe {@link #updateStatusLabel()} und den Bluetooth-Hinweis in
-     *  SensorConfigDialog#refreshSampleRateOptions(). */
+
+    /** Bandbreiten-Hinweis, nur sichtbar bei aktiver Bluetooth-Verbindung (siehe {@link #updateStatusLabel()}). */
     private JLabel lblBluetoothInfo;
 
-    /** Bündelt sämtlichen Zugriff auf die geteilte {@link DeviceConnection} (siehe
-     *  {@link ConnectionController}) - hält u. a. den Verbindungsstatus-Listener fest, der beim
-     *  Schließen des Fensters wieder abgemeldet werden muss (siehe {@link #dispose()}-Ersatz im
-     *  WindowListener). */
+    /** Zugriff auf die geteilte {@link DeviceConnection}, inkl. Verbindungsstatus-Listener. */
     private final ConnectionController connectionController = new ConnectionController(this::onConnectionStatusChanged);
 
-    /** "Sensor konfigurieren..."-Menüeintrag - nur nutzbar, solange eine Verbindung zum ESP32
-     *  besteht (siehe {@link #openSensorConfigDialog()} und {@link #updateStatusLabel()}), damit
-     *  eine Sensorauswahl nie ins Leere läuft, weil die Firmware sie mangels Verbindung gar nicht
-     *  erst mitbekommen könnte. */
+    /** Nur aktivierbar, solange eine Verbindung zum ESP32 besteht (siehe {@link #updateStatusLabel()}). */
     private JMenuItem configSensorItem;
 
-    /** Menüeinträge für die Y-Achsen-Steuerung zur Synchronisation mit automatischen Wechseln. */
     private JRadioButtonMenuItem yAxisShared;
     private JRadioButtonMenuItem yAxisDual;
 
-    /** Menüeinträge für das Fit-Ziel (siehe {@link ChartPanel.FitTarget}) - "Kanal B" und "Beide
-     *  Kanäle" ergeben nur mit einem aktiven Sensor auf Kanal B Sinn, siehe {@link #updateTableLayout()}. */
     private JRadioButtonMenuItem fitTargetA;
     private JRadioButtonMenuItem fitTargetB;
     private JRadioButtonMenuItem fitTargetBoth;
 
-    /** Referenz auf ein bereits geöffnetes Terminal-Fenster. */
     private Terminal terminalWindow;
 
-    /** {@code true}, wenn Kanal B (sofern aktiv) über eine eigene, unabhängig skalierte zweite
-     *  Y-Achse dargestellt wird, statt sich - wie im Standardfall - dieselbe Achse mit Kanal A zu
-     *  teilen (siehe Menü "Ansicht" -&gt; "Y-Achsen" sowie {@link ChartPanel#setDualYAxisMode}).
-     *  Wirkt sich nur auf Achsenbeschriftung/-skalierung aus, nicht auf Fit, Zoom oder Chi². */
+    /** {@code true}, wenn Kanal B eine eigene, unabhängig skalierte Y-Achse bekommt statt sich
+     *  die Achse mit Kanal A zu teilen (siehe {@link ChartPanel#setDualYAxisMode}). */
     private boolean dualYAxisMode = false;
-    /** Ob beim letzten Aufruf von {@link #updateTableLayout()} beide Kanäle einen Sensor hatten -
-     *  dient nur dazu, den Übergang 1 -&gt; 2 (bzw. 2 -&gt; 1) aktive Sensoren zu erkennen, siehe dort. */
+
+    /** Ob beim letzten {@link #updateTableLayout()} beide Kanäle einen Sensor hatten - erkennt
+     *  den Übergang 1 &lt;-&gt; 2 aktive Sensoren. */
     private boolean previousBothActive = false;
 
-    /** {@code true}, solange das Diagramm aktuell im Frequenzspektrum-Modus zeigt (mindestens ein
-     *  Kanal hat einen Spektrum-Sensor, siehe {@link Sensor#producesSpectrum()}) - dient nur dazu,
-     *  einen Wechsel zwischen Zeit- und Frequenzachse zu erkennen, um dann den Zoom
-     *  zurückzusetzen (siehe {@link #updateTableLayout()}), da beide Achsen einen grundverschiedenen
-     *  Wertebereich haben. */
+    /** {@code true}, solange das Diagramm im Frequenzspektrum-Modus zeigt - dient dem Erkennen
+     *  eines Wechsels zwischen Zeit- und Frequenzachse, um den Zoom zurückzusetzen. */
     private boolean spectrumModeActive = false;
-    /** Zuletzt empfangenes Spektrum je Kanal (dB je Bin), {@code null} ohne aktiven Spektrum-Sensor
-     *  bzw. bevor das erste Paket eingetroffen ist (siehe {@link #onSpectrumFrame}). */
+
+    /** Zuletzt empfangenes Spektrum je Kanal (dB je Bin), {@code null} ohne aktiven Spektrum-Sensor. */
     private double[] lastSpectrumA, lastSpectrumB;
     private int lastSpectrumRateA = 16000, lastSpectrumRateB = 16000;
 
-    /** Fasst häufige Tabellen-Updates (bis zu 1000/s je Kanal bei hoher Abtastrate) auf eine
-     *  feste Bildwiederholrate zusammen, statt Diagramm und Auto-Scroll bei jeder einzelnen neu
-     *  eintreffenden Zeile sofort neu zu berechnen. Ohne diese Bündelung liest
-     *  {@link #updateChartData()} bei jedem einzelnen Messwert die komplette, bereits
-     *  vorhandene Tabelle neu ein - der Aufwand pro Messwert wächst also mit der Zeilenzahl, und
-     *  die Oberfläche beginnt nach einigen tausend Zeilen (bei 1000 Hz nach wenigen Sekunden)
-     *  spürbar zu ruckeln. Mit der Bündelung bleibt die Bildwiederholrate konstant, unabhängig
-     *  von der Abtastrate. */
-    private final Timer liveViewRefreshTimer = new Timer(50, e -> flushPendingUiUpdates());
+    /** Bündelt häufige Tabellen-Updates auf eine feste Bildwiederholrate statt Diagramm und
+     *  Auto-Scroll bei jeder einzelnen Zeile neu zu berechnen (siehe {@link #flushPendingUiUpdates()}). */
+    private final Timer liveViewRefreshTimer = new Timer(50, _ -> flushPendingUiUpdates());
     private volatile boolean chartRefreshPending = false;
     private volatile boolean scrollPendingA = false;
     private volatile boolean scrollPendingB = false;
@@ -125,12 +103,8 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         initToolBar();
         initMainArea();
 
-        // Anfangszustand von Start/Stop, Sensor-Menüpunkt etc. korrekt setzen (siehe
-        // #updateStatusLabel), statt bis zur ersten Verbindungsänderung auf die in initToolBar()
-        // gesetzten Platzhalterwerte angewiesen zu sein.
         updateStatusLabel();
 
-        // Läuft dauerhaft, nicht nur während einer Aufzeichnung - siehe AcquisitionEngine#ingestSample.
         connectionController.addLineListener(acquisitionEngine::onLineReceived);
 
         liveViewRefreshTimer.start();
@@ -147,26 +121,13 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         updateTableLayout();
     }
 
-    /** @return den Kanal 'A' oder 'B'; alles andere fällt auf Kanal A zurück. Delegiert an
-     *  {@link AcquisitionEngine#channel(char)} statt dieselbe Logik ein zweites Mal zu halten -
-     *  {@code acquisitionEngine} referenziert dieselben {@link MeasurementChannel}-Instanzen. */
+    /** @return den Kanal 'A' oder 'B'; alles andere fällt auf Kanal A zurück. */
     private MeasurementChannel channel(char id) {
         return acquisitionEngine.channel(id);
     }
 
-    /** Lädt das Fenster-Icon über den Klassenpfad statt über einen relativen Dateipfad im
-     *  Projektverzeichnis ({@code "src/assets/icon.png"}) - Letzteres funktioniert nur, solange
-     *  die Anwendung mit dem Projektordner als aktuellem Arbeitsverzeichnis aus der IDE gestartet
-     *  wird. Sobald die Anwendung als JAR gepackt und von woanders gestartet wird, existiert dort
-     *  gar kein "src"-Ordner mehr (der liegt höchstens noch im Quell-Repository, nicht neben dem
-     *  JAR) - das Icon fehlte dann kommentarlos (nur die Konsolen-Warnung), das Fenster lief aber
-     *  ansonsten unauffällig weiter.
-     *
-     *  <p>Mit {@link Class#getResource} wird stattdessen im Klassenpfad gesucht - dafür muss
-     *  {@code icon.png} beim Bauen als Ressource unter {@code /assets/icon.png} ins JAR
-     *  aufgenommen werden (bei Maven/Gradle z. B. unter {@code src/main/resources/assets/icon.png}
-     *  ablegen, dann landet sie automatisch mit im JAR und ist über denselben Pfad sowohl aus der
-     *  IDE als auch aus dem gepackten JAR heraus auffindbar).</p> */
+    /** Lädt das Fenster-Icon über den Klassenpfad, damit es auch aus einem gepackten JAR
+     *  heraus gefunden wird (nicht nur beim Start aus der IDE mit Projektordner als CWD). */
     private void loadWindowIcon() {
         java.net.URL iconUrl = getClass().getResource("/assets/icon.png");
         if (iconUrl == null) {
@@ -180,29 +141,29 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     private void initMenuBar() {
         JMenuBar menuBar = new JMenuBar();
 
-        // --- Datei Menü ---
+        // --- Datei-Menü ---
         JMenu menuFile = new JMenu("Datei");
 
         JMenuItem openItem = new JMenuItem("Öffnen...");
-        openItem.addActionListener(e -> openCsv());
+        openItem.addActionListener(_ -> openCsv());
         menuFile.add(openItem);
 
         menuFile.addSeparator();
 
         JMenuItem exportCsvItem = new JMenuItem("Als CSV exportieren...");
-        exportCsvItem.addActionListener(e -> exportCsv());
+        exportCsvItem.addActionListener(_ -> exportCsv());
         menuFile.add(exportCsvItem);
 
         JMenuItem exportPngItem = new JMenuItem("Diagramm als PNG exportieren...");
-        exportPngItem.addActionListener(e -> exportPng());
+        exportPngItem.addActionListener(_ -> exportPng());
         menuFile.add(exportPngItem);
 
         menuFile.addSeparator();
         JMenuItem exitItem = new JMenuItem("Beenden");
-        exitItem.addActionListener(e -> System.exit(0));
+        exitItem.addActionListener(_ -> System.exit(0));
         menuFile.add(exitItem);
 
-        // --- Sensor Menü ---
+        // --- Sensor-Menü ---
         JMenu menuSensor = new JMenu("Sensor");
         menuSensor.addMenuListener(new javax.swing.event.MenuListener() {
             @Override
@@ -220,61 +181,61 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         });
 
         configSensorItem = new JMenuItem("Sensor konfigurieren...");
-        configSensorItem.addActionListener(e -> openSensorConfigDialog());
+        configSensorItem.addActionListener(_ -> openSensorConfigDialog());
         configSensorItem.setEnabled(connectionController.isConnected());
         configSensorItem.setToolTipText("Erst mit dem ESP32 verbinden, dann Sensoren auswählen.");
         menuSensor.add(configSensorItem);
 
-        // --- Terminal Menü ---
+        // --- Terminal-Menü ---
         JMenu menuTerminal = new JMenu("Terminal");
 
         JMenuItem terminalItem = new JMenuItem("Terminal öffnen...");
-        terminalItem.addActionListener(e -> openTerminal());
+        terminalItem.addActionListener(_ -> openTerminal());
         menuTerminal.add(terminalItem);
 
-        // --- Ansicht Menü ---
+        // --- Ansicht-Menü ---
         JMenu menuView = new JMenu("Ansicht");
 
         JMenuItem resetLayoutItem = new JMenuItem("Ansicht zurücksetzen");
-        resetLayoutItem.addActionListener(e -> resetLayout());
+        resetLayoutItem.addActionListener(_ -> resetLayout());
         menuView.add(resetLayoutItem);
 
         JCheckBoxMenuItem showPoints = new JCheckBoxMenuItem("Messpunkte anzeigen", true);
-        showPoints.addActionListener(e -> chartPanel.setShowPoints(showPoints.isSelected()));
+        showPoints.addActionListener(_ -> chartPanel.setShowPoints(showPoints.isSelected()));
 
         JMenu menuLineMode = new JMenu("Linienart");
         Theme.radioMenuGroup(menuLineMode, 0,
-                Map.entry("Keine Linie", (ActionListener) e -> chartPanel.setLineMode(ChartPanel.LineMode.NONE)),
-                Map.entry("Verbindungslinie (gerade)", (ActionListener) e -> chartPanel.setLineMode(ChartPanel.LineMode.STRAIGHT)),
-                Map.entry("Spline (glatt)", (ActionListener) e -> chartPanel.setLineMode(ChartPanel.LineMode.SPLINE)));
+                Map.entry("Keine Linie", _ -> chartPanel.setLineMode(ChartPanel.LineMode.NONE)),
+                Map.entry("Verbindungslinie (gerade)", _ -> chartPanel.setLineMode(ChartPanel.LineMode.STRAIGHT)),
+                Map.entry("Spline (glatt)", _ -> chartPanel.setLineMode(ChartPanel.LineMode.SPLINE)));
 
         menuView.addSeparator();
         menuView.add(showPoints);
         menuView.add(menuLineMode);
 
-        // --- Y-Achsen Untermenü ---
+        // --- Y-Achsen-Untermenü ---
         JMenu menuYAxis = new JMenu("Y-Achsen");
         JRadioButtonMenuItem[] yAxisItems = Theme.radioMenuGroup(menuYAxis, 0,
-                Map.entry("Eine gemeinsame Y-Achse", (ActionListener) e -> setDualYAxisMode(false)),
-                Map.entry("Zwei unabhängige Y-Achsen (je Kanal skaliert)", (ActionListener) e -> setDualYAxisMode(true)));
+                Map.entry("Eine gemeinsame Y-Achse", _ -> setDualYAxisMode(false)),
+                Map.entry("Zwei unabhängige Y-Achsen (je Kanal skaliert)", _ -> setDualYAxisMode(true)));
         yAxisShared = yAxisItems[0];
         yAxisDual = yAxisItems[1];
 
         menuView.addSeparator();
         menuView.add(menuYAxis);
 
-        // --- Funktions-Fit Menü ---
+        // --- Funktions-Fit-Menü ---
         JMenu menuFit = new JMenu("Funktions-Fit");
         ButtonGroup fitButtonGroup = new ButtonGroup();
 
         JRadioButtonMenuItem itemNone = new JRadioButtonMenuItem("Kein Fit", true);
-        itemNone.addActionListener(e -> chartPanel.setFitMode(ChartPanel.FitMode.NONE));
+        itemNone.addActionListener(_ -> chartPanel.setFitMode(ChartPanel.FitMode.NONE));
         fitButtonGroup.add(itemNone);
 
         JMenu menuPoly = new JMenu("Polynomfunktion");
 
         JRadioButtonMenuItem itemDeg1 = new JRadioButtonMenuItem("Grad 1 (Lineare Funktion)");
-        itemDeg1.addActionListener(e -> chartPanel.setFitMode(ChartPanel.FitMode.LINEAR));
+        itemDeg1.addActionListener(_ -> chartPanel.setFitMode(ChartPanel.FitMode.LINEAR));
         fitButtonGroup.add(itemDeg1);
         menuPoly.add(itemDeg1);
 
@@ -282,7 +243,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
             int deg = degree;
             String label = (deg == 2) ? "Grad 2 (Parabel)" : "Grad " + deg;
             JRadioButtonMenuItem itemDeg = new JRadioButtonMenuItem(label);
-            itemDeg.addActionListener(e -> {
+            itemDeg.addActionListener(_ -> {
                 chartPanel.setPolynomialDegree(deg);
                 chartPanel.setFitMode(ChartPanel.FitMode.POLYNOMIAL);
             });
@@ -291,25 +252,25 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         }
 
         JRadioButtonMenuItem itemSinus = new JRadioButtonMenuItem("Sinusfunktion");
-        itemSinus.addActionListener(e -> chartPanel.setFitMode(ChartPanel.FitMode.SINUS));
+        itemSinus.addActionListener(_ -> chartPanel.setFitMode(ChartPanel.FitMode.SINUS));
         fitButtonGroup.add(itemSinus);
 
         JRadioButtonMenuItem itemExp = new JRadioButtonMenuItem("Exponentialfunktion");
-        itemExp.addActionListener(e -> chartPanel.setFitMode(ChartPanel.FitMode.EXPONENTIAL));
+        itemExp.addActionListener(_ -> chartPanel.setFitMode(ChartPanel.FitMode.EXPONENTIAL));
         fitButtonGroup.add(itemExp);
 
-        // --- Fit-Bezug (auf welche Messgröße(n) sich Fit & Chi² beziehen) ---
+        // --- Fit-Bezug: auf welche Messgröße(n) sich Fit & Chi² beziehen ---
         JMenu menuFitTarget = new JMenu("Fit bezieht sich auf");
         JRadioButtonMenuItem[] fitTargetItems = Theme.radioMenuGroup(menuFitTarget, 0,
-                Map.entry("Kanal A", (ActionListener) e -> chartPanel.setFitTarget(ChartPanel.FitTarget.A)),
-                Map.entry("Kanal B", (ActionListener) e -> chartPanel.setFitTarget(ChartPanel.FitTarget.B)),
-                Map.entry("Beide Kanäle (A+B)", (ActionListener) e -> chartPanel.setFitTarget(ChartPanel.FitTarget.BOTH)));
+                Map.entry("Kanal A", _ -> chartPanel.setFitTarget(ChartPanel.FitTarget.A)),
+                Map.entry("Kanal B", _ -> chartPanel.setFitTarget(ChartPanel.FitTarget.B)),
+                Map.entry("Beide Kanäle (A+B)", _ -> chartPanel.setFitTarget(ChartPanel.FitTarget.BOTH)));
         fitTargetA = fitTargetItems[0];
         fitTargetB = fitTargetItems[1];
         fitTargetBoth = fitTargetItems[2];
 
         JMenuItem itemStdDev = new JMenuItem("Standardabweichung...");
-        itemStdDev.addActionListener(e -> openStandardDeviationDialog());
+        itemStdDev.addActionListener(_ -> openStandardDeviationDialog());
 
         JLabel portLabel = new JLabel(" COM-Port: ");
 
@@ -319,22 +280,18 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
         JButton btnRefreshPorts = Theme.compactButton("↻", "Ports aktualisieren", false);
 
-        // SerialPort.getCommPorts() (in connectionController.listPortNames()) kann unter Windows
-        // mit registrierten Bluetooth-SPP-Ports mehrere Sekunden dauern - synchron auf dem Event-
-        // Dispatch-Thread aufgerufen fror das bisher beim Start der GUI (hier) und bei jedem Klick
-        // auf "↻" die komplette Oberfläche ein. Jetzt beides über SwingWorker im Hintergrund, ganz
-        // wie schon beim eigentlichen Verbindungsaufbau (siehe connectButton weiter unten).
+        // Portliste im Hintergrund laden (Bluetooth-SPP-Aufzählung kann Sekunden dauern).
         refreshPortsAsync(portSelector, btnRefreshPorts);
-        btnRefreshPorts.addActionListener(e -> refreshPortsAsync(portSelector, btnRefreshPorts));
+        btnRefreshPorts.addActionListener(_ -> refreshPortsAsync(portSelector, btnRefreshPorts));
 
         JButton btnIdentifyPort = Theme.compactButton("🔍", "Passenden COM-Port automatisch finden und verbinden", false);
-        btnIdentifyPort.addActionListener(e -> identifyPortAsync(portSelector, btnIdentifyPort));
+        btnIdentifyPort.addActionListener(_ -> identifyPortAsync(portSelector, btnIdentifyPort));
 
         connectButton = new JButton(connectionController.isConnected() ? "Trennen" : "Verbinden");
         connectButton.setFocusPainted(false);
         connectButton.setMargin(new Insets(2, 8, 2, 8));
 
-        connectButton.addActionListener(e -> {
+        connectButton.addActionListener(_ -> {
             if (connectionController.isConnected()) {
                 connectButton.setEnabled(false);
                 new SwingWorker<Void, Void>() {
@@ -347,9 +304,6 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
                     @Override
                     protected void done() {
                         connectButton.setEnabled(true);
-                        // updateStatusLabel() (und damit die Beschriftung) läuft bereits über den
-                        // in ConnectionController registrierten Listener, ausgelöst direkt aus
-                        // DeviceConnection#disconnect - kein weiterer Aufruf hier nötig.
                     }
                 }.execute();
                 return;
@@ -357,9 +311,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
             Object selectedItem = portSelector.getSelectedItem();
             if (selectedItem == null) return;
-            // Anzeigetext kann eine angehängte Beschreibung enthalten (siehe
-            // DeviceConnection#listPortNames, z. B. "COM7 (PhyLog Bluetooth)") - connect()
-            // erwartet aber den reinen Systemnamen.
+
             String portName = DeviceConnection.stripDescription(selectedItem.toString().trim());
             if (portName.isEmpty()) return;
             connectToPort(portName);
@@ -394,14 +346,9 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         setJMenuBar(menuBar);
     }
 
-    /**
-     * Baut die Verbindung zu {@code portName} auf - im Hintergrund, damit ein besonders bei
-     * Bluetooth-SPP-Ports langsames {@code openPort()} (siehe {@link DeviceConnection#connect})
-     * nicht den Event-Dispatch-Thread blockiert. Gemeinsam genutzt von {@link #connectButton}
-     * (manuelle Auswahl) und {@link #identifyPortAsync} (automatisch gefundener Port) - so verhält
-     * sich ein per Portsuche gefundener Port beim Verbinden exakt wie ein manuell ausgewählter,
-     * ohne zweiten Klick auf "Verbinden".
-     */
+    /** Baut die Verbindung zu {@code portName} im Hintergrund auf (blockierendes {@code openPort()},
+     *  siehe {@link DeviceConnection#connect}). Gemeinsam genutzt von {@link #connectButton} und
+     *  {@link #identifyPortAsync}. */
     private void connectToPort(String portName) {
         connectButton.setEnabled(false);
         connectButton.setText("Verbinde...");
@@ -422,9 +369,6 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
                 }
                 if (!success) {
                     connectButton.setText("Verbinden");
-                    // Falls der Aufruf über die Portsuche kam, stand hier noch "Suche nach
-                    // passendem Port …" (siehe identifyPortAsync) - zurücksetzen, sonst bliebe das
-                    // nach einem fehlgeschlagenen Verbindungsversuch stehen.
                     updateStatusLabel();
                     JOptionPane.showMessageDialog(GUI.this,
                             "Verbindung zu " + portName + " fehlgeschlagen.",
@@ -436,16 +380,11 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
                             "Verbunden",
                             JOptionPane.INFORMATION_MESSAGE);
                 }
-                // Bei Erfolg setzt updateStatusLabel() (über den ConnectionController-Listener,
-                // ausgelöst direkt aus DeviceConnection#connect) den Text auf "Trennen" - kein
-                // weiterer Aufruf hier nötig.
             }
         }.execute();
     }
 
-    /** Füllt {@code portSelector} im Hintergrund neu, ohne den Event-Dispatch-Thread zu blockieren
-     *  (siehe Kommentar an der Aufrufstelle). {@code button} bleibt währenddessen deaktiviert,
-     *  damit kein zweiter Refresh dazwischenfunkt, solange der erste noch läuft. */
+    /** Füllt {@code portSelector} im Hintergrund neu; {@code button} bleibt währenddessen deaktiviert. */
     private void refreshPortsAsync(JComboBox<String> portSelector, JButton button) {
         button.setEnabled(false);
         new SwingWorker<List<String>, Void>() {
@@ -472,19 +411,8 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         }.execute();
     }
 
-    /**
-     * Startet {@link ConnectionController#identifyPhyLogPort} im Hintergrund und verbindet bei
-     * Erfolg direkt mit dem gefundenen Port (über {@link #connectToPort}) - kein zweiter Klick auf
-     * "Verbinden" nötig. Läuft nicht, solange bereits eine Verbindung aktiv ist (siehe Warnhinweis
-     * in {@link DeviceConnection#identifyPhyLogPort}).
-     *
-     * <p>Die Kandidatenliste kommt bereits priorisiert aus {@link ConnectionController#orderedIdentifyCandidates()}:
-     * zuerst als "PhyLog Seriell" erkannte USB-Ports, danach "PhyLog Bluetooth", zuletzt alle
-     * übrigen - im Normalfall (genau ein PhyLog-Gerät gepairt/verbunden) meist nur ein einziger
-     * Probe-Versuch statt potenziell vieler mit je bis zu {@code IDENTIFY_TIMEOUT_MS} Wartezeit,
-     * und bei gleichzeitig per USB und Bluetooth erreichbarem Board bevorzugt die schnellere,
-     * ohne Verbindungsaufbau-Verzögerung antwortende serielle Verbindung.</p>
-     */
+    /** Sucht im Hintergrund über {@link ConnectionController#identifyPhyLogPort} nach dem
+     *  passenden Port und verbindet bei Erfolg direkt (siehe {@link #connectToPort}). */
     private void identifyPortAsync(JComboBox<String> portSelector, JButton button) {
         if (connectionController.isConnected()) {
             JOptionPane.showMessageDialog(this,
@@ -502,9 +430,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
         button.setEnabled(false);
         button.setToolTipText("Suche läuft (probiert jeden Port kurz per PING aus)...");
-        // Zusätzlich zum Tooltip auch im Status-Label sichtbar, das sonst Verbindungs-/Trigger-
-        // status zeigt (siehe updateStatusLabel()) - der Tooltip allein fällt leicht nicht auf,
-        // gerade weil die Suche je nach Kandidatenzahl mehrere Sekunden dauern kann.
+
         if (lblTriggerStatus != null) {
             lblTriggerStatus.setText("Suche nach passendem Port …");
             lblTriggerStatus.setForeground(Theme.WARNING);
@@ -526,8 +452,6 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
                     found = null;
                 }
                 if (found == null) {
-                    // Kein Treffer - Status-Label wieder auf den normalen "Nicht verbunden"-Zustand
-                    // zurücksetzen, sonst bliebe "Suche nach passendem Port …" stehen.
                     updateStatusLabel();
                     JOptionPane.showMessageDialog(GUI.this,
                             "Kein Port hat mit #HELLO geantwortet. ESP32 eingeschaltet und in Reichweite/gepairt?",
@@ -564,31 +488,31 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
         btnStart = new JButton("Start");
         btnStop = new JButton("Stop");
-        btnStart.addActionListener(e -> startMeasurement());
-        btnStop.addActionListener(e -> stopMeasurement());
+        btnStart.addActionListener(_ -> startMeasurement());
+        btnStop.addActionListener(_ -> stopMeasurement());
         btnStart.setEnabled(false);
         btnStop.setEnabled(false);
 
         btnSnapshot = new JButton("Momentaufnahme");
         btnSnapshot.setToolTipText("Aktuellen Messwert als einzelne Zeile (Index statt Zeit) übernehmen");
-        btnSnapshot.addActionListener(e -> captureSnapshot());
+        btnSnapshot.addActionListener(_ -> captureSnapshot());
         btnSnapshot.setEnabled(false);
 
-        btnZoomIn = Theme.compactButton(" + ", "Hineinzoomen", true);
-        btnZoomIn.addActionListener(e -> chartPanel.zoomIn());
+        JButton btnZoomIn = Theme.compactButton(" + ", "Hineinzoomen", true);
+        btnZoomIn.addActionListener(_ -> chartPanel.zoomIn());
 
-        btnZoomOut = Theme.compactButton(" − ", "Herauszoomen", true);
-        btnZoomOut.addActionListener(e -> chartPanel.zoomOut());
+        JButton btnZoomOut = Theme.compactButton(" − ", "Herauszoomen", true);
+        btnZoomOut.addActionListener(_ -> chartPanel.zoomOut());
 
-        btnResetZoom = new JButton("Reset");
+        JButton btnResetZoom = new JButton("Reset");
         btnResetZoom.setToolTipText("Gesamten Graphen anzeigen");
-        btnResetZoom.addActionListener(e -> chartPanel.resetZoom());
+        btnResetZoom.addActionListener(_ -> chartPanel.resetZoom());
 
         btnTrigger = new JButton("Trigger");
         btnClear = new JButton("Leeren");
 
-        btnTrigger.addActionListener(e -> openTriggerDialog());
-        btnClear.addActionListener(e -> clearData());
+        btnTrigger.addActionListener(_ -> openTriggerDialog());
+        btnClear.addActionListener(_ -> clearData());
 
         toolBar.add(btnStart);
         toolBar.add(btnStop);
@@ -609,12 +533,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         lblTriggerStatus = new JLabel();
         toolBar.add(lblTriggerStatus);
 
-        // Kleines "i" für den Bluetooth-Bandbreiten-Hinweis - per Text statt Icon-Datei, damit
-        // kein zusätzliches Ressourcen-/Bildladen nötig ist (siehe auch die vorhandene
-        // try/catch-Fallback-Logik fürs Anwendungsicon an anderer Stelle in dieser Klasse). Per
-        // Default unsichtbar, siehe updateStatusLabel() - taucht nur bei tatsächlich aktiver
-        // Bluetooth-Verbindung auf.
-        lblBluetoothInfo = new JLabel(" \u24D8");
+        lblBluetoothInfo = new JLabel(" ⓘ");
         lblBluetoothInfo.setForeground(Theme.MUTED);
         lblBluetoothInfo.setFont(lblBluetoothInfo.getFont().deriveFont(Font.BOLD));
         lblBluetoothInfo.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
@@ -626,9 +545,6 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         lblBluetoothInfo.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                // Zusätzlich zum Tooltip auch per Klick anzeigen - ein Tooltip allein wird leicht
-                // übersehen bzw. ist z. B. bei Touch-/Trackpad-Bedienung ohne echtes Hover gar
-                // nicht erreichbar.
                 JOptionPane.showMessageDialog(GUI.this, bluetoothHint, "Bluetooth-Verbindung", JOptionPane.INFORMATION_MESSAGE);
             }
         });
@@ -671,8 +587,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     }
 
     /** Vom {@link #liveViewRefreshTimer} aufgerufen: führt alle seit dem letzten Tick
-     *  angefallenen Oberflächen-Updates gebündelt aus, statt jedes für sich sofort bei jeder
-     *  einzelnen Tabellenänderung. */
+     *  angefallenen Oberflächen-Updates gebündelt aus. */
     private void flushPendingUiUpdates() {
         if (chartRefreshPending) {
             chartRefreshPending = false;
@@ -708,12 +623,9 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         });
     }
 
-    /** Öffnet eine CSV-Datei und importiert sie gezielt in einen Kanal - fragt dafür kurz nach,
-     *  welcher es sein soll (siehe {@link #askImportChannel}), statt wie bisher stillschweigend
-     *  immer Kanal A zu nehmen und dabei beide Kanäle zu leeren. Dadurch lassen sich z. B. zwei
-     *  per {@link #exportCsv} getrennt geschriebene Kanal-Dateien (oder zwei frühere Messungen)
-     *  nacheinander öffnen und sauber auf A und B verteilen, ohne dass der zweite Import den
-     *  ersten wieder überschreibt. */
+    /** Öffnet eine CSV-Datei und importiert sie gezielt in den zuvor abgefragten Kanal
+     *  (siehe {@link #askImportChannel}), sodass zwei getrennte Dateien nacheinander sauber
+     *  auf A und B verteilt werden können. */
     private void openCsv() {
         JFileChooser chooser = new JFileChooser();
         chooser.setDialogTitle("CSV-Datei öffnen");
@@ -725,15 +637,14 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
         File file = chooser.getSelectedFile();
         Character targetChannelId = askImportChannel(file);
-        if (targetChannelId == null) return; // Im Auswahldialog abgebrochen
+        if (targetChannelId == null) return;
 
         importCsvIntoChannel(file, channel(targetChannelId));
     }
 
-    /** Fragt per kurzem Auswahldialog, in welchen Kanal die gewählte Datei importiert werden
-     *  soll.
+    /** Fragt per Auswahldialog, in welchen Kanal die Datei importiert werden soll.
      *
-     * @return {@code 'A'}/{@code 'B'}, oder {@code null}, wenn der Dialog abgebrochen wurde. */
+     * @return {@code 'A'}/{@code 'B'}, oder {@code null} bei Abbruch. */
     private Character askImportChannel(File file) {
         Object[] options = {"Kanal A", "Kanal B", "Abbrechen"};
         int choice = JOptionPane.showOptionDialog(this,
@@ -746,22 +657,16 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         return null;
     }
 
-    /** Importiert eine CSV-Datei in genau einen Kanal - der jeweils andere bleibt unangetastet
-     *  (bewusst kein {@link #clearData()}, das beide Kanäle träfe). Leert vorher nur die Tabelle
-     *  dieses einen Kanals und schaltet sie zurück auf die reguläre, zeitbasierte Spalte, falls
-     *  sie zuvor im Momentaufnahme-Modus war - sonst könnten Zeit- und Index-Werte in derselben
-     *  Spalte landen. */
+    /** Importiert eine CSV-Datei in genau einen Kanal, der andere bleibt unangetastet. Leert
+     *  vorher nur dessen Tabelle und schaltet sie von einem eventuellen Momentaufnahme-Modus
+     *  zurück auf die zeitbasierte Spalte. */
     private void importCsvIntoChannel(File file, MeasurementChannel ch) {
         ch.tableModel.setRowCount(0);
         ch.snapshotMode = false;
         configureTableModel(ch);
 
-        // Wird beim Einlesen ein Sensor aus der Kopfzeile erkannt, aktualisiert bereits dessen
-        // Callback über updateTableLayout() das Diagramm (siehe dort, ruft am Ende immer entweder
-        // renderSpectrumChart() oder updateChartData() auf) - der Flag verhindert in diesem Fall
-        // den sonst doppelten updateChartData()-Aufruf danach. Ohne erkannten Sensor (Callback
-        // feuert nie) bleibt der Aufruf am Ende die einzige Stelle, die das Diagramm überhaupt
-        // aktualisiert, und darf daher nicht ersatzlos entfallen.
+        // Wird ein Sensor aus der Kopfzeile erkannt, aktualisiert dessen Callback bereits über
+        // updateTableLayout() das Diagramm - der Flag verhindert dann den doppelten Aufruf unten.
         boolean[] sensorDetected = {false};
 
         try {
@@ -782,6 +687,9 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         }
     }
 
+    /** Öffnet den Sensor-Auswahldialog. Das Gerät streamt bereits seit dem Verbindungsaufbau
+     *  durchgehend (siehe {@link DeviceConnection#connect}), sodass {@code latestValue} für
+     *  Vorschau/Tara auch ohne laufende Aufzeichnung aktuell ist. */
     private void openSensorConfigDialog() {
         if (!connectionController.isConnected()) {
             JOptionPane.showMessageDialog(this,
@@ -793,10 +701,6 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         Sensor previousA = channelA.sensor;
         Sensor previousB = channelB.sensor;
 
-        // Kein manuelles Start/Stop der Live-Daten mehr nötig: Das Gerät streamt seit dem
-        // Verbindungsaufbau bereits durchgehend (siehe DeviceConnection#connect), unabhängig
-        // davon, ob gerade eine Aufzeichnung läuft - channelA/B.latestValue ist also immer
-        // aktuell, auch für diesen Dialog.
         SensorConfigDialog dialog = new SensorConfigDialog(this, channelA.sensor, channelB.sensor,
                 acquisitionEngine.getSampleRateHz(),
                 () -> channelA.latestValue, () -> channelB.latestValue,
@@ -834,12 +738,6 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     }
 
     private void openTerminal() {
-        // isDisplayable() statt nur null-Check: Terminal nutzt DISPOSE_ON_CLOSE - nach dem
-        // Schließen ist terminalWindow selbst nicht null, aber das native Fenster (samt seiner
-        // Listener-Registrierungen bei DeviceConnection, siehe Terminal#windowClosing) wurde
-        // bereits disposed. Ohne diese Prüfung würde ein erneutes setVisible(true) auf das alte,
-        // abgemeldete Objekt wirkungslos bleiben - das Terminal wirkt dann "eingefroren", da es
-        // weder Datenzeilen noch Statusänderungen mehr empfängt.
         if (terminalWindow == null || !terminalWindow.isDisplayable()) {
             terminalWindow = new Terminal();
         }
@@ -876,26 +774,14 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
             return;
         }
 
-        // Eine neue zeitbasierte Aufzeichnung nutzt wieder die "Zeit (s)"-Spalte, unabhängig
-        // davon, ob der Kanal zuvor per Momentaufnahme auf "Index" umgeschaltet war (siehe
-        // #prepareSnapshotHeader) - sonst bliebe die Kopfzeile fälschlich auf "Index" stehen,
-        // obwohl AcquisitionEngine#start() snapshotMode zurücksetzt und ab jetzt wieder echte
-        // Zeitwerte einträgt.
+        // Neue Aufzeichnung nutzt wieder die "Zeit (s)"-Spalte statt einer evtl. vorherigen
+        // Momentaufnahme-Spalte "Index".
         resetSnapshotHeaderIfNeeded(channelA);
         resetSnapshotHeaderIfNeeded(channelB);
 
-        // Ein noch aktives Zoom-/Auswahlfenster (Rubber-Band, Freihand oder Zoom-Buttons, siehe
-        // ChartViewport) bezieht sich auf den X-Wertebereich der *vorherigen* Aufzeichnung.
-        // #configureTableModel setzt den Zoom zwar bereits zurück, aber nur dann, wenn sich dabei
-        // auch die Spaltenüberschrift ändert (Index <-> Zeit, siehe #resetSnapshotHeaderIfNeeded
-        // oben) - bei zwei triggerbasierten Aufzeichnungen hintereinander (ohne Momentaufnahme
-        // dazwischen) bleibt die Spalte durchgehend "Zeit (s)", der Zoom also fälschlich stehen.
-        // Die neue Aufzeichnung beginnt aber wieder bei Zeit 0 (siehe
-        // AcquisitionEngine#measurementStartMillis) und landet damit außerhalb eines zuvor
-        // eingeengten Fensters - eintreffende Werte werden zwar ganz normal aufgezeichnet, tauchen
-        // im Diagramm aber nicht auf. Das wirkt wie "der Trigger reagiert nicht mehr", obwohl die
-        // Aufzeichnung tatsächlich läuft. Deshalb hier zusätzlich unbedingt zurückgesetzt, statt
-        // nur im Sonderfall eines Spaltenwechsels.
+        // Ein aktives Zoom-Fenster bezieht sich auf den X-Bereich der vorherigen Aufzeichnung;
+        // die neue beginnt wieder bei Zeit 0 und würde sonst außerhalb des alten Fensters landen
+        // (wirkt wie "Trigger reagiert nicht", obwohl die Aufzeichnung läuft).
         if (chartPanel != null) {
             chartPanel.resetZoom();
         }
@@ -903,9 +789,8 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         acquisitionEngine.start();
     }
 
-    /** Schaltet die Spaltenüberschrift zurück auf "Zeit (s)" (und leert dabei die Tabelle über
-     *  {@link #configureTableModel}), falls der Kanal aktuell im Momentaufnahme-Modus ist -
-     *  Gegenstück zu {@link #prepareSnapshotHeader}. */
+    /** Schaltet die Spalte zurück auf "Zeit (s)" (leert dabei die Tabelle), falls der Kanal im
+     *  Momentaufnahme-Modus ist - Gegenstück zu {@link #prepareSnapshotHeader}. */
     private void resetSnapshotHeaderIfNeeded(MeasurementChannel ch) {
         if (!ch.snapshotMode) return;
         ch.snapshotMode = false;
@@ -916,8 +801,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         acquisitionEngine.stop();
     }
 
-    /** {@inheritDoc} Reagiert auf Start/Stop der {@link AcquisitionEngine} - aktualisiert nur die
-     *  Statusanzeige, die eigentliche Aufnahmelogik liegt komplett dort. */
+    /** {@inheritDoc} */
     @Override
     public void onStatusChanged() {
         updateStatusLabel();
@@ -930,20 +814,16 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         lblTriggerStatus.setForeground(Theme.WARNING);
     }
 
-    /** {@inheritDoc} Im Gegensatz zu {@link #onDurationLimitReached()} kein regulär erreichtes
-     *  Limit, sondern ein Verbindungsabbruch (z. B. abgezogenes Kabel) - deshalb eigene,
-     *  unmissverständliche Meldung statt einer stillschweigend beendeten Aufzeichnung. */
+    /** {@inheritDoc} Anders als {@link #onDurationLimitReached()}: Verbindungsabbruch statt
+     *  regulär erreichtem Limit. */
     @Override
     public void onConnectionLostDuringRecording() {
         lblTriggerStatus.setText("Verbindung verloren - Aufnahme gestoppt");
         lblTriggerStatus.setForeground(Theme.DANGER);
     }
 
-    /** {@inheritDoc} Anders als {@link #onConnectionLostDuringRecording()} bleibt die serielle
-     *  Verbindung selbst bestehen - die Firmware konnte nur den Sensor auf einem Kanal wiederholt
-     *  nicht auslesen (z. B. abgezogener I2C-Sensor oder HX711-Timeout, siehe
-     *  {@code reportSensorError} in phylog_firmware.ino). Eigene Meldung inkl. Kanal und
-     *  Fehlerart, damit klar ist, welcher Sensor betroffen ist. */
+    /** {@inheritDoc} Die serielle Verbindung selbst bleibt bestehen - nur der Sensor auf
+     *  {@code channelId} konnte wiederholt nicht ausgelesen werden. */
     @Override
     public void onSensorErrorDuringRecording(char channelId, String errorTag) {
         lblTriggerStatus.setText("Sensorfehler Kanal " + channelId + " (" + errorTag + ") - Aufnahme gestoppt");
@@ -951,18 +831,15 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     }
 
     /** {@inheritDoc} Übernimmt für jeden Kanal mit Spektrum-Sensor das zuletzt empfangene
-     *  Spektrum als Momentaufnahme in dessen Tabelle - die live im Diagramm laufende Anzeige
-     *  liefert sonst nirgendwo Zeilen, die sich z. B. per CSV exportieren ließen (siehe
-     *  {@link #exportCsv}, der ausschließlich aus den Tabellen liest). */
+     *  Spektrum als Momentaufnahme-Zeilen in dessen Tabelle (für CSV-Export). */
     @Override
     public void onRecordingStopped() {
         importSpectrumIntoTable(channelA, lastSpectrumA, lastSpectrumRateA);
         importSpectrumIntoTable(channelB, lastSpectrumB, lastSpectrumRateB);
     }
 
-    /** Schreibt ein Spektrum als (Frequenz, dB)-Zeilen in die Tabelle des Kanals - ersetzt einen
-     *  eventuell vorher enthaltenen älteren Snapshot. Tut nichts, wenn der Kanal aktuell keinen
-     *  Spektrum-Sensor hat oder noch kein Spektrum empfangen wurde. */
+    /** Schreibt ein Spektrum als (Frequenz, dB)-Zeilen in die Tabelle des Kanals; tut nichts
+     *  ohne Spektrum-Sensor oder ohne empfangenes Spektrum. */
     private void importSpectrumIntoTable(MeasurementChannel ch, double[] magnitudesDb, int sampleRateHz) {
         if (!ch.producesSpectrum() || magnitudesDb == null) return;
 
@@ -972,12 +849,8 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         }
     }
 
-    /** {@inheritDoc} Speichert das neue Spektrum für den jeweiligen Kanal und zeichnet es direkt
-     *  ins {@link ChartPanel} - unabhängig von Tabelle/Zeitachse, siehe {@link #renderSpectrumChart()}.
-     *  Wird nur während einer laufenden Aufzeichnung aufgerufen ({@link AcquisitionEngine} filtert
-     *  das bereits vor der Weitergabe an den Listener), das Diagramm bleibt nach "Stopp" also auf
-     *  dem letzten während der Aufzeichnung empfangenen Spektrum stehen - analog zu den Tabellen
-     *  normaler Kanäle, die ebenfalls nur während der Aufzeichnung neue Zeilen bekommen. */
+    /** {@inheritDoc} Speichert das Spektrum je Kanal und zeichnet es direkt ins
+     *  {@link ChartPanel}. Wird nur während einer laufenden Aufzeichnung aufgerufen. */
     @Override
     public void onSpectrumFrame(char channelId, double[] magnitudesDb, int sampleRateHz) {
         if (channelId == 'A') {
@@ -990,11 +863,8 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         renderSpectrumChart();
     }
 
-    /** Zeichnet die zwischengespeicherten Spektren der Kanäle, die aktuell einen Spektrum-Sensor
-     *  haben, ins {@link ChartPanel} - als Haupt-Serie (Kanal A, oder Kanal B falls A keines hat)
-     *  bzw. als Extra-Serie, analog zur normalen Zwei-Kanal-Überlagerung. Tut nichts, wenn
-     *  inzwischen kein Kanal mehr einen Spektrum-Sensor hat (z. B. veraltetes, spät eintreffendes
-     *  Paket nach einem Sensorwechsel). */
+    /** Zeichnet die zwischengespeicherten Spektren der Kanäle mit aktivem Spektrum-Sensor -
+     *  als Haupt-Serie (A, oder B falls A keines hat) bzw. als Extra-Serie. */
     private void renderSpectrumChart() {
         if (chartPanel == null) return;
 
@@ -1012,7 +882,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         if (spectrumB && lastSpectrumB != null) {
             List<double[]> pointsB = toFrequencyPoints(lastSpectrumB, lastSpectrumRateB);
             if (mainSeries.isEmpty()) {
-                mainSeries = pointsB; // A liefert (noch) nichts - B übernimmt die Haupt-Serie
+                mainSeries = pointsB;
             } else {
                 extras.add(new ChartPanel.Series("Kanal B: Frequenzspektrum", Theme.POINT_B, pointsB));
             }
@@ -1022,9 +892,9 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         chartPanel.setExtraSeries(extras);
     }
 
-    /** Wandelt ein Spektrum (dB je Bin) in (Frequenz, dB)-Punkte um. Die Bin-Breite ergibt sich
-     *  aus Abtastrate und FFT-Größe - Letztere ist immer doppelt so groß wie die Anzahl der
-     *  (nutzbaren) Bins, siehe {@code captureAndSendSpectrum} in phylog_firmware.ino. */
+    /** Wandelt ein Spektrum (dB je Bin) in (Frequenz, dB)-Punkte um; die Bin-Breite ergibt sich
+     *  aus Abtastrate und FFT-Größe (doppelte Bin-Anzahl, siehe {@code captureAndSendSpectrum}
+     *  in phylog_firmware.ino). */
     private List<double[]> toFrequencyPoints(double[] magnitudesDb, int sampleRateHz) {
         int bins = magnitudesDb.length;
         int fftSize = bins * 2;
@@ -1036,22 +906,9 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         return points;
     }
 
-    /** Reagiert auf jeden Verbindungsauf-/-abbau (siehe {@link ConnectionController}) - aktualisiert
-     *  nicht nur die Statusanzeige ({@link #updateStatusLabel()}), sondern schickt bei einem neuen
-     *  Verbindungsaufbau auch die bereits gewählten Sensoren und die eingestellte Abtastrate erneut
-     *  an die Firmware.
-     *
-     * <p>Ohne das behielt die GUI nach einem Verbindungsabbruch (z. B. gezogenes USB-Kabel) die
-     * zuvor gewählten Sensoren einfach bei - {@link MeasurementChannel#sensor} ist reiner
-     * GUI-Zustand und übersteht einen Verbindungsverlust bewusst, siehe {@code hasSensor()} und
-     * {@link #updateActionAvailability}. "Start" blieb dadurch anklickbar, ohne dass man den
-     * Sensor nach dem Wiederverbinden erneut auswählen musste - praktisch, denn genau das war der
-     * Wunsch. Ein echtes Neuverbinden bedeutet für den ESP32 aber einen frischen Neustart der
-     * Firmware (siehe {@code setup()} in phylog_firmware.ino): Sie kennt danach keine der beiden
-     * Kanalzuweisungen mehr und sendet ohne ein erneutes {@code SET,<Kanal>,<Typ>} überhaupt keine
-     * Datenzeilen für diesen Kanal - die Aufzeichnung lief deshalb scheinbar ganz normal ("läuft"),
-     * ohne dass je wieder ein Messwert eintraf. Dasselbe gilt für die Abtastrate, siehe
-     * {@link AcquisitionEngine#pushSampleRateToFirmware()}.</p> */
+    /** Reagiert auf jeden Verbindungsauf-/-abbau: sendet bei neuem Aufbau die gewählten
+     *  Sensoren und die Abtastrate erneut an die Firmware, da diese nach einem Neustart des
+     *  ESP32 keine Kanalzuweisung mehr kennt (siehe {@code setup()} in phylog_firmware.ino). */
     private void onConnectionStatusChanged() {
         if (connectionController.isConnected()) {
             pushSensorSelectionToFirmware('A', channelA.sensor);
@@ -1071,11 +928,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         boolean measurementActive = acquisitionEngine.isRecording() || acquisitionEngine.isWaitingForTrigger();
 
         if (configSensorItem != null) {
-            // Ein Sensorwechsel während laufender Aufzeichnung bzw. während auf den Trigger
-            // gewartet wird ist witzlos (die Firmware bekäme mitten in der Aufnahme einen neuen
-            // Sensortyp untergeschoben, siehe #pushSensorSelectionToFirmware) und sollte deshalb
-            // gar nicht erst erreichbar sein, statt sich erst nach dem Öffnen des Dialogs oder
-            // gar erst nach einer damit erzeugten Fehlermessung zu rächen.
+            // Sensorwechsel während laufender Aufzeichnung/Trigger-Wartezeit wäre inkonsistent.
             configSensorItem.setEnabled(connected && !measurementActive);
             configSensorItem.setToolTipText(measurementActive
                     ? "Während einer laufenden Aufzeichnung nicht möglich - erst stoppen."
@@ -1107,14 +960,17 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         }
     }
 
+    /** Aktualisiert Enabled-Status und Tooltip von Start/Stop/Momentaufnahme/Leeren/Trigger
+     *  anhand von Verbindung, Sensorwahl und laufender Aufzeichnung. */
     private void updateActionAvailability(boolean connected) {
         if (btnStart == null || btnStop == null) return;
 
         TriggerDialog.Config triggerConfig = acquisitionEngine.getTriggerConfig();
         boolean hasAnySensor = channelA.hasSensor() || channelB.hasSensor();
         MeasurementChannel triggerChannel = channel(triggerConfig.channel);
-        // Ein Spektrum-Kanal sendet nie die für den Schwellenwert-Trigger nötigen Einzelwerte
-        // (D-Pakete) - der Trigger würde dort schlicht nie feuern.
+
+        // Ein Spektrum-Kanal sendet nie Einzelwerte (D-Pakete) - der Schwellenwert-Trigger würde
+        // dort nie feuern.
         boolean triggerChannelReady = !triggerConfig.thresholdMode
                 || (triggerChannel.hasSensor() && !triggerChannel.producesSpectrum());
         boolean alreadyRunning = acquisitionEngine.isRecording() || acquisitionEngine.isWaitingForTrigger();
@@ -1123,18 +979,9 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         btnStart.setEnabled(canStart);
         btnStart.setToolTipText(startButtonTooltip(connected, hasAnySensor, triggerChannelReady, alreadyRunning, triggerConfig));
 
-        boolean canStop = alreadyRunning;
-        btnStop.setEnabled(canStop);
-        btnStop.setToolTipText(canStop ? "Laufende Messung stoppen" : "Es läuft aktuell keine Messung.");
+        btnStop.setEnabled(alreadyRunning);
+        btnStop.setToolTipText(alreadyRunning ? "Laufende Messung stoppen" : "Es läuft aktuell keine Messung.");
 
-        // Eine Momentaufnahme braucht zwar selbst nur einen aktuellen Live-Wert, keinen Zeitbezug
-        // (siehe AcquisitionEngine#captureSnapshot) - sie teilt sich aber Tabelle und Spaltenkopf
-        // mit einer zeitbasierten Aufzeichnung. Der nötige Wechsel der Kopfzeile auf "Index" leert
-        // dabei die Tabelle (siehe #prepareSnapshotHeader), was während einer laufenden Aufzeichnung
-        // bzw. während auf den Trigger gewartet wird bereits vorhandene Messwerte zerstören würde -
-        // und AcquisitionEngine#ingestSample kennt snapshotMode nicht, würde also anschließend
-        // weiterhin zeitbasierte Zeilen unter der jetzt falschen "Index"-Überschrift anhängen.
-        // Deshalb hier zusätzlich zur Sensor-Prüfung von alreadyRunning abhängig.
         boolean hasSnapshotableSensor = (channelA.hasSensor() && !channelA.producesSpectrum())
                 || (channelB.hasSensor() && !channelB.producesSpectrum());
         boolean canSnapshot = connected && hasSnapshotableSensor && !alreadyRunning;
@@ -1145,9 +992,6 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
                 ? "Während einer laufenden Aufzeichnung nicht möglich (würde deren Daten löschen)."
                 : "Erst mit dem ESP32 verbinden und einen (nicht-spektralen) Sensor auswählen."));
 
-        // Beides ergibt im Frequenzspektrum-Modus keinen Sinn: die Tabelle bleibt dort ohnehin
-        // leer (siehe channelTitle()), und ein Trigger kann auf einem Spektrum-Kanal nicht
-        // feuern (siehe triggerChannelReady oben) - klar ausgegraut statt stillschweigend wirkungslos.
         boolean spectrumMode = channelA.producesSpectrum() || channelB.producesSpectrum();
 
         if (btnClear != null) {
@@ -1158,11 +1002,6 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         }
 
         if (btnTrigger != null) {
-            // Analog zu configSensorItem oben: die Trigger-Konfiguration während des Wartens auf
-            // genau diesen Trigger (oder während einer bereits laufenden Aufzeichnung) zu ändern,
-            // ist ebenso witzlos und potenziell inkonsistent (z. B. Kanalwechsel mitten im
-            // Warten, ohne dass die Flankenerkennung für den neuen Kanal zurückgesetzt wird) -
-            // deshalb ebenfalls ausgegraut statt nachträglich zu reparieren.
             boolean triggerEditable = !spectrumMode && !alreadyRunning;
             btnTrigger.setEnabled(triggerEditable);
             btnTrigger.setToolTipText(spectrumMode
@@ -1179,7 +1018,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
             return "Erst mit dem ESP32 verbinden.";
         }
         if (!hasAnySensor) {
-            return "Erst unter 'Sensor \u2192 Sensor konfigurieren...' mindestens einen Sensor auswählen.";
+            return "Erst unter 'Sensor → Sensor konfigurieren...' mindestens einen Sensor auswählen.";
         }
         if (!triggerChannelReady) {
             return "Für den gewählten Trigger-Kanal (" + triggerConfig.channel + ") ist kein Sensor konfiguriert.";
@@ -1191,14 +1030,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     }
 
     /** Übernimmt für jeden Kanal mit nicht-spektralem Sensor den aktuellen Live-Wert als
-     *  einzelne Tabellenzeile (Index statt Zeit, siehe {@link AcquisitionEngine#captureSnapshot()}).
-     *  Schaltet die Spaltenüberschrift dafür bei Bedarf zuerst auf "Index" um - vor dem
-     *  eigentlichen Einfügen, damit die neue Zeile dabei nicht gleich wieder mitgelöscht wird.
-     *  Bricht während einer laufenden Aufzeichnung bzw. während auf den Trigger gewartet wird
-     *  früh ab, statt Altdaten zu löschen (siehe {@link #prepareSnapshotHeader}) - eigentlich
-     *  bereits durch das Deaktivieren von {@link #btnSnapshot} in {@link #updateActionAvailability}
-     *  verhindert, hier zusätzlich als zweite Absicherung, falls der Aufruf je auf anderem Weg
-     *  (z. B. Tastenkürzel) erfolgt. */
+     *  Tabellenzeile (Index statt Zeit), siehe {@link AcquisitionEngine#captureSnapshot()}. */
     private void captureSnapshot() {
         if (acquisitionEngine.isRecording() || acquisitionEngine.isWaitingForTrigger()) return;
 
@@ -1210,10 +1042,8 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         lblTriggerStatus.setForeground(Theme.ACCENT);
     }
 
-    /** Schaltet die Spalte auf "Index" um, falls der Kanal das noch nicht ist - eine dabei
-     *  eventuell noch vorhandene, zeitbasierte Aufzeichnung wird dabei verworfen, damit Index und
-     *  Zeit nicht in derselben Spalte gemischt werden. Ist der Kanal bereits im Momentaufnahme-
-     *  Modus, passiert nichts, damit bereits aufgenommene Momentaufnahmen erhalten bleiben. */
+    /** Schaltet die Spalte auf "Index" um, falls der Kanal das noch nicht ist (verwirft dabei
+     *  eine evtl. laufende zeitbasierte Aufzeichnung). */
     private void prepareSnapshotHeader(MeasurementChannel ch) {
         if (!ch.hasSensor() || ch.producesSpectrum() || ch.snapshotMode) return;
         ch.snapshotMode = true;
@@ -1230,51 +1060,41 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         }
     }
 
+    /** Baut die Tabellenansicht (ein oder zwei Kanäle) neu auf und hält Y-Achsen-/Fit-Ziel-
+     *  Menüeinträge sowie Diagramm-Einheiten mit dem aktuellen Sensor-Zustand synchron. */
     private void updateTableLayout() {
         tableContainerPanel.removeAll();
 
         configureTableModel(channelA);
         configureTableModel(channelB);
 
-        // Veraltete Spektren verwerfen, sobald der jeweilige Kanal kein Spektrum-Sensor mehr ist -
-        // sonst würde ein späterer Wechsel zurück kurzzeitig eine Grafik von vorhin zeigen.
+        // Veraltete Spektren verwerfen, sobald der Kanal kein Spektrum-Sensor mehr ist.
         if (!channelA.producesSpectrum()) lastSpectrumA = null;
         if (!channelB.producesSpectrum()) lastSpectrumB = null;
 
-        // Zeit- und Frequenzachse haben einen grundverschiedenen Wertebereich - ein beim
-        // vorherigen Modus aktiver Zoom würde im neuen Modus u. U. schlicht nichts mehr zeigen.
+        // Zeit- und Frequenzachse haben grundverschiedene Wertebereiche - Zoom beim Wechsel zurücksetzen.
         boolean nowSpectrumMode = channelA.producesSpectrum() || channelB.producesSpectrum();
         if (nowSpectrumMode != spectrumModeActive) {
             spectrumModeActive = nowSpectrumMode;
             chartPanel.resetZoom();
         }
 
-        // Zwei unabhängige Y-Achsen ergeben nur mit zwei aktiven Sensoren Sinn. Bewusst nur bei
-        // einem tatsächlichen Wechsel (1 <-> 2 aktive Sensoren) automatisch umgeschaltet, nicht
-        // bei jedem Aufruf erneut erzwungen - sonst würde eine bewusste manuelle Wahl (z. B.
-        // "eine gemeinsame Achse" trotz zwei Sensoren) beim nächsten Öffnen des Sensor-Dialogs
-        // wieder verworfen, auch wenn sich gar nichts geändert hat.
+        // Nur beim tatsächlichen Übergang 1 <-> 2 aktive Sensoren automatisch umschalten, damit
+        // eine bewusste manuelle Wahl nicht bei jedem Aufruf verworfen wird.
         boolean bothActive = channelA.hasSensor() && channelB.hasSensor();
         if (bothActive && !previousBothActive) {
-            setDualYAxisMode(true); // zweiter Sensor gerade aktiv geworden - sinnvoller Vorschlag
+            setDualYAxisMode(true);
         } else if (!bothActive && dualYAxisMode) {
-            setDualYAxisMode(false); // einer wurde deaktiviert - zwei Achsen ergeben keinen Sinn mehr
+            setDualYAxisMode(false);
         }
         previousBothActive = bothActive;
 
-        // Muss bei jedem Layout-Update laufen, nicht nur beim 1<->2-Sensor-Übergang oben (der
-        // setDualYAxisMode() und darüber indirekt auch dies aufruft) - sonst behält das Diagramm
-        // z. B. beim Wechsel auf einen Spektrum-Sensor die vorherigen Achsentitel/-einheiten und
-        // die farbige Magnitude-Einfärbung (siehe #updateChartUnits) bei.
         updateChartUnits();
 
         yAxisDual.setEnabled(bothActive);
         yAxisDual.setToolTipText(bothActive ? null : "Nur verfügbar, wenn auf beiden Kanälen ein Sensor aktiv ist.");
 
-        // "Kanal B" bzw. "Beide Kanäle" als Fit-Ziel ergeben nur mit einem aktiven Sensor auf
-        // Kanal B Sinn - analog zu yAxisDual oben. War eine der beiden gerade ausgewählt und
-        // Kanal B fällt weg, wird bewusst auf "Kanal A" zurückgeschaltet, statt stillschweigend
-        // mit einem inzwischen leeren Datensatz weiterzufitten.
+        // "Kanal B"/"Beide Kanäle" als Fit-Ziel ergeben nur mit Sensor auf Kanal B Sinn.
         boolean hasBSensor = channelB.hasSensor();
         fitTargetB.setEnabled(hasBSensor);
         fitTargetBoth.setEnabled(hasBSensor);
@@ -1286,12 +1106,6 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
             chartPanel.setFitTarget(ChartPanel.FitTarget.A);
         }
 
-        // Nur die Tabelle(n) der Kanäle anzeigen, die tatsächlich einen Sensor haben - bisher
-        // wurde die Split-Ansicht schon gezeigt, sobald Kanal B einen Sensor hatte, unabhängig
-        // davon, ob Kanal A überhaupt aktiv war (Bug: bei nur Kanal B erschienen trotzdem beide
-        // Tabellen, die von A leer/mit "-- Kein Sensor --"). Ist gar kein Sensor aktiv, bleibt
-        // Kanal A als Platzhalter sichtbar (bisheriges Verhalten) - für diesen Fall verweigert
-        // {@link #startMeasurement} ohnehin das Starten.
         boolean hasA = channelA.hasSensor();
         boolean hasB = channelB.hasSensor();
 
@@ -1309,8 +1123,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         } else if (hasB) {
             tableContainerPanel.add(channelB.scrollPane, BorderLayout.CENTER);
         } else {
-            // Weder A noch B aktiv: Kanal A bleibt als Platzhalter sichtbar (bisheriges Verhalten
-            // ohne Sensorauswahl); ist nur A aktiv, ist es ohnehin die richtige Tabelle.
+            // Weder A noch B aktiv: Kanal A bleibt als Platzhalter sichtbar.
             if (!hasA) {
                 channelA.scrollPane.setBorder(Theme.titledPanelBorder(channelTitle('A', channelA)));
             }
@@ -1320,8 +1133,6 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         tableContainerPanel.revalidate();
         tableContainerPanel.repaint();
 
-        // Im Spektrum-Modus liefert die Tabelle keine Daten mehr (siehe updateChartData) - das
-        // Diagramm muss hier explizit mit dem zuletzt gecachten Frame angestoßen werden.
         if (nowSpectrumMode) {
             renderSpectrumChart();
         } else {
@@ -1329,19 +1140,15 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         }
     }
 
-    /** Titel für die Tabellen-Umrahmung eines Kanals - weist bei einem Spektrum-Sensor darauf
-     *  hin, dass die Anzeige während der Aufnahme im Diagramm läuft und die Tabelle erst nach
-     *  dem Stoppen das letzte Spektrum als Momentaufnahme erhält (siehe {@link #onRecordingStopped}). */
+    /** Titel für die Tabellen-Umrahmung eines Kanals; weist bei Spektrum-Sensoren darauf hin,
+     *  dass die Tabelle erst nach dem Stoppen das letzte Spektrum erhält. */
     private String channelTitle(char id, MeasurementChannel ch) {
         String base = "Sensor " + id + ": " + ch.sensor.getName();
         return ch.producesSpectrum() ? base + " - live im Diagramm, letztes Bild nach Stopp hier" : base;
     }
 
-    /** Setzt die Spaltenköpfe der Tabelle passend zum aktuellen Sensor. Löscht bestehende Zeilen
-     *  bewusst nur, wenn sich die Spaltenköpfe dadurch tatsächlich ändern - sonst würde ein
-     *  gerade erst nach {@link #onRecordingStopped} importiertes Spektrum bei jedem erneuten
-     *  Aufruf (z. B. weil im Sensor-Dialog nur der jeweils andere Kanal geändert wurde) sofort
-     *  wieder verworfen. */
+    /** Setzt die Spaltenköpfe passend zum aktuellen Sensor; leert die Tabelle und setzt den
+     *  Diagramm-Zoom nur zurück, wenn sich die Köpfe dabei tatsächlich ändern. */
     private void configureTableModel(MeasurementChannel ch) {
         List<Sensor.Quantity> quantities = ch.sensor.getQuantities();
         String yHeader = quantities.isEmpty() ? "Messwert" : quantities.getFirst().getColumnHeader();
@@ -1355,31 +1162,19 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
             ch.tableModel.setRowCount(0);
             ch.tableModel.setColumnIdentifiers(new Object[]{xHeader, yHeader});
 
-            // Ein noch aktives Zoom-/Auswahlfenster bezieht sich auf den X-Wertebereich der
-            // *vorherigen* Spalte (siehe ChartViewport - das Fenster übersteht bewusst neu
-            // eintreffende Messwerte, siehe Klassenkommentar dort). Wechselt die X-Spalte
-            // gerade zwischen "Index" (Momentaufnahme, kleine Ganzzahlen ab 0) und "Zeit (s)"
-            // (reguläre Aufzeichnung), liegt ein zuvor aktiver Zoom fast immer außerhalb des
-            // neuen Wertebereichs - eine danach gestartete bzw. per Trigger ausgelöste
-            // Aufzeichnung würde dann zwar ganz normal Zeilen in die Tabelle schreiben, im
-            // Diagramm aber mangels Überlappung mit dem alten Fenster einfach nicht auftauchen
-            // (wirkt wie "Trigger reagiert nicht", obwohl die Aufzeichnung tatsächlich läuft).
-            // Analog zum bereits vorhandenen Zoom-Reset beim Wechsel in/aus dem
-            // Frequenzspektrum-Modus (siehe #updateTableLayout) wird der Zoom deshalb auch hier
-            // zurückgesetzt.
             if (chartPanel != null) {
                 chartPanel.resetZoom();
             }
         }
     }
 
+    /** Setzt den Y-Achsen-Modus und hält die Menü-RadioButtons synchron. */
     private void setDualYAxisMode(boolean dualYAxisMode) {
         this.dualYAxisMode = dualYAxisMode;
         if (chartPanel != null) {
             chartPanel.setDualYAxisMode(dualYAxisMode);
         }
 
-        // Synchronisiere die Menü-RadioButtons, falls der Modus geändert wurde
         if (dualYAxisMode && yAxisDual != null) {
             yAxisDual.setSelected(true);
         } else if (!dualYAxisMode && yAxisShared != null) {
@@ -1389,6 +1184,8 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         updateChartUnits();
     }
 
+    /** Setzt Achsentitel, Einheiten und Legendenbeschriftung passend zum aktuellen Sensor-
+     *  Zustand (Zeitreihe vs. Frequenzspektrum, ein vs. zwei aktive Kanäle). */
     private void updateChartUnits() {
         if (chartPanel == null) return;
 
@@ -1410,15 +1207,10 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         boolean hasB = channelB.hasSensor();
 
         if (!hasA && hasB) {
-            // Nur Kanal B aktiv: dessen konkrete Messgröße wird direkt zum Achsentitel - der
-            // generische "Messwerte"-Titel (siehe unten) ist nur nötig, um Platz für zwei
-            // gleichzeitig dargestellte Größen zu lassen, deren jeweilige Bezeichnung sonst über
-            // die Legende läuft. Mit nur einer Größe ist eine Legende dafür redundant (siehe auch
-            // {@link ChartPanel#legendVisible()}) - die Bezeichnung gehört direkt an die Achse.
             List<Sensor.Quantity> quantitiesB = channelB.sensor.getQuantities();
-            String axisLabel = quantitiesB.isEmpty() ? "Messwert" : quantitiesB.get(0).getColumnHeader();
+            String axisLabel = quantitiesB.isEmpty() ? "Messwert" : quantitiesB.getFirst().getColumnHeader();
             chartPanel.setUnits("s", axisLabel);
-            chartPanel.setMainLabel(quantitiesB.isEmpty() ? "Kanal B" : "Kanal B: " + quantitiesB.get(0).getColumnHeader());
+            chartPanel.setMainLabel(quantitiesB.isEmpty() ? "Kanal B" : "Kanal B: " + quantitiesB.getFirst().getColumnHeader());
             return;
         }
 
@@ -1427,17 +1219,17 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
         String axisLabel = (hasB && !useSpecificAxisLabels)
                 ? "Messwerte"
-                : (quantitiesA.isEmpty() ? "Messwert" : quantitiesA.get(0).getColumnHeader());
+                : (quantitiesA.isEmpty() ? "Messwert" : quantitiesA.getFirst().getColumnHeader());
         chartPanel.setUnits("s", axisLabel);
 
-        String labelA = quantitiesA.isEmpty() ? "Kanal A" : "Kanal A: " + quantitiesA.get(0).getColumnHeader();
+        String labelA = quantitiesA.isEmpty() ? "Kanal A" : "Kanal A: " + quantitiesA.getFirst().getColumnHeader();
         chartPanel.setMainLabel(labelA);
 
         if (hasB) {
             List<Sensor.Quantity> quantitiesB = channelB.sensor.getQuantities();
             String secondaryLabel = quantitiesB.isEmpty()
                     ? channelB.sensor.getName()
-                    : quantitiesB.get(0).getColumnHeader();
+                    : quantitiesB.getFirst().getColumnHeader();
             chartPanel.setSecondaryUnits(secondaryLabel);
         }
     }
@@ -1451,17 +1243,14 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         };
     }
 
+    /** Überträgt die Tabellendaten (Zeitreihen-Modus) ins {@link ChartPanel}; im Spektrum-Modus
+     *  liefert stattdessen {@link #onSpectrumFrame} die Anzeige. Fällt A aus, übernimmt Kanal B
+     *  die Hauptgröße, damit Zoom/Fit nicht mangels Daten in A wirkungslos bleiben. */
     private void updateChartData() {
         if (chartPanel == null) return;
-        // Im Spektrum-Modus kommt die Anzeige direkt aus onSpectrumFrame/renderSpectrumChart,
-        // nicht aus der (dort ohnehin leer bleibenden) Tabelle - siehe channelTitle().
+
         if (channelA.producesSpectrum() || channelB.producesSpectrum()) return;
 
-        // Fällt A aus (kein Sensor), übernimmt Kanal B die Hauptgröße (analog zu
-        // #updateChartUnits) - sonst wären Zoom/Freihand-Auswahl und der Standard-Fit (beide
-        // exklusiv an die Hauptgröße/ChartPanel#originalData gebunden, siehe ChartViewport bzw.
-        // ChartPanel#fitTarget) mangels Daten in Kanal A wirkungslos, obwohl der einzig aktive
-        // Sensor (Kanal B) durchaus Messwerte liefert.
         boolean onlyBActive = !channelA.hasSensor() && channelB.hasSensor();
         MeasurementChannel mainChannel = onlyBActive ? channelB : channelA;
         chartPanel.setData(extractDataFromTable(mainChannel.tableModel, 1));
@@ -1469,7 +1258,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         List<ChartPanel.Series> extras = new ArrayList<>();
         if (!onlyBActive && channelB.hasSensor()) {
             List<Sensor.Quantity> quantitiesB = channelB.sensor.getQuantities();
-            String labelB = "Kanal B: " + (quantitiesB.isEmpty() ? channelB.sensor.getName() : quantitiesB.get(0).getColumnHeader());
+            String labelB = "Kanal B: " + (quantitiesB.isEmpty() ? channelB.sensor.getName() : quantitiesB.getFirst().getColumnHeader());
             extras.add(new ChartPanel.Series(labelB, Theme.POINT_B, extractDataFromTable(channelB.tableModel, 1)));
         }
         chartPanel.setExtraSeries(extras);
@@ -1477,6 +1266,8 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         chartPanel.repaint();
     }
 
+    /** Exportiert die Tabellendaten als CSV; bei aktiven Daten auf beiden Kanälen werden zwei
+     *  Dateien mit Kanal-Suffix geschrieben. */
     private void exportCsv() {
         boolean hasDataA = channelA.tableModel.getRowCount() > 0;
         boolean hasDataB = channelB.tableModel.getRowCount() > 0;
@@ -1516,6 +1307,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         }
     }
 
+    /** Exportiert das aktuell gezeichnete Diagramm als PNG. */
     private void exportPng() {
         if (chartPanel.getWidth() <= 0 || chartPanel.getHeight() <= 0) {
             JOptionPane.showMessageDialog(this, "Diagramm ist noch nicht bereit.", "Hinweis", JOptionPane.WARNING_MESSAGE);
@@ -1541,6 +1333,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         }
     }
 
+    /** Leert beide Kanaltabellen und setzt einen evtl. aktiven Momentaufnahme-Modus zurück. */
     public void clearData() {
         channelA.tableModel.setRowCount(0);
         channelB.tableModel.setRowCount(0);
@@ -1550,6 +1343,8 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         configureTableModel(channelB);
     }
 
+    /** Liest Spalte 0 (X) und {@code valueColumnIndex} (Y) einer Tabelle als (x, y)-Paare aus;
+     *  überspringt nicht-numerische Zellen. */
     private List<double[]> extractDataFromTable(DefaultTableModel model, int valueColumnIndex) {
         List<double[]> data = new ArrayList<>();
         if (valueColumnIndex <= 0 || valueColumnIndex >= model.getColumnCount()) {

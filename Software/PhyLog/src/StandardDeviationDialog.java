@@ -1,8 +1,6 @@
 import javax.swing.*;
 
-/**
- * Dialog zur Konfiguration der Messunsicherheit (Standardabweichung/Sigma).
- */
+/** Dialog zur Konfiguration der Messunsicherheit (Standardabweichung/Sigma). */
 public class StandardDeviationDialog extends FormDialog {
 
     private final JRadioButton rbConstant;
@@ -16,20 +14,11 @@ public class StandardDeviationDialog extends FormDialog {
     private GoodnessOfFit.SigmaMode sigmaMode;
     private int localSigmaNeighbors;
 
-    /**
-     * Erstellt den Dialog zur Einstellung der Standardabweichung.
-     *
-     * @param parent           Das übergeordnete Fenster.
-     * @param currentVal       Aktuell geltender konstanter Wert.
-     * @param currentMode      Aktuell geltender {@link GoodnessOfFit.SigmaMode}.
-     * @param currentNeighbors Aktuelle Anzahl an Nachbarn für den lokalen Modus.
-     */
     public StandardDeviationDialog(JFrame parent, double currentVal, GoodnessOfFit.SigmaMode currentMode, int currentNeighbors) {
         super(parent, "Standardabweichung einstellen");
 
         ButtonGroup group = new ButtonGroup();
 
-        // --- Konstant ---
         rbConstant = new JRadioButton("Konstant (manueller Wert)");
         group.add(rbConstant);
         addFullWidthRow(rbConstant);
@@ -37,8 +26,7 @@ public class StandardDeviationDialog extends FormDialog {
         tfValue = new JTextField(String.valueOf(currentVal));
         addRow("     Wert (s):", tfValue);
 
-        // --- Automatisch, Gauß-gewichtet ---
-        rbAutoGaussian = new JRadioButton("Automatisch \u2013 gewichtet (Gau\u00df-Kernel)");
+        rbAutoGaussian = new JRadioButton("Automatisch – gewichtet (Gauß-Kernel)");
         group.add(rbAutoGaussian);
         addFullWidthRow(rbAutoGaussian);
         addFullWidthRow(hintLabel("Wie 'lokal', aber mit weichem statt hartem Übergang: nahe Punkte gehen "
@@ -46,8 +34,7 @@ public class StandardDeviationDialog extends FormDialog {
                 + "verläuft die Fehlerbreite glatt statt stufig, auch bei ungleichmäßig verteilten "
                 + "Messpunkten.", 380));
 
-        // --- Automatisch, lokal (hartes Fenster) ---
-        rbAutoLocal = new JRadioButton("Automatisch \u2013 lokal, hartes Fenster (nächste Nachbarn)");
+        rbAutoLocal = new JRadioButton("Automatisch – lokal, hartes Fenster (nächste Nachbarn)");
         group.add(rbAutoLocal);
         addFullWidthRow(rbAutoLocal);
         addFullWidthRow(hintLabel("Ein eigener Wert je Punkt, aus dessen nächsten Nachbarn geschätzt - passt "
@@ -61,7 +48,6 @@ public class StandardDeviationDialog extends FormDialog {
         lblFallback.setForeground(Theme.ACCENT);
         addFullWidthRow(lblFallback);
 
-        // --- Vorbelegung ---
         sigmaMode = (currentMode != null) ? currentMode : GoodnessOfFit.SigmaMode.CONSTANT;
         switch (sigmaMode) {
             case RESIDUAL_LOCAL_GAUSSIAN -> rbAutoGaussian.setSelected(true);
@@ -70,31 +56,24 @@ public class StandardDeviationDialog extends FormDialog {
         }
         updateFieldStates();
 
-        rbConstant.addActionListener(e -> updateFieldStates());
-        rbAutoGaussian.addActionListener(e -> updateFieldStates());
-        rbAutoLocal.addActionListener(e -> updateFieldStates());
+        rbConstant.addActionListener(_ -> updateFieldStates());
+        rbAutoGaussian.addActionListener(_ -> updateFieldStates());
+        rbAutoLocal.addActionListener(_ -> updateFieldStates());
 
-        // --- Buttons ---
-        JButton btnOk = new JButton("\u00dcbernehmen");
+        JButton btnOk = new JButton("Übernehmen");
         JButton btnCancel = new JButton("Abbrechen");
 
-        btnOk.addActionListener(e -> tryApplyAndClose());
-        btnCancel.addActionListener(e -> dispose());
+        btnOk.addActionListener(_ -> tryApplyAndClose());
+        btnCancel.addActionListener(_ -> dispose());
 
         finishLayout(btnCancel, btnOk);
     }
 
-    /**
-     * Aktiviert oder deaktiviert Eingabefelder passend zum gewählten Modus.
-     */
     private void updateFieldStates() {
         tfValue.setEnabled(rbConstant.isSelected());
         spNeighbors.setEnabled(rbAutoLocal.isSelected() || rbAutoGaussian.isSelected());
     }
 
-    /**
-     * Validiert die Eingaben und schließt den Dialog bei Erfolg.
-     */
     private void tryApplyAndClose() {
         double val;
         try {
@@ -118,38 +97,18 @@ public class StandardDeviationDialog extends FormDialog {
         dispose();
     }
 
-    /**
-     * Gibt zurück, ob die Eingaben bestätigt wurden.
-     *
-     * @return {@code true}, wenn mit "Übernehmen" bestätigt wurde.
-     */
     public boolean isConfirmed() {
         return confirmed;
     }
 
-    /**
-     * Gibt den eingestellten konstanten Sigma-Wert bzw. die Rückfallebene zurück.
-     *
-     * @return Der Sigma-Wert.
-     */
     public double getStandardDeviation() {
         return standardDeviation;
     }
 
-    /**
-     * Gibt den gewählten Sigma-Berechnungsmodus zurück.
-     *
-     * @return Der {@link GoodnessOfFit.SigmaMode}.
-     */
     public GoodnessOfFit.SigmaMode getSigmaMode() {
         return sigmaMode;
     }
 
-    /**
-     * Gibt die Anzahl der Nachbarn für den lokalen Modus zurück.
-     *
-     * @return Die Anzahl der Nachbarn.
-     */
     public int getLocalSigmaNeighbors() {
         return localSigmaNeighbors;
     }

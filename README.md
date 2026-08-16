@@ -3,8 +3,7 @@
 
 # PhyLog
 
-  Digitale Messwerterfassung für den Physik- und Chemieunterricht –
-  ein ESP32, ein paar Sensoren, unter 100 € pro Messplatz.
+Digitale Messwerterfassung für den Physikunterricht, ein ESP32, die wichtigsten größen per Sensoren, unter 50 € pro Messplatz.
 
 </div>
 

@@ -5,9 +5,7 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.function.Consumer;
 
-/**
- * Serielles Terminal-Fenster zur Kommunikation mit der Hardware.
- */
+/** Serielles Terminal-Fenster zur Kommunikation mit der Hardware. */
 public class Terminal extends JFrame {
 
     private JComboBox<String> comboPort;
@@ -18,17 +16,9 @@ public class Terminal extends JFrame {
 
     private final Consumer<String> lineListener = this::appendLog;
 
-    /** Bündelt Verbindungsauf-/-abbau, Portliste, Befehlsversand sowie den Verbindungsstatus-
-     *  Listener an einer Stelle (siehe {@link GUI}, das dieselbe Klasse nutzt) - Terminal griff
-     *  zuvor an gut einem Dutzend Stellen direkt auf {@code DeviceConnection.getInstance()} zu.
-     *  Registriert {@link #onConnectionStatusChanged} bereits im Konstruktor bei
-     *  {@link DeviceConnection} (über {@link ConnectionController}); {@link #dispose()} muss
-     *  beim Schließen des Fensters aufgerufen werden, siehe {@code WindowListener} unten. */
+    /** Muss beim Schließen des Fensters über {@link #dispose()} wieder abgemeldet werden. */
     private final ConnectionController connectionController = new ConnectionController(this::onConnectionStatusChanged);
 
-    /**
-     * Erstellt das Terminal-Fenster und initialisiert die UI.
-     */
     public Terminal() {
         super("Terminal");
         setSize(560, 440);
@@ -58,27 +48,17 @@ public class Terminal extends JFrame {
         });
     }
 
-    /** Wird bei jeder Verbindungsstatusänderung aufgerufen (siehe {@link #connectionController}) -
-     *  egal ob hier oder über {@link GUI} ausgelöst. Aktualisiert Button-Beschriftung UND welcher
-     *  Port markiert ist - sonst bliebe nach einer über GUI hergestellten Verbindung der hier
-     *  zuvor (u. U. falsch) ausgewählte Port stehen. */
+    /** Wird bei jeder Verbindungsstatusänderung aufgerufen, egal ob hier oder über {@link GUI}
+     *  ausgelöst - aktualisiert Button-Beschriftung und markierten Port. */
     private void onConnectionStatusChanged() {
         updateConnectButtonLabel();
         selectActivePortIfConnected(comboPort.getSelectedItem());
     }
 
-    /**
-     * Setzt die Beschriftung von {@link #btnConnect} passend zum tatsächlichen Verbindungsstatus.
-     */
     private void updateConnectButtonLabel() {
         btnConnect.setText(connectionController.isConnected() ? "Trennen" : "Verbinden");
     }
 
-    /**
-     * Baut das Panel für Portauswahl, Baudrate und Verbindungsaufbau auf.
-     *
-     * @return Das Steuerungspanel.
-     */
     private JPanel buildConnectionPanel() {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         panel.setBorder(new EmptyBorder(8, 8, 0, 8));
@@ -88,12 +68,12 @@ public class Terminal extends JFrame {
         comboPort.setPreferredSize(new Dimension(160, 26));
 
         JButton btnRefresh = new JButton("Aktualisieren");
-        btnRefresh.addActionListener(e -> refreshPorts());
+        btnRefresh.addActionListener(_ -> refreshPorts());
 
         txtBaud = new JTextField("460800", 7);
 
         btnConnect = new JButton("Verbinden");
-        btnConnect.addActionListener(e -> toggleConnection());
+        btnConnect.addActionListener(_ -> toggleConnection());
 
         panel.add(new JLabel("Port:"));
         panel.add(comboPort);
@@ -104,11 +84,6 @@ public class Terminal extends JFrame {
         return panel;
     }
 
-    /**
-     * Baut den Scrollbereich für die Log-Ausgabe auf.
-     *
-     * @return Die ScrollPane mit Textbereich.
-     */
     private JScrollPane buildLogPanel() {
         txtLog = new JTextArea();
         txtLog.setEditable(false);
@@ -121,11 +96,6 @@ public class Terminal extends JFrame {
         return scrollPane;
     }
 
-    /**
-     * Baut das Panel für Befehlseingabe und Quick-Buttons auf.
-     *
-     * @return Das Eingabepanel.
-     */
     private JPanel buildCommandPanel() {
         JPanel outer = new JPanel(new BorderLayout(8, 8));
         outer.setBorder(new EmptyBorder(0, 8, 8, 8));
@@ -141,10 +111,10 @@ public class Terminal extends JFrame {
         inputRow.setBackground(Theme.BG);
 
         txtCommand = new JTextField();
-        txtCommand.addActionListener(e -> sendCurrentCommand());
+        txtCommand.addActionListener(_ -> sendCurrentCommand());
 
         JButton btnSend = new JButton("Senden");
-        btnSend.addActionListener(e -> sendCurrentCommand());
+        btnSend.addActionListener(_ -> sendCurrentCommand());
 
         inputRow.add(txtCommand, BorderLayout.CENTER);
         inputRow.add(btnSend, BorderLayout.EAST);
@@ -154,24 +124,14 @@ public class Terminal extends JFrame {
         return outer;
     }
 
-    /**
-     * Erstellt einen Button zum Senden eines vordefinierten Befehls.
-     *
-     * @param command Der zu sendende Befehl textuell.
-     * @return Der fertig konfigurierte Button.
-     */
     private JButton quickButton(String command) {
         JButton button = new JButton(command);
-        button.addActionListener(e -> sendLine(command));
+        button.addActionListener(_ -> sendLine(command));
         return button;
     }
 
-    /**
-     * Aktualisiert die Liste der verfügbaren seriellen Ports. Wählt danach den tatsächlich
-     * verbundenen Port aus, falls eine Verbindung besteht (siehe {@link #selectActivePortIfConnected}) -
-     * sonst bliebe z. B. nach einer über {@link GUI} hergestellten Verbindung hier weiterhin der
-     * erste/zuletzt manuell gewählte Listeneintrag markiert, unabhängig vom tatsächlich aktiven Port.
-     */
+    /** Aktualisiert die Liste der verfügbaren seriellen Ports und markiert danach den
+     *  tatsächlich verbundenen Port, falls eine Verbindung besteht. */
     private void refreshPorts() {
         Object previouslySelected = comboPort.getSelectedItem();
         comboPort.removeAllItems();
@@ -181,10 +141,6 @@ public class Terminal extends JFrame {
         selectActivePortIfConnected(previouslySelected);
     }
 
-    /** Wählt im Port-Auswahlfeld den tatsächlich verbundenen Port aus, falls eine Verbindung
-     *  besteht (z. B. über {@link GUI} hergestellt, bevor dieses Fenster geöffnet oder neu
-     *  aufgebaut wurde) - sonst bleibt {@code previouslySelected} erhalten, sofern es noch in der
-     *  aktualisierten Liste vorkommt. */
     private void selectActivePortIfConnected(Object previouslySelected) {
         String activePort = connectionController.getActivePortName();
         if (activePort != null) {
@@ -201,10 +157,7 @@ public class Terminal extends JFrame {
         }
     }
 
-    /**
-     * Öffnet oder schließt die serielle Verbindung je nach Zustand. Läuft im Hintergrund (siehe
-     * {@link #connectBlocking}) statt direkt im Swing-Event-Dispatch-Thread.
-     */
+    /** Öffnet oder schließt die Verbindung je nach Zustand, im Hintergrund-Thread. */
     private void toggleConnection() {
         btnConnect.setEnabled(false);
         boolean wasConnected = connectionController.isConnected();
@@ -222,31 +175,18 @@ public class Terminal extends JFrame {
             @Override
             protected void done() {
                 btnConnect.setEnabled(true);
-                // updateConnectButtonLabel() läuft bereits über den im Konstruktor registrierten
-                // connectionController-Listener, ausgelöst direkt aus DeviceConnection#connect/
-                // #disconnect - kein weiterer Aufruf hier nötig.
             }
         }.execute();
     }
 
-    /**
-     * Stellt die Verbindung zum ausgewählten Port her. Läuft im Hintergrund-Thread von
-     * {@link #toggleConnection} - {@code openPort()} und das anschließende Senden von "START"
-     * (siehe {@link DeviceConnection#connect}) können, besonders bei einem frisch verbundenen
-     * Bluetooth-SPP-Port, mehrere Sekunden dauern; direkt im Event-Dispatch-Thread ausgeführt
-     * würde das die komplette Oberfläche für diese Zeit einfrieren. {@link #appendLog} springt
-     * selbst auf den Event-Dispatch-Thread um, der Aufruf hier aus dem Hintergrund-Thread ist
-     * also unproblematisch.
-     */
+    /** Stellt die Verbindung zum ausgewählten Port her; läuft im Hintergrund-Thread von
+     *  {@link #toggleConnection}, da der Verbindungsaufbau mehrere Sekunden dauern kann. */
     private void connectBlocking() {
         String portName = (String) comboPort.getSelectedItem();
         if (portName == null) {
             appendLog("# Kein Port ausgewählt.");
             return;
         }
-        // Anzeigetext kann eine angehängte Beschreibung enthalten (siehe
-        // DeviceConnection#listPortNames, z. B. "COM7 (PhyLog Bluetooth)") - connect() erwartet
-        // aber den reinen Systemnamen.
         portName = DeviceConnection.stripDescription(portName);
 
         int baud;
@@ -262,23 +202,13 @@ public class Terminal extends JFrame {
         } else {
             appendLog("# Verbindung zu " + portName + " fehlgeschlagen.");
         }
-        // Kein manuelles btnConnect.setText mehr hier: DeviceConnection#connect benachrichtigt
-        // bereits connectionController (siehe Konstruktor), der die Beschriftung aktualisiert.
     }
 
-    /**
-     * Trennt die serielle Verbindung. Läuft im Hintergrund-Thread von {@link #toggleConnection},
-     * siehe dortigen Kommentar sowie {@link #connectBlocking}.
-     */
     private void disconnectBlocking() {
         connectionController.disconnect();
         appendLog("# Verbindung getrennt.");
-        // Kein manuelles btnConnect.setText mehr hier, siehe #connectBlocking().
     }
 
-    /**
-     * Liest den Text aus dem Eingabefeld und sendet ihn.
-     */
     private void sendCurrentCommand() {
         String command = txtCommand.getText();
         if (!command.isEmpty()) {
@@ -287,11 +217,6 @@ public class Terminal extends JFrame {
         }
     }
 
-    /**
-     * Sendet eine Befehlszeile an das Gerät und gibt sie im Log aus.
-     *
-     * @param command Der zu sendende Befehl.
-     */
     private void sendLine(String command) {
         if (!connectionController.isConnected()) {
             appendLog("# Nicht verbunden - zuerst einen Port auswählen und 'Verbinden' klicken.");
@@ -301,14 +226,8 @@ public class Terminal extends JFrame {
         appendLog("> " + command);
     }
 
-    /**
-     * Fügt eine Zeile zum Text-Log hinzu und scrollt automatisch nach unten. Über
-     * {@link SwingUtilities#invokeLater} statt direktem Zugriff, damit dieser Aufruf auch aus
-     * einem Hintergrund-Thread heraus sicher ist - siehe {@link #connectBlocking}/
-     * {@link #disconnectBlocking}, die inzwischen nicht mehr im Event-Dispatch-Thread laufen.
-     *
-     * @param text Der auszugebende Text.
-     */
+    /** Fügt eine Zeile zum Log hinzu; über {@link SwingUtilities#invokeLater}, da dieser Aufruf
+     *  auch aus einem Hintergrund-Thread heraus erfolgen kann. */
     private void appendLog(String text) {
         SwingUtilities.invokeLater(() -> {
             txtLog.append(text.endsWith("\n") ? text : text + "\n");

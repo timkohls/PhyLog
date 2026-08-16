@@ -6,10 +6,7 @@ import java.util.Deque;
 
 /**
  * Bündelt alles, was pro Messkanal (A oder B) getrennt gehalten werden muss: Tabelle, aktiver
- * Sensor, letzter Live-Wert, Tara-Offset sowie den kurzen Ringpuffer für den Trigger-Vorlauf.
- * Ersetzt die früher in {@link GUI} parallel geführten *A/*B-Feld- und Methodenpaare durch je
- * eine gemeinsame, kanal-parametrisierte Stelle - genutzt sowohl von {@link GUI} (Tabellen,
- * Sensorauswahl) als auch von {@link AcquisitionEngine} (Trigger- und Aufzeichnungslogik).
+ * Sensor, letzter Live-Wert, Tara-Offset sowie der Ringpuffer für den Trigger-Vorlauf.
  */
 public class MeasurementChannel {
 
@@ -22,18 +19,14 @@ public class MeasurementChannel {
     public volatile Double latestValue = null;
     public double tareOffset = 0.0;
 
-    /** Rollierender Puffer der letzten Samples (Millis, Wert) für den Trigger-Vorlauf - unabhängig
-     *  davon, ob dieser Kanal selbst der Trigger-Kanal ist, da im Trigger-Moment beide Kanäle mit
-     *  Vorlauf befüllt werden (siehe {@link AcquisitionEngine}). */
+    /** Rollierender Puffer der letzten Samples (Millis, Wert) für den Trigger-Vorlauf. */
     public final Deque<double[]> preTriggerBuffer = new ArrayDeque<>();
     /** Vorheriger Wert des Trigger-Kanals, um eine Schwellenwert-Überschreitung als
      *  Vorzeichenwechsel zu erkennen. */
     public Double lastValueForEdge = null;
 
     /** {@code true}, solange die erste Tabellenspalte den fortlaufenden Index einzelner
-     *  Momentaufnahmen enthält (siehe {@link AcquisitionEngine#captureSnapshot()}) statt der
-     *  vergangenen Zeit einer laufenden Aufzeichnung - steuert nur die Spaltenüberschrift in
-     *  {@link GUI}, wird beim Sensorwechsel bzw. Leeren der Tabelle zurückgesetzt. */
+     *  Momentaufnahmen enthält statt der vergangenen Zeit einer laufenden Aufzeichnung. */
     public boolean snapshotMode = false;
 
     public MeasurementChannel(char id) {

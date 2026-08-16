@@ -1,19 +1,15 @@
 import javax.swing.*;
 
-/**
- * Dialog zur Konfiguration von Mess-Triggern und Messdauer.
- */
+/** Dialog zur Konfiguration von Mess-Triggern und Messdauer. */
 public class TriggerDialog extends FormDialog {
 
-    /**
-     * Datenhaltung für Trigger-Konfigurationseinstellungen.
-     */
+    /** Trigger-Konfigurationseinstellungen. */
     public static final class Config {
         /** Messkanal ('A' oder 'B'). */
         public char channel = 'A';
-        /** Modus: {@code true} für Schwellenwert, {@code false} für manuell. */
+        /** {@code true} für Schwellenwert, {@code false} für manuell. */
         public boolean thresholdMode = false;
-        /** Flanke: {@code true} für steigend, {@code false} für fallend. */
+        /** {@code true} für steigende, {@code false} für fallende Flanke. */
         public boolean risingEdge = true;
         /** Schwellenwert in Volt. */
         public double threshold = 2.5;
@@ -33,12 +29,6 @@ public class TriggerDialog extends FormDialog {
 
     private boolean applied = false;
 
-    /**
-     * Erstellt den Trigger-Dialog.
-     *
-     * @param parent  Das übergeordnete Fenster.
-     * @param current Aktuelle Konfiguration als Startwert.
-     */
     public TriggerDialog(JFrame parent, Config current) {
         super(parent, "Trigger konfigurieren");
 
@@ -50,7 +40,7 @@ public class TriggerDialog extends FormDialog {
         cbChannel.setSelectedIndex(current.channel == 'B' ? 1 : 0);
         addRow("Kanal:", cbChannel);
 
-        cbEdge = new JComboBox<>(new String[]{"Steigend (\u25B2)", "Fallend (\u25BC)"});
+        cbEdge = new JComboBox<>(new String[]{"Steigend (▲)", "Fallend (▼)"});
         cbEdge.setSelectedIndex(current.risingEdge ? 0 : 1);
         addRow("Flanke:", cbEdge);
 
@@ -70,15 +60,15 @@ public class TriggerDialog extends FormDialog {
         spMaxDuration.setEnabled(cbLimitDuration.isSelected());
         addRow(cbLimitDuration, spMaxDuration);
 
-        cbLimitDuration.addActionListener(e -> spMaxDuration.setEnabled(cbLimitDuration.isSelected()));
-        cbTriggerMode.addActionListener(e -> updateFieldStates());
+        cbLimitDuration.addActionListener(_ -> spMaxDuration.setEnabled(cbLimitDuration.isSelected()));
+        cbTriggerMode.addActionListener(_ -> updateFieldStates());
         updateFieldStates();
 
         JButton btnCancel = new JButton("Abbrechen");
-        JButton btnApply = new JButton("\u00dcbernehmen");
+        JButton btnApply = new JButton("Übernehmen");
 
-        btnCancel.addActionListener(e -> dispose());
-        btnApply.addActionListener(e -> {
+        btnCancel.addActionListener(_ -> dispose());
+        btnApply.addActionListener(_ -> {
             applied = true;
             dispose();
         });
@@ -86,9 +76,6 @@ public class TriggerDialog extends FormDialog {
         finishLayout(btnCancel, btnApply);
     }
 
-    /**
-     * Aktiviert oder deaktiviert Eingabefelder basierend auf dem gewählten Trigger-Modus.
-     */
     private void updateFieldStates() {
         boolean isThreshold = cbTriggerMode.getSelectedIndex() == 1;
         cbChannel.setEnabled(isThreshold);
@@ -97,20 +84,10 @@ public class TriggerDialog extends FormDialog {
         spPreTrigger.setEnabled(isThreshold);
     }
 
-    /**
-     * Gibt zurück, ob die Konfiguration übernommen wurde.
-     *
-     * @return {@code true}, wenn der Dialog mit "Übernehmen" bestätigt wurde.
-     */
     public boolean isApplied() {
         return applied;
     }
 
-    /**
-     * Liest die im Dialog eingestellten Werte aus.
-     *
-     * @return Die erstelle {@link Config}.
-     */
     public Config getConfig() {
         Config cfg = new Config();
         cfg.channel = (cbChannel.getSelectedIndex() == 1) ? 'B' : 'A';

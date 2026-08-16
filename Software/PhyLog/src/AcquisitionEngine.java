@@ -1,53 +1,32 @@
 import java.util.List;
 
 /**
- * Nimmt vom {@link DeviceConnection} empfangene Datenzeilen entgegen, dekodiert sie über den
- * jeweils aktiven {@link Sensor} und schreibt die Messwerte - abhängig von Trigger-Konfiguration
- * und Aufzeichnungszustand - in die Tabellen der {@link MeasurementChannel}s. Kennt keine
- * UI-Elemente außer der Tabelle selbst; Statusänderungen (Start/Stopp, Dauerlimit erreicht)
- * werden über {@link Listener} an {@link GUI} gemeldet.
- *
- * <p>War früher Teil von {@link GUI}; wurde herausgelöst, damit das Hauptfenster sich auf aus
- * UI-Aufbau und -Verdrahtung beschränken kann, während Aufnahme- und Trigger-Logik unabhängig
- * davon nachvollziehbar bleiben.</p>
+ * Verarbeitet die vom ESP32 über {@link DeviceConnection} empfangenen Zeilen (Messwerte,
+ * Spektren, Sensorfehler) für beide Kanäle und steuert Aufzeichnung, Trigger und
+ * Vor-Trigger-Puffer. Kennt keine Swing-Komponenten - Ergebnisse gehen ausschließlich über
+ * {@link Listener} an die Oberfläche ({@link GUI}).
  */
 public class AcquisitionEngine {
 
-    /** Reagiert auf Zustandsänderungen der Aufzeichnung, die sich in der UI widerspiegeln müssen. */
+    /** Rückkanal zur Oberfläche für Ereignisse, die dort angezeigt werden müssen. */
     public interface Listener {
-        /** Aufzeichnung/Trigger-Warten wurde gestartet oder gestoppt. */
+        /** Verbindungs- oder Aufzeichnungsstatus hat sich geändert (Start/Stopp/Trigger-Warten). */
         void onStatusChanged();
 
-        /** Die konfigurierte maximale Messdauer wurde erreicht, die Aufzeichnung wurde gestoppt. */
+        /** Die in {@link TriggerDialog.Config#maxDurationMs} gesetzte Höchstdauer wurde erreicht. */
         void onDurationLimitReached();
 
-        /** Ein neues Frequenzspektrum für einen Spektrum-Sensor (siehe {@link Sensor#producesSpectrum()})
-         *  ist eingetroffen (siehe {@link #onLineReceived}). */
+        /** Ein neues Frequenzspektrum ist für {@code channelId} eingetroffen. */
         void onSpectrumFrame(char channelId, double[] magnitudesDb, int sampleRateHz);
 
-        /** Eine laufende Aufzeichnung wurde gerade gestoppt (siehe {@link #stop()}) - im
-         *  Gegensatz zu {@link #onStatusChanged()} nur genau dann, nicht auch bei Start oder
-         *  Trigger-Auslösung, damit z. B. ein einmaliges "letztes Spektrum in die Tabelle
-         *  übernehmen" nicht bei jeder Statusänderung erneut passiert. */
+        /** Die Aufzeichnung wurde beendet (regulär, per Limit, oder durch einen Fehler). */
         void onRecordingStopped();
 
-        /** Eine laufende Aufzeichnung bzw. das Warten auf den Trigger wurde abgebrochen, weil die
-         *  Verbindung zum Gerät verloren ging (siehe {@link #onConnectionStatusChanged}) - wird
-         *  zusätzlich zu, und unmittelbar nach, {@link #onStatusChanged()} und
-         *  {@link #onRecordingStopped()} aufgerufen, damit die UI den Grund des Abbruchs anzeigen
-         *  kann (anders als beim regulären Stopp-Knopf oder {@link #onDurationLimitReached()}). */
+        /** Die serielle/Bluetooth-Verbindung brach während einer laufenden Aufzeichnung ab. */
         void onConnectionLostDuringRecording();
 
-        /** Eine laufende Aufzeichnung bzw. das Warten auf den Trigger wurde abgebrochen, weil die
-         *  Firmware für einen Kanal wiederholt einen Sensorfehler gemeldet hat (siehe
-         *  {@link #onErrorLine}, {@code #ERR,<Tag>,<Kanal>} in phylog_firmware.ino - z. B. eine
-         *  ausbleibende I2C-Antwort oder ein HX711-Timeout). Wird, wie
-         *  {@link #onConnectionLostDuringRecording()}, zusätzlich zu und unmittelbar nach
-         *  {@link #onStatusChanged()} und {@link #onRecordingStopped()} aufgerufen.
-         *
-         * @param channelId betroffener Kanal ('A' oder 'B')
-         * @param errorTag  von der Firmware gemeldete Fehlerart (z. B. "I2C", "HX711")
-         */
+        /** Der Sensor auf {@code channelId} konnte wiederholt nicht ausgelesen werden
+         *  (siehe {@link #SENSOR_ERROR_STREAK_THRESHOLD}); die Aufzeichnung wurde gestoppt. */
         void onSensorErrorDuringRecording(char channelId, String errorTag);
     }
 
@@ -57,36 +36,26 @@ public class AcquisitionEngine {
 
     private TriggerDialog.Config triggerConfig = new TriggerDialog.Config();
     private int sampleRateHz = 20;
-    /** Nullpunkt für die relative Zeitachse in Millisekunden. -1 = noch nicht gesetzt. */
+
+    /** Zeitstempel (ms, Gerätezeit) des ersten Messwerts der laufenden Aufzeichnung - Basis für
+     *  die "Zeit (s)"-Spalte. {@code -1}, solange noch kein Wert eingetroffen ist. */
     private long measurementStartMillis = -1;
 
-    /** {@code true} während einer laufenden Aufzeichnung. */
     private boolean recording = false;
-    /** {@code true}, nachdem Start gedrückt wurde, solange im Schwellenwert-Modus noch auf die
-     *  Trigger-Bedingung gewartet wird - es wird noch nichts aufgezeichnet. */
+    /** {@code true}, während bei aktivem Schwellenwert-Trigger auf die Flanke gewartet wird -
+     *  schließt sich mit {@link #recording} gegenseitig aus. */
     private boolean waitingForTrigger = false;
 
-    /** Bricht eine laufende Aufzeichnung bzw. das Warten auf den Trigger ab, sobald die
-     *  Verbindung zum Gerät verloren geht (siehe {@link #onConnectionStatusChanged}) - sonst
-     *  bliebe der Zustand unbemerkt für immer auf "läuft" stehen, ohne dass je wieder ein
-     *  Messwert eintrifft, bis jemand von Hand auf Stopp klickt. */
+    /** Reagiert auf Verbindungsauf-/-abbau, siehe {@link #onConnectionStatusChanged()}. */
     private final Runnable connectionListener = this::onConnectionStatusChanged;
 
-    /** Anzahl aufeinanderfolgender, von der Firmware gemeldeter Sensorfehler (siehe
-     *  {@link #onErrorLine}) je Kanal, ohne dazwischen eine erfolgreiche Datenzeile für diesen
-     *  Kanal. Wird bei jeder erfolgreich verarbeiteten Datenzeile dieses Kanals zurückgesetzt
-     *  (siehe {@link #onDataLine}) - ein einzelner, vereinzelter Fehler (z. B. kurzer
-     *  I2C-Wackelkontakt, den die Firmware ohnehin selbst per automatischem Bus-Reset behebt,
-     *  siehe {@code noteI2CResult} in phylog_firmware.ino) soll die Aufzeichnung nicht
-     *  gleich abbrechen. */
+    /** Zählt aufeinanderfolgende #ERR-Zeilen je Kanal; wird bei jedem gültigen Messwert auf 0
+     *  zurückgesetzt (siehe {@link #resetSensorErrorStreak}). */
     private int sensorErrorStreakA = 0;
     private int sensorErrorStreakB = 0;
 
-    /** Ab wie vielen aufeinanderfolgenden Fehlermeldungen für denselben Kanal (siehe
-     *  {@link #sensorErrorStreakA}/{@link #sensorErrorStreakB}) eine laufende Aufzeichnung
-     *  abgebrochen wird. Die Firmware meldet Fehler je Kanal höchstens einmal pro Sekunde (siehe
-     *  {@code reportSensorError} in phylog_firmware.ino) - der Schwellenwert entspricht also
-     *  grob so vielen Sekunden andauerndem Fehler. */
+    /** Anzahl aufeinanderfolgender Sensorfehler, ab der eine laufende Aufzeichnung gestoppt
+     *  wird - einzelne Ausreißer sollen die Messung nicht sofort abbrechen. */
     private static final int SENSOR_ERROR_STREAK_THRESHOLD = 3;
 
     public AcquisitionEngine(MeasurementChannel channelA, MeasurementChannel channelB, Listener listener) {
@@ -117,7 +86,7 @@ public class AcquisitionEngine {
         this.sampleRateHz = sampleRateHz;
     }
 
-    /** Überträgt die aktuell eingestellte Abtastrate an die Firmware. */
+    /** Sendet die aktuelle Abtastrate an die Firmware (Obergrenze 1000 Hz), sofern verbunden. */
     public void pushSampleRateToFirmware() {
         if (!DeviceConnection.getInstance().isConnected() || sampleRateHz <= 0) {
             return;
@@ -133,7 +102,8 @@ public class AcquisitionEngine {
         return waitingForTrigger;
     }
 
-    /** Startet eine neue Aufzeichnung (bzw. wartet bei Schwellenwert-Trigger zunächst darauf). */
+    /** Startet eine neue Aufzeichnung: setzt beide Kanäle zurück und beginnt je nach
+     *  {@link TriggerDialog.Config#thresholdMode} sofort oder erst nach Trigger-Flanke. */
     public void start() {
         measurementStartMillis = -1;
         for (MeasurementChannel ch : new MeasurementChannel[]{channelA, channelB}) {
@@ -151,18 +121,10 @@ public class AcquisitionEngine {
             recording = true;
         }
         listener.onStatusChanged();
-
-        // Kein sendLine("START") mehr hier: Das Gerät streamt seit dem Verbindungsaufbau bereits
-        // durchgehend (siehe DeviceConnection#connect) - hier wird nur noch lokal umgeschaltet,
-        // ob eingehende Werte in die Tabelle geschrieben werden (siehe #ingestSample).
     }
 
-    /** Fügt für jeden Kanal mit aktivem, nicht-spektralem Sensor und vorliegendem Live-Wert genau
-     *  eine Zeile mit dem aktuellen Messwert in dessen Tabelle ein - unabhängig davon, ob gerade
-     *  eine reguläre Aufzeichnung läuft. Anders als bei {@link #ingestSample} steht in der ersten
-     *  Spalte dabei nicht die vergangene Zeit, sondern der fortlaufende Tabellenindex, da
-     *  einzelne, per Knopfdruck ausgelöste Momentaufnahmen (z. B. an mehreren manuell
-     *  eingestellten Positionen) keinen gemeinsamen Zeitbezug haben. */
+    /** Übernimmt für jeden Kanal mit nicht-spektralem Sensor den aktuellen Live-Wert als
+     *  Tabellenzeile (Index statt Zeit) - siehe {@link GUI#captureSnapshot()}. */
     public void captureSnapshot() {
         captureSnapshotForChannel(channelA);
         captureSnapshotForChannel(channelB);
@@ -179,23 +141,15 @@ public class AcquisitionEngine {
         ch.tableModel.addRow(new Object[]{(double) index, value});
     }
 
-    /** Stoppt eine laufende Aufzeichnung bzw. das Warten auf den Trigger. */
+    /** Beendet eine laufende oder auf Trigger wartende Aufzeichnung und benachrichtigt den Listener. */
     public void stop() {
         recording = false;
         waitingForTrigger = false;
         listener.onStatusChanged();
         listener.onRecordingStopped();
-
-        // Kein sendLine("STOP") mehr hier: Das würde das Gerät komplett verstummen lassen (siehe
-        // DeviceConnection#connect/#disconnect) und damit MeasurementChannel#latestValue
-        // einfrieren - Live-Anzeigen und die Momentaufnahme-Funktion sollen aber gerade auch
-        // funktionieren, wenn gerade keine Aufzeichnung läuft.
     }
 
-    /** Reagiert auf jede Verbindungsstatusänderung (siehe {@link DeviceConnection#addConnectionListener}),
-     *  aber nur ein Verbindungsverlust während laufender Aufzeichnung bzw. während auf den
-     *  Trigger gewartet wird löst hier etwas aus - ein Verbindungsaufbau selbst hat auf eine
-     *  bereits laufende Aufzeichnung keinen Einfluss und muss deshalb auch nichts abbrechen. */
+    /** Stoppt automatisch, wenn während einer laufenden Aufzeichnung die Verbindung abbricht. */
     private void onConnectionStatusChanged() {
         if (DeviceConnection.getInstance().isConnected()) return;
         if (!recording && !waitingForTrigger) return;
@@ -204,10 +158,7 @@ public class AcquisitionEngine {
         listener.onConnectionLostDuringRecording();
     }
 
-    /** Verarbeitet eine vom Gerät empfangene Zeile: Datenzeilen ("D,millis,Kanal,Slot,Rohwert")
-     *  für normale Sensoren, {@code #SPEC}-Pakete für Spektrum-Sensoren (siehe
-     *  {@link Sensor#producesSpectrum()}), {@code #ERR}-Pakete für gemeldete Sensorfehler (siehe
-     *  {@link #onErrorLine}); alles andere wird ignoriert. */
+    /** Wertet eine vom ESP32 empfangene Zeile aus dem entsprechenden Protokollpräfix aus. */
     public void onLineReceived(String line) {
         if (line.startsWith("D,")) {
             onDataLine(line);
@@ -218,6 +169,7 @@ public class AcquisitionEngine {
         }
     }
 
+    /** Verarbeitet eine "D,millis,kanal,slot,rohwert"-Zeile (Einzelmesswert). */
     private void onDataLine(String line) {
         String[] parts = line.split(",");
         if (parts.length < 5) return;
@@ -236,12 +188,8 @@ public class AcquisitionEngine {
         }
     }
 
-    /** Parst ein Fehlerpaket {@code #ERR,<Tag>,<Kanal>} (siehe {@code reportSensorError} in
-     *  phylog_firmware.ino, z. B. für eine ausbleibende I2C-Antwort oder einen HX711-Timeout) und
-     *  bricht eine laufende Aufzeichnung bzw. das Warten auf den Trigger ab, sobald sich für
-     *  denselben Kanal {@link #SENSOR_ERROR_STREAK_THRESHOLD} solcher Meldungen in Folge häufen,
-     *  ohne dass dazwischen wieder eine gültige Datenzeile für diesen Kanal ankam (siehe
-     *  {@link #onDataLine}) - ein einzelner, vorübergehender Fehler bricht also noch nichts ab. */
+    /** Verarbeitet eine "#ERR,tag,kanal"-Zeile; stoppt eine laufende Aufzeichnung erst nach
+     *  {@link #SENSOR_ERROR_STREAK_THRESHOLD} aufeinanderfolgenden Fehlern auf demselben Kanal. */
     private void onErrorLine(String line) {
         String[] parts = line.split(",");
         if (parts.length < 3) return;
@@ -251,7 +199,7 @@ public class AcquisitionEngine {
         if (channelId != 'A' && channelId != 'B') return;
 
         MeasurementChannel ch = channel(channelId);
-        if (!ch.hasSensor()) return;   // Kanal ist gar nicht konfiguriert -> Fehler ignorieren
+        if (!ch.hasSensor()) return;
 
         int streak = incrementSensorErrorStreak(channelId);
         if (streak < SENSOR_ERROR_STREAK_THRESHOLD) return;
@@ -273,18 +221,9 @@ public class AcquisitionEngine {
         else sensorErrorStreakB = 0;
     }
 
-    /** Parst ein Spektrum-Paket {@code #SPEC,<Kanal>,<Bins>,<Abtastrate>,<mag_0>,<mag_1>,...}
-     *  (siehe {@code captureAndSendSpectrum} in phylog_firmware.ino) und reicht es an
-     *  {@link Listener#onSpectrumFrame} weiter. Magnituden kommen als dBFS·10 (int) an, um
-     *  Bandbreite zu sparen - hier wieder auf dB zurückgerechnet.
-     *
-     *  <p>Wie bei normalen Messwerten (siehe {@link #ingestSample}) wird nur während einer
-     *  laufenden Aufzeichnung weitergereicht - die Firmware streamt Spektrum-Pakete zwar
-     *  durchgehend ab dem Verbindungsaufbau (siehe {@link DeviceConnection#connect}), ohne diese
-     *  Prüfung würde das Diagramm also auch dann live mit Spektren aktualisiert, wenn nie "Start"
-     *  gedrückt wurde. Einen {@code waitingForTrigger}-Fall wie in {@link #ingestSample} gibt es
-     *  hier nicht, da Spektrum-Sensoren keinen Trigger unterstützen (siehe {@code spectrumMode}
-     *  in {@link GUI}, das den Trigger-Button dafür sperrt).</p> */
+    /** Verarbeitet eine "#SPEC,kanal,bins,abtastrate,mag0,mag1,..."-Zeile (Frequenzspektrum);
+     *  Magnitude je Bin ist als Zehntel-dB kodiert. Wird nur während laufender Aufzeichnung
+     *  ausgewertet - Spektren ohne aktive Messung sind für die Anzeige uninteressant. */
     private void onSpectrumLine(String line) {
         if (!recording) return;
 
@@ -307,6 +246,9 @@ public class AcquisitionEngine {
         }
     }
 
+    /** Dekodiert einen Rohmesswert (nur wenn er zur ersten Messgröße des aktiven Sensors passt,
+     *  siehe {@code slot}), wendet die Tara an und leitet ihn je nach Zustand an Trigger-Prüfung
+     *  oder Tabellen-Aufzeichnung weiter. Verwirft NaN/unendlich als ungültige Dekodierung. */
     private void ingestSample(MeasurementChannel ch, int slot, long rawValue, long millis) {
         Sensor sensor = ch.sensor;
         if (sensor == null || sensor == SensorRegistry.NO_SENSOR) {
@@ -346,6 +288,10 @@ public class AcquisitionEngine {
         }
     }
 
+    /** Hält für {@link TriggerDialog.Config#preTriggerMs} Millisekunden Messwerte im Ringpuffer
+     *  vor, damit nach einem Trigger auch der Zeitraum davor rekonstruiert werden kann (siehe
+     *  {@link #backfillPreTriggerData}). Ohne Vor-Trigger-Zeit ({@code preTriggerMs <= 0}) tut
+     *  diese Methode nichts. */
     private void bufferForPreTrigger(MeasurementChannel ch, long millis, double value) {
         if (triggerConfig.preTriggerMs <= 0) return;
 
@@ -356,6 +302,9 @@ public class AcquisitionEngine {
         }
     }
 
+    /** Prüft, ob der Messwert die konfigurierte Schwelle in der konfigurierten Richtung
+     *  überschreitet (Flankenerkennung anhand des vorherigen Werts); nur der als Trigger-Kanal
+     *  konfigurierte Kanal löst aus. */
     private void checkTriggerCondition(MeasurementChannel ch, long millis, double value) {
         if (ch.id != triggerConfig.channel) return;
 
@@ -373,6 +322,8 @@ public class AcquisitionEngine {
         }
     }
 
+    /** Schaltet von Trigger-Wartezeit auf laufende Aufzeichnung um und füllt beide Kanäle
+     *  rückwirkend mit den gepufferten Vor-Trigger-Werten auf. */
     private void fireTrigger(long triggerMillis) {
         waitingForTrigger = false;
         recording = true;
@@ -384,6 +335,7 @@ public class AcquisitionEngine {
         listener.onStatusChanged();
     }
 
+    /** Überträgt die im Vor-Trigger-Puffer gehaltenen Werte als reguläre Zeilen in die Tabelle. */
     private void backfillPreTriggerData(MeasurementChannel ch) {
         for (double[] sample : ch.preTriggerBuffer) {
             long sampleMillis = (long) sample[0];

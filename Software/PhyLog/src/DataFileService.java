@@ -13,17 +13,13 @@ import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Liest und schreibt Messdaten als CSV und exportiert das Diagramm als PNG. Kennt keine Dialoge
- * oder Fensterreferenzen - {@link GUI} übernimmt Dateiauswahl und Fehlermeldungen, diese Klasse
- * nur das eigentliche Lesen/Schreiben.
- */
+/** Lesen/Schreiben von Messdaten als CSV sowie PNG-Export des Diagramms. */
 public final class DataFileService {
 
     private DataFileService() {
     }
 
-    /** Reagiert auf eine einzelne, aus einer CSV-Zeile geparste Zahlen-Zeile. */
+    /** Callback für eine einzelne, aus einer CSV-Zeile geparste Zahlen-Zeile. */
     @FunctionalInterface
     public interface RowConsumer {
         void accept(Object[] row);
@@ -39,8 +35,8 @@ public final class DataFileService {
         }
     }
 
-    /** Erkennt einen Sensor anhand der in einer Kopfzeilenspalte wie "Spannung (V)" enthaltenen
-     *  Einheit, oder {@code null} falls keine passt. */
+    /** Liefert den zu einer Kopfzeilenspalte wie "Spannung (V)" passenden Sensor anhand der
+     *  enthaltenen Einheit, oder {@code null} falls keiner passt. */
     public static Sensor detectSensorFromHeader(String headerColumn) {
         Pattern pattern = Pattern.compile("\\(([^)]+)\\)");
         Matcher matcher = pattern.matcher(headerColumn);
@@ -51,14 +47,10 @@ public final class DataFileService {
     }
 
     /**
-     * Liest eine CSV-Datei zeilenweise ein. Eine erkennbare Kopfzeile (nicht-numerische erste
-     * Spalte bzw. "Zeit" im Text) wird übersprungen und stattdessen zur Sensor-Erkennung genutzt;
-     * jede gültige Zahlen-Zeile mit mindestens {@code columnCount} Spalten wird an
-     * {@code rowConsumer} übergeben.
+     * Liest eine CSV-Datei zeilenweise ein. Eine erkennbare Kopfzeile wird übersprungen und zur
+     * Sensor-Erkennung genutzt; jede gültige Zahlen-Zeile mit mindestens {@code columnCount}
+     * Spalten wird an {@code rowConsumer} übergeben.
      *
-     * @param file             die zu lesende Datei
-     * @param columnCount      erwartete Spaltenanzahl je Zeile
-     * @param rowConsumer      Callback für jede erfolgreich geparste Zeile
      * @param onSensorDetected Callback, falls aus der Kopfzeile ein Sensor erkannt wurde (optional)
      */
     public static void readCsv(File file, int columnCount, RowConsumer rowConsumer,

@@ -5,11 +5,7 @@ import java.util.List;
  * Reine Ausgleichsrechnung (lineare/polynomiale, exponentielle und sinusförmige Regression),
  * losgelöst von jeder Zeichen- oder Sensor-Logik. Nimmt fertige (Zeit, Messwert)-Paare entgegen
  * und liefert ein {@link FitResult} mit der angepassten Funktion sowie einer für Menschen
- * lesbaren Beschreibung der ermittelten Parameter (für {@link ChiSquareInfoDialog}).
- *
- * <p>Diese Klasse war früher Teil von {@link ChartPanel}; sie wurde herausgelöst, damit
- * {@link ChartPanel} sich auf Zeichnen und Interaktion beschränken kann, während die Mathematik
- * unabhängig davon test- und wiederverwendbar bleibt.</p>
+ * lesbaren Beschreibung der ermittelten Parameter.
  */
 public final class CurveFitting {
 
@@ -53,10 +49,7 @@ public final class CurveFitting {
      * vor dem Aufstellen der Normalgleichungen um ihren Mittelwert zentriert, was die Kondition
      * des Gleichungssystems deutlich verbessert (insbesondere bei höheren Polynomgraden).
      *
-     * @param data   Messpunkte (Zeit, Messwert)
      * @param degree Polynomgrad (1 = linear)
-     * @param xUnit  Einheit der X-Achse, für die Parameterbeschreibung
-     * @param yUnit  Einheit der Y-Achse, für die Parameterbeschreibung
      * @return das Fit-Ergebnis, oder {@code null} falls das Gleichungssystem singulär ist
      */
     public static FitResult fitPolynomial(List<double[]> data, int degree, String xUnit, String yUnit) {
@@ -108,10 +101,9 @@ public final class CurveFitting {
      * (ln(y) = ln(a) + b*x) linear gelöst wird. Punkte mit y &lt;= 0 werden übersprungen, da der
      * Logarithmus dort nicht definiert ist.
      *
-     * <p>Hinweis: Dies minimiert die Fehlerquadrate im logarithmischen Raum, nicht im
-     * Originalraum - ein Standard-Vorgehen, das große y-Werte gegenüber einem echten
-     * nichtlinearen Fit tendenziell unterschätzt gewichtet. Für die meisten praktischen Zwecke
-     * ausreichend genau.</p>
+     * <p>Minimiert die Fehlerquadrate im logarithmischen statt im Originalraum - ein
+     * Standard-Vorgehen, das große y-Werte gegenüber einem echten nichtlinearen Fit tendenziell
+     * schwächer gewichtet, für die meisten praktischen Zwecke aber ausreichend genau ist.</p>
      *
      * @return das Fit-Ergebnis, oder {@code null} bei weniger als 2 positiven Messwerten
      */
@@ -149,9 +141,9 @@ public final class CurveFitting {
         final double finalMeanX = meanX;
         FunctionEvaluator func = x -> a * Math.exp(b * (x - finalMeanX));
 
-        double y0 = a * Math.exp(-b * meanX); // Wert bei x=0 - "a" selbst bezieht sich wegen der
-        // Zentrierung auf x=meanX, nicht auf x=0
-        String equation = "f(x) = " + fmt(y0) + " \u00b7 e^(" + fmt(b) + "\u00b7x)";
+        // Wert bei x=0 - "a" selbst bezieht sich wegen der Zentrierung auf x=meanX, nicht auf x=0.
+        double y0 = a * Math.exp(-b * meanX);
+        String equation = "f(x) = " + fmt(y0) + " · e^(" + fmt(b) + "·x)";
         List<String> params = new ArrayList<>();
         params.add("Wert bei x=0: f(0) = " + fmt(y0) + " " + yUnit);
         params.add("Wachstumsrate b = " + fmt(b) + " 1/" + xUnit + (b < 0 ? " (Zerfall)" : " (Wachstum)"));
@@ -220,9 +212,9 @@ public final class CurveFitting {
             omega = (2 * Math.PI) / Math.max(0.001, (maxX - minX));
         }
 
-        double firstX = data.get(0)[0];
-        double firstYNorm = (data.get(0)[1] - offset) / (amplitude > 0 ? amplitude : 1.0);
-        firstYNorm = Math.max(-1.0, Math.min(1.0, firstYNorm));
+        double firstX = data.getFirst()[0];
+        double firstYNorm = (data.getFirst()[1] - offset) / (amplitude > 0 ? amplitude : 1.0);
+        firstYNorm = Math.clamp(firstYNorm, -1.0, 1.0);
         double phi = Math.asin(firstYNorm) - omega * firstX;
 
         double[] params = refineSinusFit(data, amplitude, omega, phi, offset);
@@ -233,15 +225,15 @@ public final class CurveFitting {
 
         FunctionEvaluator func = x -> finalA * Math.sin(finalW * x + finalPhi) + finalC;
 
-        String equation = "f(x) = " + fmt(finalA) + " \u00b7 sin(" + fmt(finalW) + "\u00b7x + " + fmt(finalPhi) + ") + " + fmt(finalC);
+        String equation = "f(x) = " + fmt(finalA) + " · sin(" + fmt(finalW) + "·x + " + fmt(finalPhi) + ") + " + fmt(finalC);
         List<String> paramLines = new ArrayList<>();
         paramLines.add("Amplitude A = " + fmt(Math.abs(finalA)) + " " + yUnit);
-        paramLines.add("Kreisfrequenz \u03c9 = " + fmt(finalW) + " rad/" + xUnit);
+        paramLines.add("Kreisfrequenz ω = " + fmt(finalW) + " rad/" + xUnit);
         paramLines.add("Frequenz f = " + fmt(Math.abs(finalW) / (2 * Math.PI)) + " Hz");
         if (Math.abs(finalW) > 1e-12) {
             paramLines.add("Periodendauer T = " + fmt(2 * Math.PI / Math.abs(finalW)) + " " + xUnit);
         }
-        paramLines.add("Phase \u03c6 = " + fmt(finalPhi) + " rad");
+        paramLines.add("Phase φ = " + fmt(finalPhi) + " rad");
         paramLines.add("Offset (Mittelwert) = " + fmt(finalC) + " " + yUnit);
 
         return new FitResult(func, 4, new FitDescription(equation, paramLines));
@@ -310,12 +302,11 @@ public final class CurveFitting {
             double trialCost = sinusCost(data, pTrial);
 
             if (trialCost < prevCost) {
-                // Relativ statt absolut (siehe Klassenkommentar zu unterschiedlichen
-                // Größenordnungen der vier Parameter, z. B. Amplitude in hunderten Lux vs.
-                // Kreisfrequenz im Bereich von 0.001 rad/s): ein Schritt gilt erst als
-                // vernachlässigbar, wenn er klein ist relativ zur Größe des jeweiligen
-                // Parameters selbst - Math.max(1.0, ...) verhindert dabei nur, dass ein Parameter
-                // nahe 0 die Schwelle auf (fast) 0 herunterzieht.
+                // Relativ statt absolut, da die vier Parameter stark unterschiedliche
+                // Größenordnungen haben können (z. B. Amplitude in hunderten Lux vs.
+                // Kreisfrequenz im Bereich 0.001 rad/s): ein Schritt gilt erst als vernachlässigbar,
+                // wenn er klein relativ zur Größe des jeweiligen Parameters selbst ist -
+                // Math.max(1.0, ...) verhindert, dass ein Parameter nahe 0 die Schwelle mitzieht.
                 boolean converged = Math.abs(dp[0]) < 1e-8 * Math.max(1.0, Math.abs(p[0]))
                         && Math.abs(dp[1]) < 1e-8 * Math.max(1.0, Math.abs(p[1]))
                         && Math.abs(dp[2]) < 1e-8 * Math.max(1.0, Math.abs(p[2]))
@@ -349,7 +340,6 @@ public final class CurveFitting {
      * Löst ein lineares Gleichungssystem A*x = B mittels Gauß-Elimination mit Spaltenpivot.
      *
      * @param A quadratische Koeffizientenmatrix (wird nicht verändert)
-     * @param B rechte Seite
      * @return Lösungsvektor x, oder {@code null} wenn A (numerisch) singulär ist
      */
     private static double[] solveGaussian(double[][] A, double[] B) {
@@ -387,7 +377,7 @@ public final class CurveFitting {
     }
 
     private static final char[] SUPERSCRIPT_DIGITS =
-            {'\u2070', '\u00b9', '\u00b2', '\u00b3', '\u2074', '\u2075', '\u2076', '\u2077', '\u2078', '\u2079'};
+            {'⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'};
 
     /** Formatiert eine Zahl mit 4 Nachkommastellen für die Fit-Parameter-Anzeige. */
     private static String fmt(double v) {
@@ -439,7 +429,7 @@ public final class CurveFitting {
         StringBuilder sb = new StringBuilder("f(x) = ");
         for (int power = degree; power >= 0; power--) {
             double coeff = a[power];
-            String varPart = (power == 0) ? "" : (power == 1) ? "\u00b7x" : "\u00b7x" + superscript(power);
+            String varPart = (power == 0) ? "" : (power == 1) ? "·x" : "·x" + superscript(power);
             if (power == degree) {
                 sb.append(coeff < 0 ? "-" : "").append(fmt(Math.abs(coeff))).append(varPart);
             } else {
@@ -464,7 +454,7 @@ public final class CurveFitting {
             params.add("y-Achsenabschnitt b = " + fmt(standardCoeffs[0]) + " " + yUnit);
         } else if (degree == 2) {
             double a2 = standardCoeffs[2], a1 = standardCoeffs[1], a0 = standardCoeffs[0];
-            params.add("Krümmung a = " + fmt(a2) + " " + yUnit + "/" + xUnit + "\u00b2");
+            params.add("Krümmung a = " + fmt(a2) + " " + yUnit + "/" + xUnit + "²");
             params.add("Steigung bei x=0 (b) = " + fmt(a1) + " " + yUnit + "/" + xUnit);
             params.add("y-Achsenabschnitt c = " + fmt(a0) + " " + yUnit);
             if (Math.abs(a2) > 1e-12) {

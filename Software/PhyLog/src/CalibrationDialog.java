@@ -4,10 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Generischer Kalibrierdialog: zeigt genau die {@link Sensor.CalibrationParameter}, die der
- * übergebene Sensor liefert, je eine Zeile mit Label und Eingabefeld. Ein neuer Sensor mit
- * Kalibrierbedarf muss dafür nur {@link Sensor#getCalibrationParameters()} überschreiben - der
- * Dialog selbst kennt keine sensorspezifischen Details.
+ * Kalibrierdialog, der die {@link Sensor.CalibrationParameter} des übergebenen Sensors als
+ * Label-Feld-Zeilen anzeigt.
  */
 public class CalibrationDialog extends FormDialog {
 
@@ -32,19 +30,18 @@ public class CalibrationDialog extends FormDialog {
         }
 
         JButton btnCancel = new JButton("Abbrechen");
-        btnCancel.addActionListener(e -> dispose());
+        btnCancel.addActionListener(_ -> dispose());
 
         if (parameters.isEmpty()) {
             finishLayout(btnCancel);
         } else {
-            JButton btnApply = new JButton("\u00dcbernehmen");
-            btnApply.addActionListener(e -> applyAndClose());
+            JButton btnApply = new JButton("Übernehmen");
+            btnApply.addActionListener(_ -> applyAndClose());
             finishLayout(btnCancel, btnApply);
         }
     }
 
-    /** Parst alle Eingabefelder und übernimmt sie erst, wenn keines einen Fehler hat - so
-     *  bleiben bei einer ungültigen Eingabe alle bisherigen Kalibrierwerte unverändert. */
+    /** Parst alle Eingabefelder und übernimmt sie erst, wenn keines einen Fehler hat. */
     private void applyAndClose() {
         double[] parsedValues = new double[parameters.size()];
 

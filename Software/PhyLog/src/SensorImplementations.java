@@ -1,12 +1,7 @@
 import java.util.List;
 
-/**
- * Repräsentiert einen unbelegten Sensorkanal.
- */
+/** Platzhalter-Sensor für unbelegte Kanäle. */
 class NoSensor extends Sensor {
-    /**
-     * Erstellt einen Platzhalter-Sensor für unbelegte Kanäle.
-     */
     public NoSensor() {
         super("-- Kein Sensor --", "", List.of());
     }
@@ -27,40 +22,21 @@ class NoSensor extends Sensor {
     }
 }
 
-/**
- * Basisklasse für INA219-Sensoren zur Dekodierung der Registerwerte.
- */
+/** Basisklasse für INA219-Sensoren zur Dekodierung der Registerwerte. */
 abstract class AbstractINA219Sensor extends Sensor {
     private static final double CURRENT_LSB = 0.0001; // 0.1 mA pro Bit
 
-    /**
-     * Initialisiert den INA219-Sensor.
-     *
-     * @param name        Anzeigename des Sensors.
-     * @param unit        Standard-Einheit.
-     * @param unitAliases Liste alternativer Einheitenbezeichnungen.
-     */
     AbstractINA219Sensor(String name, String unit, List<String> unitAliases) {
         super(name, unit, unitAliases);
     }
 
-    /**
-     * Dekodiert den Rohwert für die Busspannung in Volt.
-     *
-     * @param rawValue Der empfangene Rohwert.
-     * @return Spannung in Volt.
-     */
+    /** Dekodiert den Rohwert für die Busspannung in Volt (4 mV LSB). */
     static double decodeVoltage(long rawValue) {
         long masked = rawValue & 0xFFFF;
-        return ((masked >> 3) & 0x1FFF) * 0.004; // Bus-Spannung, 4 mV LSB
+        return ((masked >> 3) & 0x1FFF) * 0.004;
     }
 
-    /**
-     * Dekodiert den Rohwert für den Strom in Ampere.
-     *
-     * @param rawValue Der empfangene Rohwert.
-     * @return Stromstärke in Ampere.
-     */
+    /** Dekodiert den Rohwert für den Strom in Ampere. */
     static double decodeCurrent(long rawValue) {
         short signedRaw = (short) (rawValue & 0xFFFF);
         return signedRaw * CURRENT_LSB;
@@ -72,13 +48,8 @@ abstract class AbstractINA219Sensor extends Sensor {
     }
 }
 
-/**
- * INA219-Sensorprofil für Spannungsmessungen.
- */
+/** INA219-Sensorprofil für Spannungsmessungen. */
 class INA219VoltageSensor extends AbstractINA219Sensor {
-    /**
-     * Erstellt einen INA219-Spannungssensor.
-     */
     public INA219VoltageSensor() {
         super("INA219 (Spannung)", "V", List.of("V", "VOLT"));
     }
@@ -94,13 +65,8 @@ class INA219VoltageSensor extends AbstractINA219Sensor {
     }
 }
 
-/**
- * INA219-Sensorprofil für Strommessungen.
- */
+/** INA219-Sensorprofil für Strommessungen. */
 class INA219CurrentSensor extends AbstractINA219Sensor {
-    /**
-     * Erstellt einen INA219-Stromsensor.
-     */
     public INA219CurrentSensor() {
         super("INA219 (Strom)", "A", List.of("A", "AMP", "MA"));
     }
@@ -116,23 +82,15 @@ class INA219CurrentSensor extends AbstractINA219Sensor {
     }
 }
 
-/**
- * VEML7700-Sensor zur Beleuchtungsstärkemessung in Lux.
- */
+/** VEML7700-Sensor zur Beleuchtungsstärkemessung in Lux. */
 class VEML7700Sensor extends Sensor {
-    /**
-     * Erstellt einen VEML7700-Lichtsensor.
-     */
     public VEML7700Sensor() {
         super("VEML7700 (Licht / Lux)", "lx", List.of("LX", "LUX"));
     }
 
     @Override
     public double decode(int slot, long rawValue) {
-        // Skalierung auf Lux bei Gain 1x / IT 25ms (siehe configureSensorOnBus in der Firmware) -
-        // der Lux/Count-Faktor ist umgekehrt proportional zur Integrationszeit: bei 100ms wären
-        // es 0.0576 (kürzere Integration sammelt weniger Licht pro Count, ein Count entspricht
-        // also mehr Lux) - hier 4x kürzere Integrationszeit als früher, daher 4x höherer Faktor.
+        // Skalierung auf Lux bei Gain 1x / Integrationszeit 25ms.
         return (rawValue & 0xFFFF) * 0.2304;
     }
 
@@ -148,19 +106,14 @@ class VEML7700Sensor extends Sensor {
 
     @Override
     public int getMaxSampleRateHz() {
-        return 40; // Integrationszeit 25ms in der Firmware -> max. 40 Hz neue Messwerte
+        return 40; // Integrationszeit 25ms -> max. 40 Hz neue Messwerte
     }
 }
 
-/**
- * HX711-Sensor zur Kraft- und Gewichtsmessung via Wägezelle.
- */
+/** HX711-Sensor zur Kraft- und Gewichtsmessung via Wägezelle. */
 class HX711Sensor extends Sensor {
     private double calibrationFactor = 10000.0;
 
-    /**
-     * Erstellt einen HX711-Kraftsensor.
-     */
     public HX711Sensor() {
         super("HX711 (Kraft / Gewicht)", "N", List.of("N", "G", "KG"));
     }
@@ -188,33 +141,23 @@ class HX711Sensor extends Sensor {
 
     @Override
     public int getMaxSampleRateHz() {
-        // Der HX711-Chip liefert selbst nur 10 oder 80 neue Werte/Sekunde, fest per RATE-Pin auf
-        // dem jeweiligen Breakout-Board verdrahtet - das ist keine Firmware-Einstellung, sondern
-        // eine Hardware-Wahl auf dem Modul. 80 als Obergrenze angenommen (der schnellere der
-        // beiden gängigen Werte); bei den meisten Boards ohne verbundenen RATE-Pin sind es in
-        // Wirklichkeit nur 10 Hz - schnelleres Abfragen läuft dort ins Leere (siehe
-        // {@link #readHX711} in der Firmware, die ohnehin auf das nächste DRDY-Signal wartet).
+        // Der HX711-Chip liefert je nach RATE-Pin-Verdrahtung des Breakout-Boards nur 10 oder
+        // 80 neue Werte/Sekunde; 80 als Obergrenze angenommen.
         return 80;
     }
 }
 
-/**
- * INMP441-Mikrofon als Frequenzspektrum statt einzelnem dB-Wert (siehe {@link MicrophoneSensor}
- * für die klassische Variante). Liefert selbst keine Zeitreihen-Messwerte - {@code decode} wird
- * nie aufgerufen, da die Firmware für diesen Sensortyp ausschließlich {@code #SPEC}-Pakete
- * schickt (siehe {@link AcquisitionEngine}), keine regulären Datenpakete.
- */
+/** INMP441-Mikrofon als Frequenzspektrum statt einzelnem dB-Wert, siehe {@link MicrophoneSensor}
+ *  für die klassische Variante. {@code decode} wird nie aufgerufen, da die Firmware für diesen
+ *  Sensortyp ausschließlich Spektrum-Pakete schickt. */
 class MicrophoneSpectrumSensor extends Sensor {
-    /**
-     * Erstellt einen INMP441-Sensor im Spektrum-Modus.
-     */
     public MicrophoneSpectrumSensor() {
         super("INMP441 (Audio-Frequenzspektrum)", "dB", List.of("DB"));
     }
 
     @Override
     public double decode(int slot, long rawValue) {
-        return 0.0; // ungenutzt, siehe Klassenkommentar
+        return 0.0;
     }
 
     @Override
@@ -233,27 +176,16 @@ class MicrophoneSpectrumSensor extends Sensor {
     }
 }
 
-/**
- * KY-003-Hall-Sensor-Modul: ein digitaler Schalter, der 1 liefert, wenn ein Magnetfeld erkannt
- * wird, sonst 0. Typischer Einsatz in der Physik: Drehzahl- oder Periodendauer-Messung, indem
- * ein kleiner Magnet an einem rotierenden oder schwingenden Objekt bei jedem Durchgang den
- * Sensor kurz auslöst - in Kombination mit dem Trigger (Schwellenwert 0,5) lässt sich damit
- * z. B. automatisch bei jedem Durchgang eine Messung starten oder die Zeit zwischen zwei
- * Durchgängen aus dem Diagramm ablesen.
- */
+/** KY-003-Hall-Sensor-Modul: digitaler Schalter, der 1 liefert, wenn ein Magnetfeld erkannt
+ *  wird, sonst 0. Typischer Einsatz: Drehzahl- oder Periodendauer-Messung. */
 class HallEffectSensor extends Sensor {
-    /**
-     * Erstellt einen KY-003-Hall-Sensor.
-     */
     public HallEffectSensor() {
         super("KY-003 (Hall-Sensor)", "", List.of());
     }
 
     @Override
     public double decode(int slot, long rawValue) {
-        // Das Modul ist active-low (zieht den Ausgang bei erkanntem Magnetfeld auf LOW) - hier
-        // invertiert, damit 1 intuitiv "Magnetfeld erkannt" bedeutet statt technisch korrekt,
-        // aber beim Anschauen des Diagramms verwirrend, 0.
+        // Modul ist active-low; hier invertiert, damit 1 "Magnetfeld erkannt" bedeutet.
         return (rawValue == 0) ? 1.0 : 0.0;
     }
 
@@ -268,18 +200,13 @@ class HallEffectSensor extends Sensor {
     }
 }
 
-/**
- * INMP441 I2S-Mikrofon zur Schätzung des Schalldruckpegels in dB.
- */
+/** INMP441 I2S-Mikrofon zur Schätzung des Schalldruckpegels in dB. */
 class MicrophoneSensor extends Sensor {
-    private static final double FULL_SCALE = 8_388_607.0; // 2^23 - 1, größter 24-Bit-Betrag
+    private static final double FULL_SCALE = 8_388_607.0; // 2^23 - 1
     private static final double REFERENCE_SPL_DB = 94.0;
 
-    private double sensitivityDbfsAt94db = 12.0;
+    private double sensitivityDbfsAt94db = 0.0;
 
-    /**
-     * Erstellt einen INMP441-Mikrofonsensor.
-     */
     public MicrophoneSensor() {
         super("INMP441 (Mikrofon)", "dB", List.of("DB", "DBSPL"));
     }
@@ -309,45 +236,28 @@ class MicrophoneSensor extends Sensor {
 
     @Override
     public int getMaxSampleRateHz() {
-        return 1000; // Firmware liest dafür dynamisch so wenig I2S-Samples wie nötig, siehe
-        // microphoneReadSampleCount() in phylog_firmware.ino
+        return 1000;
     }
 }
 
 /**
- * Generisches 0-25V-Spannungsteiler-Modul (Teilerverhältnis 5:1, Ausgang "S" für einen
- * Arduino-ADC mit 5V-Referenz) an einem ESP32-Analogeingang. Nutzt den generischen
- * {@code TYPE_ANALOG}-Rohwert-Sensortyp der Firmware (siehe {@code sampleChannel} in
- * phylog_firmware.ino) - die Firmware liefert nur den rohen {@code analogRead()}-Zählerwert,
- * die komplette Umrechnung in Volt passiert hier.
+ * Generisches 0-25V-Spannungsteiler-Modul (Teilerverhältnis 5:1) an einem ESP32-Analogeingang.
  *
- * <p><b>Wichtiger Hardware-Hinweis (unbedingt vor dem Anschließen prüfen):</b> Der ESP32-
- * Analogeingang ist auf ca. 3,3V ausgelegt (Standard-Dämpfung ADC_11db), das absolute Maximum
- * laut Datenblatt liegt bei VDD+0,3V (also ca. 3,6V) - deutlich unter den 5V, die dieses Modul
- * bei einer Eingangsspannung von 25V an "S" ausgibt (25V / 5 = 5V). Direkt an den ESP32
- * angeschlossen ist der volle 0-25V-Bereich damit NICHT unbedenklich nutzbar: sicher ist nur
- * eine Eingangsspannung bis ca. 16,5V (= 3,3V x 5). Für den vollen 25V-Bereich braucht es vor
- * dem ESP32-Pin einen weiteren Spannungsteiler (bzw. einen Levelshifter bzw. eine Clamp-Diode
- * auf 3,3V) - ohne das riskiert man, den ADC-Eingang oder den ganzen Chip zu beschädigen.</p>
+ * <p><b>Wichtiger Hardware-Hinweis:</b> Der ESP32-Analogeingang ist auf ca. 3,3V ausgelegt, das
+ * absolute Maximum liegt bei ca. 3,6V - deutlich unter den 5V, die dieses Modul bei 25V Eingang
+ * an "S" ausgibt. Direkt angeschlossen ist sicher nur eine Eingangsspannung bis ca. 16,5V nutzbar;
+ * für den vollen 25V-Bereich braucht es einen weiteren Spannungsteiler bzw. Levelshifter.</p>
  */
 class VoltageDividerSensor extends Sensor {
 
-    /** Referenzspannung des ESP32-ADC bei Standard-Dämpfung (ADC_11db) - eine feste
-     *  Chip-Eigenschaft, kein Kalibrierwert, daher hier Konstante statt {@link CalibrationParameter}.
-     *  Siehe Hardware-Hinweis im Klassenkommentar. */
+    /** Referenzspannung des ESP32-ADC bei Standard-Dämpfung (ADC_11db). */
     static final double ADC_REFERENCE_VOLTAGE = 3.3;
-    /** Auflösung des ESP32-ADC (12 Bit -> 0..4095), ebenfalls Chip-Eigenschaft statt Kalibrierwert. */
+    /** Auflösung des ESP32-ADC (12 Bit -> 0..4095). */
     static final double ADC_MAX_COUNT = 4095.0;
 
-    /** Teilerverhältnis Eingangsspannung/Ausgangsspannung des Moduls - beim verbreiteten
-     *  "0-25V"-Modul (R1=30k, R2=7,5k) ergibt sich rechnerisch genau 5,0; weicht das konkrete
-     *  Exemplar wegen Bauteiltoleranzen leicht ab, hier über den Kalibrierdialog (mit einem
-     *  bekannten Referenzspannungswert, z. B. einem Multimeter) feinjustierbar. */
+    /** Teilerverhältnis Eingangsspannung/Ausgangsspannung; über den Kalibrierdialog feinjustierbar. */
     private double dividerRatio = 3.3;
 
-    /**
-     * Erstellt einen 0-25V-Spannungsteiler-Sensor.
-     */
     public VoltageDividerSensor() {
         super("Spannungssensor", "V", List.of("V", "VOLT"));
     }
@@ -376,39 +286,21 @@ class VoltageDividerSensor extends Sensor {
 }
 
 /**
- * DS18B20-Digitalthermometer (Dallas/Maxim) am 1-Wire-Bus. Anders als der zuvor genutzte
- * NTC-Spannungsteiler-Aufbau liest die Firmware hier keinen rohen ADC-Zählerwert mehr, sondern
- * das bereits im Sensor-IC selbst temperaturkompensierte 16-Bit-Register aus dem "Scratchpad"
- * über das 1-Wire-Protokoll (siehe {@code TYPE_DS18B20} in der Firmware) - {@code decode} muss
- * den Rohwert daher nur noch durch die feste Registerauflösung teilen, keine eigene
- * Spannungsteiler-/Steinhart-Hart-Rechnung wie zuvor beim NTC-Aufbau mehr durchführen.
+ * DS18B20-Digitalthermometer (Dallas/Maxim) am 1-Wire-Bus.
  *
- * <p>Registerformat bei der (in der Firmware fest eingestellten) 12-Bit-Auflösung: vorzeichen-
- * behafteter 16-Bit-Wert in 1/16°C-Schritten (siehe DS18B20-Datenblatt, "Temperature Register
- * Format") - Rohwert 0x0191 entspricht z. B. 25,0625°C.</p>
- *
- * <p>Die Konversionszeit bei 12-Bit-Auflösung beträgt laut Datenblatt bis zu 750ms - schnelleres
- * Abfragen liefert nur denselben, noch nicht aktualisierten Wert erneut (siehe
- * {@link #getMaxSampleRateHz}).</p>
+ * <p>Registerformat bei 12-Bit-Auflösung: vorzeichenbehafteter 16-Bit-Wert in 1/16°C-Schritten.
+ * Konversionszeit bis zu 750ms, siehe {@link #getMaxSampleRateHz}.</p>
  *
  * <p><b>Hardware-Hinweis:</b> Datenleitung braucht einen Pull-up-Widerstand nach 3,3V (typisch
- * 4,7kΩ, beim verbreiteten wasserdichten DS18B20-Modul oft bereits auf der Platine verbaut) -
- * ohne den bleibt der Bus permanent LOW und die Firmware findet beim Adress-Scan keinen Sensor.</p>
+ * 4,7kΩ) - ohne den bleibt der Bus permanent LOW und die Firmware findet keinen Sensor.</p>
  */
 class DS18B20Sensor extends Sensor {
 
-    /** Registerauflösung bei 12-Bit-Modus: 1 LSB = 1/16°C (siehe Klassenkommentar). */
     private static final double REGISTER_LSB = 1.0 / 16.0;
 
-    /** Additiver Korrekturwert, z. B. für eine Abweichung gegenüber einem Referenzthermometer -
-     *  der DS18B20 selbst ist werkseitig auf ±0,5°C kalibriert, ein multiplikativer Faktor wie
-     *  beim vorherigen NTC-Aufbau (Teilerverhältnis, Beta-Koeffizient) ergibt hier keinen Sinn,
-     *  ein fester Offset genügt. */
+    /** Additiver Korrekturwert gegenüber einem Referenzthermometer. */
     private double calibrationOffsetC = 0.0;
 
-    /**
-     * Erstellt einen DS18B20-Temperatursensor.
-     */
     public DS18B20Sensor() {
         super("DS18B20 (Temperatur)", "°C", List.of("C", "CELSIUS", "GRAD"));
     }
@@ -437,9 +329,6 @@ class DS18B20Sensor extends Sensor {
 
     @Override
     public int getMaxSampleRateHz() {
-        // 750ms Konversionszeit bei 12-Bit-Auflösung (siehe Klassenkommentar) -> max. ~1,3 Hz;
-        // abgerundet auf 1 Hz als sichere Obergrenze, damit nicht wiederholt derselbe (noch
-        // nicht aktualisierte) Registerwert als vermeintlich neuer Messwert gezählt wird.
-        return 1;
+        return 1; // 750ms Konversionszeit -> abgerundet auf 1 Hz als sichere Obergrenze
     }
 }

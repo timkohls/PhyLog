@@ -1,14 +1,7 @@
 import javax.swing.*;
 import java.awt.*;
 
-/**
- * Panel mit abgerundeten Ecken und eigener Hintergrundfarbe, unabhängig vom jeweils gesetzten
- * Inhalts-Layout (BoxLayout, GridBagLayout, ...) nutzbar. War ursprünglich eine private,
- * geschachtelte Klasse in {@link ChiSquareInfoDialog}; da dasselbe "Karten"-Aussehen inzwischen
- * auch in den übrigen Konfigurationsdialogen gebraucht wird (siehe {@link FormDialog}), liegt sie
- * jetzt hier zentral - eine Änderung am Karten-Look (z. B. Eckenradius) muss dadurch nur noch an
- * einer Stelle gepflegt werden.
- */
+/** Panel mit abgerundeten Ecken und eigener Hintergrundfarbe, unabhängig vom gesetzten Layout. */
 class RoundedPanel extends JPanel {
 
     private final Color background;
