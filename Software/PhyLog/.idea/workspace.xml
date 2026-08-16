@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="bb9c0312-0795-4c2c-b1c1-133df9e8db5a" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/../../Doc/AcquisitionEngine.Listener.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/AcquisitionEngine.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/CalibrationDialog.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/ChartPanel.FitMode.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/ChartPanel.FitTarget.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/ChartPanel.LineMode.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/ChartPanel.Series.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/ChartPanel.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/ChiSquareInfoDialog.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/CurveFitting.FitDescription.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/CurveFitting.FitResult.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/CurveFitting.FunctionEvaluator.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/CurveFitting.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/DataFileService.RowConsumer.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/DataFileService.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/DeviceConnection.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/GUI.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/GoodnessOfFit.ChiRating.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/GoodnessOfFit.ChiSquareResult.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/GoodnessOfFit.SigmaEstimate.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/GoodnessOfFit.SigmaMode.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/GoodnessOfFit.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/Main.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/MeasurementChannel.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/Sensor.CalibrationParameter.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/Sensor.Quantity.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/Sensor.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/SensorConfigDialog.LiveSource.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/SensorConfigDialog.SensorSelectionListener.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/SensorConfigDialog.TareRequestListener.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/SensorConfigDialog.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/SensorRegistry.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/StandardDeviationDialog.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/Terminal.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/Theme.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/TriggerDialog.Config.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/TriggerDialog.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/allclasses-index.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/allpackages-index.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/constant-values.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/element-list" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/help-doc.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-1.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-10.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-11.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-12.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-13.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-14.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-15.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-16.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-17.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-18.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-19.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-2.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-20.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-21.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-22.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-3.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-4.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-5.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-6.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-7.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-8.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index-files/index-9.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/index.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/legal/ADDITIONAL_LICENSE_INFO" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/legal/ASSEMBLY_EXCEPTION" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/legal/LICENSE" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/legal/dejavufonts.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/legal/jquery.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/legal/jqueryUI.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/member-search-index.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/module-search-index.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/overview-tree.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/package-search-index.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/package-summary.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/package-tree.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/copy.svg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSans-Bold.woff" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSans-Bold.woff2" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSans-BoldOblique.woff" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSans-BoldOblique.woff2" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSans-Oblique.woff" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSans-Oblique.woff2" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSans.woff" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSans.woff2" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSansMono-Bold.woff" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSansMono-Bold.woff2" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSansMono-BoldOblique.woff" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSansMono-BoldOblique.woff2" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSansMono-Oblique.woff" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSansMono-Oblique.woff2" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSansMono.woff" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSansMono.woff2" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSerif-Bold.woff" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSerif-Bold.woff2" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSerif-BoldItalic.woff" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSerif-BoldItalic.woff2" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSerif-Italic.woff" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSerif-Italic.woff2" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSerif.woff" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/DejaVuLGCSerif.woff2" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/fonts/dejavu.css" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/glass.svg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/jquery-ui.min.css" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/left.svg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/link.svg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/right.svg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/stylesheet.css" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/resource-files/x.svg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/script-files/jquery-3.7.1.min.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/script-files/jquery-ui.min.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/script-files/script.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/script-files/search-page.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/script-files/search.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/search.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/serialized-form.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/tag-search-index.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../Doc/type-search-index.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/lib/jSerialComm-2.11.4.jar" beforeDir="false" afterPath="$PROJECT_DIR$/src/lib/jSerialComm-2.11.4.jar" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/../.." />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Application.Main.executor": "Run",
+    "git-widget-placeholder": "main",
+    "node.js.detected.package.jshint": "true",
+    "node.js.selected.package.jshint": "",
+    "node.js.selected.package.tslint": "(autodetect)"
+  }
+}]]></component>
+  <component name="RunManager">
+    <configuration name="Main" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
+      <option name="MAIN_CLASS_NAME" value="Main" />
+      <module name="phylog" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Application.Main" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="TaskManager">
+    <servers />
+  </component>
+</project>

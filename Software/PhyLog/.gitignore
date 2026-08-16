@@ -1,0 +1,22 @@
+# --- Java / Maven Build-Output ---
+target/
+*.class
+
+# --- IntelliJ IDEA ---
+Software/PhyLog/.idea/
+*.iml
+out/
+
+# --- Externe Bibliotheken (werden von Maven aufgelöst) ---
+Software/PhyLog/src/lib/
+
+# --- Generierte Dokumentation ---
+Software/Doc/
+
+# --- Betriebssystem-Dateien ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Logs ---
+*.log
