@@ -22,63 +22,28 @@ class NoSensor extends Sensor {
     }
 }
 
-/** Basisklasse für INA219-Sensoren zur Dekodierung der Registerwerte. */
-abstract class AbstractINA219Sensor extends Sensor {
+/** INA219-Sensorprofil für Strommessungen. */
+class INA219CurrentSensor extends Sensor{
     private static final double CURRENT_LSB = 0.0001; // 0.1 mA pro Bit
 
-    AbstractINA219Sensor(String name, String unit, List<String> unitAliases) {
-        super(name, unit, unitAliases);
-    }
-
-    /** Dekodiert den Rohwert für die Busspannung in Volt (4 mV LSB). */
-    static double decodeVoltage(long rawValue) {
-        long masked = rawValue & 0xFFFF;
-        return ((masked >> 3) & 0x1FFF) * 0.004;
+    public INA219CurrentSensor() {
+        super("INA219 (Strom)", "A", List.of("A", "AMP", "MA"));
     }
 
     /** Dekodiert den Rohwert für den Strom in Ampere. */
-    static double decodeCurrent(long rawValue) {
+    @Override
+    public double decode(int slot, long rawValue) {
         short signedRaw = (short) (rawValue & 0xFFFF);
         return signedRaw * CURRENT_LSB;
+    }
+    @Override
+    public List<Quantity> getQuantities() {
+        return List.of(new Quantity("Strom", "A", 1));
     }
 
     @Override
     public String getFirmwareTypeName() {
         return "INA219";
-    }
-}
-
-/** INA219-Sensorprofil für Spannungsmessungen. */
-class INA219VoltageSensor extends AbstractINA219Sensor {
-    public INA219VoltageSensor() {
-        super("INA219 (Spannung)", "V", List.of("V", "VOLT"));
-    }
-
-    @Override
-    public double decode(int slot, long rawValue) {
-        return decodeVoltage(rawValue);
-    }
-
-    @Override
-    public List<Quantity> getQuantities() {
-        return List.of(new Quantity("Spannung", "V", 0));
-    }
-}
-
-/** INA219-Sensorprofil für Strommessungen. */
-class INA219CurrentSensor extends AbstractINA219Sensor {
-    public INA219CurrentSensor() {
-        super("INA219 (Strom)", "A", List.of("A", "AMP", "MA"));
-    }
-
-    @Override
-    public double decode(int slot, long rawValue) {
-        return decodeCurrent(rawValue);
-    }
-
-    @Override
-    public List<Quantity> getQuantities() {
-        return List.of(new Quantity("Strom", "A", 1));
     }
 }
 

@@ -8,7 +8,6 @@ public class SensorRegistry {
 
     private static final List<Sensor> REGISTERED_SENSORS = List.of(
             NO_SENSOR,
-            new INA219VoltageSensor(),
             new INA219CurrentSensor(),
             new VEML7700Sensor(),
             new HX711Sensor(),
