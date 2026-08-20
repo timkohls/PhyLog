@@ -38,8 +38,8 @@ public final class DataFileService {
     /** Liefert den zu einer Kopfzeilenspalte wie "Spannung (V)" passenden Sensor anhand der
      *  enthaltenen Einheit, oder {@code null} falls keiner passt. */
     public static Sensor detectSensorFromHeader(String headerColumn) {
-        Pattern pattern = Pattern.compile("\\(([^)]+)\\)");
-        Matcher matcher = pattern.matcher(headerColumn);
+        Pattern pattern = Pattern.compile("\\(([^)]+)\\)\\s*$");
+        Matcher matcher = pattern.matcher(headerColumn.trim());
         if (matcher.find()) {
             return SensorRegistry.findByUnit(matcher.group(1).trim());
         }
