@@ -8,13 +8,13 @@ public class SensorRegistry {
 
     private static final List<Sensor> REGISTERED_SENSORS = List.of(
             NO_SENSOR,
+            new VoltageDividerSensor(),
             new INA219CurrentSensor(),
             new VEML7700Sensor(),
             new HX711Sensor(),
             new MicrophoneSensor(),
             new MicrophoneSpectrumSensor(),
             new HallEffectSensor(),
-            new VoltageDividerSensor(),
             new DS18B20Sensor()
     );
 

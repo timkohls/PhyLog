@@ -39,7 +39,9 @@ public class ChartPanel extends JPanel {
         /** f(x) = A*sin(w*x + phi) + offset. */
         SINUS,
         /** f(x) = a*exp(b*x). */
-        EXPONENTIAL
+        EXPONENTIAL,
+        /** f(x) = a*x^n. */
+        POWER_LAW
     }
 
     /** Wie Messpunkte verbunden werden: gar nicht, gerade, oder als glatte Catmull-Rom-Spline. */
@@ -1064,6 +1066,9 @@ public class ChartPanel extends JPanel {
         } else if (fitMode == FitMode.EXPONENTIAL && fitData.size() >= 2) {
             ensureFitComputed(fitMode, 0);
             drawCachedFitIfPresent(g2, geo);
+        } else if (fitMode == FitMode.POWER_LAW && fitData.size() >= 2) {
+            ensureFitComputed(fitMode, 0);
+            drawCachedFitIfPresent(g2, geo);
         }
 
         g2.setClip(originalClip);
@@ -1144,6 +1149,7 @@ public class ChartPanel extends JPanel {
             case LINEAR, POLYNOMIAL -> CurveFitting.fitPolynomial(fitData, degree, xUnit, yUnit);
             case SINUS -> CurveFitting.fitSinus(fitData, xUnit, yUnit);
             case EXPONENTIAL -> CurveFitting.fitExponential(fitData, xUnit, yUnit);
+            case POWER_LAW -> CurveFitting.fitPowerLaw(fitData, xUnit, yUnit);
             default -> null;
         };
 

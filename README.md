@@ -42,7 +42,7 @@ der üblichen Kosten. Steckbar, offen dokumentiert und mit einer Desktop-Softwar
 
 1. **ESP32 anschließen.** Per USB-Kabel oder – wenn das Board vorher schon einmal gekoppelt wurde – per Bluetooth. Oben rechts im Hauptfenster "Verbinden" klicken; PhyLog sucht den richtigen Port automatisch über einen kurzen Handshake, ein manuelles Rätselraten ist nicht nötig.
 2. **Sensoren zuweisen.** Über *Sensor → Sensor konfigurieren…* für Kanal A und/oder B den passenden Sensortyp wählen und bei Bedarf kalibrieren (siehe unten). Live-Werte zeigt der Dialog dabei direkt an, man sieht also sofort, ob der Sensor überhaupt etwas liefert.
-3. **Abtastrate einstellen** und mit **Start** loslegen. Ohne Schwellenwert-Trigger beginnt die Aufzeichnung sofort; mit Trigger wartet PhyLog, bis die konfigurierte Flanke auftritt, und nimmt dank Vorlaufpuffer auch die Millisekunden *vor* dem eigentlichen Auslöser mit auf.
+3. Mit **Start** loslegen. Ohne Schwellenwert-Trigger beginnt die Aufzeichnung sofort; mit Trigger wartet PhyLog, bis die konfigurierte Flanke auftritt, und nimmt dank Vorlaufpuffer auch die Millisekunden *vor* dem eigentlichen Auslöser mit auf.
 4. **Auswerten.** Im Diagramm zoomen (Rubberband oder Freihand), einen Fit durchlegen, Chi² ablesen – und am Ende als CSV oder PNG rausschreiben.
 
 Wer nur schnell einen einzelnen Messwert braucht (z. B. für eine Wertetabelle mit mehreren Positionen statt einer Zeitreihe), nutzt statt "Start" den **Momentaufnahme**-Knopf: der trägt den aktuellen Live-Wert als neue Zeile mit fortlaufendem Index statt Zeitstempel ein.
@@ -58,7 +58,7 @@ Zwei unabhängige Kanäle (A/B), durchgehendes Streaming vom Gerät, sodass Live
 Zoomen per Rubberband oder Freihand-Auswahl, Zoom-Buttons, gemeinsame oder getrennte Y-Achse für Kanal A/B, gerade/glatte (Spline) Linienverbindung. Regressionen für linear, Polynom (Grad wählbar), Sinus und Exponentialfunktion, dazu reduziertes Chi² zur Bewertung der Fit-Güte – inklusive automatischer Sigma-Schätzung aus den Residuen, falls keine Messunsicherheit von Hand eingetragen wurde.
 
 **Sensoren (steckbar)**
-INA219 für Spannung und Strom, VEML7700 für Beleuchtungsstärke, HX711 für Kraft/Gewicht, INMP441-Mikrofon (als Schalldruckpegel oder live als Frequenzspektrum), ein KY-003-Hall-Sensor für Drehzahl-/Periodendauermessungen sowie ein generischer 0–25V-Spannungsteiler und ein DS18B20-Digitalthermometer. Jeder Sensor mit Kalibrierbedarf bringt seinen eigenen Dialog mit.
+INA219 für Strom, VEML7700 für Beleuchtungsstärke, HX711 für Kraft/Gewicht, INMP441-Mikrofon (als Schalldruckpegel oder live als Frequenzspektrum), ein KY-003-Hall-Sensor für Drehzahl-/Periodendauermessungen sowie ein generischer 0–25V-Spannungsteiler und ein DS18B20-Digitalthermometer. Jeder Sensor mit Kalibrierbedarf bringt seinen eigenen Dialog mit.
 
 **Import/Export**
 CSV-Import gezielt pro Kanal (die Software fragt beim Öffnen, ob die Datei nach A oder B soll – so lassen sich zwei frühere Messungen nacheinander laden, ohne dass sich die Kanäle gegenseitig überschreiben), CSV-Export getrennt je Kanal, Diagramm-Export als PNG.

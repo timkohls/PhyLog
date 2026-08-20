@@ -4,17 +4,22 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="bb9c0312-0795-4c2c-b1c1-133df9e8db5a" name="Changes" comment="README">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+    <list default="true" id="bb9c0312-0795-4c2c-b1c1-133df9e8db5a" name="Changes" comment="Altlasten">
+      <change beforePath="$PROJECT_DIR$/../../README.md" beforeDir="false" afterPath="$PROJECT_DIR$/../../README.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/Main.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/Main.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/SensorImplementations.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/SensorImplementations.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/ChartPanel.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/ChartPanel.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/CurveFitting.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/CurveFitting.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/GUI.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/GUI.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/GoodnessOfFit.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/GoodnessOfFit.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/java/SensorRegistry.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/SensorRegistry.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
     <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="EmbeddingIndexingInfo">
+    <option name="cachedIndexableFilesCount" value="250" />
   </component>
   <component name="Git.Settings">
     <option name="PUSH_AUTO_UPDATE" value="true" />
@@ -32,6 +37,69 @@
     &quot;accountId&quot;: &quot;96828cf7-b0ab-47d2-8b22-8efcc313a986&quot;
   }
 }</component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="NextEditCompletionFeaturesState">
+    <decayedCancelled>
+      <entry key="MS100" value="1.0000016376148044" />
+      <entry key="MS500" value="1.0783844167985115" />
+      <entry key="S2" value="1.987174218824533" />
+      <entry key="S5" value="3.0000934707921374" />
+      <entry key="S10" value="3.7164045532946295" />
+      <entry key="S30" value="4.475445281256721" />
+      <entry key="S60" value="4.72247261290563" />
+      <entry key="M2" value="4.857129668573484" />
+      <entry key="M5" value="4.941825751686222" />
+      <entry key="M10" value="4.970738352016618" />
+      <entry key="M15" value="4.980453187311085" />
+      <entry key="M30" value="4.990207003439645" />
+      <entry key="H1" value="4.995098591647688" />
+      <entry key="H2" value="4.997548066737239" />
+      <entry key="H4" value="4.998773725900659" />
+      <entry key="D1" value="4.999795578262887" />
+      <entry key="W1" value="4.999970795848263" />
+    </decayedCancelled>
+    <decayedSelected>
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="0.0" />
+      <entry key="S5" value="0.0" />
+      <entry key="S10" value="0.0" />
+      <entry key="S30" value="0.0" />
+      <entry key="S60" value="0.0" />
+      <entry key="M2" value="0.0" />
+      <entry key="M5" value="0.0" />
+      <entry key="M10" value="0.0" />
+      <entry key="M15" value="0.0" />
+      <entry key="M30" value="0.0" />
+      <entry key="H1" value="0.0" />
+      <entry key="H2" value="0.0" />
+      <entry key="H4" value="0.0" />
+      <entry key="D1" value="0.0" />
+      <entry key="W1" value="0.0" />
+    </decayedSelected>
+    <decayedShown>
+      <entry key="MS100" value="0.2517390852418695" />
+      <entry key="MS500" value="0.8097984165093918" />
+      <entry key="S2" value="1.8089610662289692" />
+      <entry key="S5" value="2.848912339375532" />
+      <entry key="S10" value="3.591127480231993" />
+      <entry key="S30" value="4.4098037382621165" />
+      <entry key="S60" value="4.685185290908532" />
+      <entry key="M2" value="4.837216786676364" />
+      <entry key="M5" value="4.933534209433736" />
+      <entry key="M10" value="4.966536265807338" />
+      <entry key="M15" value="4.97763913625094" />
+      <entry key="M30" value="4.9887936109611015" />
+      <entry key="H1" value="4.99439029673193" />
+      <entry key="H2" value="4.997193518739712" />
+      <entry key="H4" value="4.998596351657973" />
+      <entry key="D1" value="4.999766001957076" />
+      <entry key="W1" value="4.999966570320405" />
+    </decayedShown>
+  </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 4,
   &quot;fromUser&quot;: false
@@ -41,33 +109,35 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ASKED_MARK_IGNORED_FILES_AS_EXCLUDED": "true",
-    "Application.Main.executor": "Run",
-    "Maven.phylog [clean].executor": "Run",
-    "Maven.phylog [jar:jar].executor": "Run",
-    "Maven.phylog [package].executor": "Run",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "codeWithMe.voiceChat.enabledByDefault": "false",
-    "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
-    "git-widget-placeholder": "main",
-    "junie.onboarding.icon.badge.shown": "true",
-    "kotlin-language-version-configured": "true",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.jshint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.jshint": "",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "project.structure.last.edited": "Project",
-    "project.structure.proportion": "0.0",
-    "project.structure.side.proportion": "0.0",
-    "settings.editor.selected.configurable": "vcs.Git",
-    "to.speed.mode.migration.done": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ASKED_MARK_IGNORED_FILES_AS_EXCLUDED&quot;: &quot;true&quot;,
+    &quot;Application.Main.executor&quot;: &quot;Run&quot;,
+    &quot;Maven.phylog [clean].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.phylog [jar:jar].executor&quot;: &quot;Run&quot;,
+    &quot;Maven.phylog [package].executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
+    &quot;com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
+    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.jshint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.jshint&quot;: &quot;&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;project.structure.last.edited&quot;: &quot;Project&quot;,
+    &quot;project.structure.proportion&quot;: &quot;0.0&quot;,
+    &quot;project.structure.side.proportion&quot;: &quot;0.0&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;vcs.Git&quot;,
+    &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
       <recent name="C:\Users\tkart\Documents\Uni\Bachelor\Bachelorarbeit\PhyLog\Software\PhyLog\src\lib" />
@@ -77,8 +147,8 @@
   <component name="RunAnythingCache">
     <option name="myCommands">
       <command value="mvn clean" />
-      <command value="mvn package" />
       <command value="mvn jar:jar" />
+      <command value="mvn package" />
     </option>
   </component>
   <component name="RunManager">
@@ -117,11 +187,23 @@
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
   </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="cleanup finished" />
     <MESSAGE value="cleanup" />
     <MESSAGE value="cleanup test" />
     <MESSAGE value="README" />
-    <option name="LAST_COMMIT_MESSAGE" value="README" />
+    <MESSAGE value="Altlasten" />
+    <option name="LAST_COMMIT_MESSAGE" value="Altlasten" />
   </component>
 </project>

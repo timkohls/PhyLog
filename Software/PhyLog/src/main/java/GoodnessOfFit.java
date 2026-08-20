@@ -93,7 +93,14 @@ public final class GoodnessOfFit {
 
     /**
      * Berechnet das reduzierte Chi-Quadrat: chi²_red = (1/DOF) * Summe((y_i - f(x_i))²/sigma_i²),
-     * DOF = n - Parameteranzahl.
+     * DOF = (Anzahl ausgewerteter Punkte) - Parameteranzahl.
+     *
+     * <p>Punkte, an denen das Modell keinen endlichen Wert liefert - etwa eine Potenzfunktion
+     * f(x) = a*x^n an einer Stelle x &le; 0, außerhalb ihres beim Fitten zugrunde gelegten
+     * Definitionsbereichs - werden übersprungen und fließen weder in die Summe noch in die
+     * Freiheitsgrade ein. Ohne diese Prüfung würde ein einziger solcher Punkt (z. B. eine
+     * Messreihe, die bei x=0 beginnt) das gesamte chi²_red über eine unendliche oder undefinierte
+     * Modellabweichung auf {@link Double#POSITIVE_INFINITY} bzw. {@link Double#NaN} ziehen.</p>
      *
      * @return bei nicht-positiven Freiheitsgraden {@link Double#NaN} statt eines irreführenden
      *         Zahlenwerts; {@code degreesOfFreedom} bleibt dabei der tatsächliche, nicht-positive Wert
@@ -101,18 +108,23 @@ public final class GoodnessOfFit {
     public static ChiSquareResult calculateReducedChiSquare(List<double[]> data, CurveFitting.FunctionEvaluator func,
                                                             int parameterCount, IntToDoubleFunction sigmaAt) {
         int n = data.size();
-        int dof = n - parameterCount;
-
-        if (dof <= 0) {
-            return new ChiSquareResult(Double.NaN, dof);
-        }
 
         double sumChiSq = 0;
+        int evaluablePoints = 0;
         for (int i = 0; i < n; i++) {
             double[] pt = data.get(i);
-            double diff = pt[1] - func.eval(pt[0]);
+            double modelY = func.eval(pt[0]);
+            if (!Double.isFinite(modelY)) continue;
+
+            double diff = pt[1] - modelY;
             double sigma = sigmaAt.applyAsDouble(i);
             sumChiSq += (diff * diff) / (sigma * sigma);
+            evaluablePoints++;
+        }
+
+        int dof = evaluablePoints - parameterCount;
+        if (dof <= 0) {
+            return new ChiSquareResult(Double.NaN, dof);
         }
 
         return new ChiSquareResult(sumChiSq / dof, dof);

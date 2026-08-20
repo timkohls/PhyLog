@@ -258,6 +258,10 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         itemExp.addActionListener(_ -> chartPanel.setFitMode(ChartPanel.FitMode.EXPONENTIAL));
         fitButtonGroup.add(itemExp);
 
+        JRadioButtonMenuItem itemPowerLaw = new JRadioButtonMenuItem("Potenzfunktion");
+        itemPowerLaw.addActionListener(_ -> chartPanel.setFitMode(ChartPanel.FitMode.POWER_LAW));
+        fitButtonGroup.add(itemPowerLaw);
+
         // --- Fit-Bezug: auf welche Messgröße(n) sich Fit & Chi² beziehen ---
         JMenu menuFitTarget = new JMenu("Fit bezieht sich auf");
         JRadioButtonMenuItem[] fitTargetItems = Theme.radioMenuGroup(menuFitTarget, 0,
@@ -320,6 +324,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         menuFit.add(menuPoly);
         menuFit.add(itemSinus);
         menuFit.add(itemExp);
+        menuFit.add(itemPowerLaw);
         menuFit.addSeparator();
         menuFit.add(menuFitTarget);
         menuFit.addSeparator();

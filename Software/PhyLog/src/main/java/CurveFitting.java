@@ -2,10 +2,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Reine Ausgleichsrechnung (lineare/polynomiale, exponentielle und sinusförmige Regression),
- * losgelöst von jeder Zeichen- oder Sensor-Logik. Nimmt fertige (Zeit, Messwert)-Paare entgegen
- * und liefert ein {@link FitResult} mit der angepassten Funktion sowie einer für Menschen
- * lesbaren Beschreibung der ermittelten Parameter.
+ * Reine Ausgleichsrechnung (lineare/polynomiale, exponentielle, potenzielle und sinusförmige
+ * Regression), losgelöst von jeder Zeichen- oder Sensor-Logik. Nimmt fertige
+ * (Zeit, Messwert)-Paare entgegen und liefert ein {@link FitResult} mit der angepassten
+ * Funktion sowie einer für Menschen lesbaren Beschreibung der ermittelten Parameter.
  */
 public final class CurveFitting {
 
@@ -150,6 +150,69 @@ public final class CurveFitting {
         if (Math.abs(b) > 1e-12) {
             double halfOrDoubleTime = Math.log(2) / Math.abs(b);
             params.add((b < 0 ? "Halbwertszeit" : "Verdopplungszeit") + " = " + fmt(halfOrDoubleTime) + " " + xUnit);
+        }
+
+        return new FitResult(func, 2, new FitDescription(equation, params));
+    }
+
+    /**
+     * Potenz-Ausgleichsrechnung f(x) = a * x^n, indem der Fit im doppelt-logarithmierten Raum
+     * (ln(y) = ln(a) + n*ln(x)) linear gelöst wird. Punkte mit x &lt;= 0 oder y &lt;= 0 werden
+     * übersprungen, da der Logarithmus dort nicht definiert ist.
+     *
+     * <p>Wie bei {@link #fitExponential}: minimiert die Fehlerquadrate im logarithmischen statt
+     * im Originalraum, was für die meisten praktischen Zwecke ausreichend genau ist.</p>
+     *
+     * @return das Fit-Ergebnis, oder {@code null} bei weniger als 2 gültigen (x&gt;0, y&gt;0)
+     *         Messwerten
+     */
+    public static FitResult fitPowerLaw(List<double[]> data, String xUnit, String yUnit) {
+        double meanLnX = 0;
+        int count = 0;
+        for (double[] pt : data) {
+            if (pt[0] > 0 && pt[1] > 0) {
+                meanLnX += Math.log(pt[0]);
+                count++;
+            }
+        }
+        if (count < 2) return null;
+        meanLnX /= count;
+
+        double sumLnX = 0, sumLnY = 0, sumLnXLnY = 0, sumLnX2 = 0;
+
+        for (double[] pt : data) {
+            if (pt[0] > 0 && pt[1] > 0) {
+                double lnXc = Math.log(pt[0]) - meanLnX;
+                double lnY = Math.log(pt[1]);
+                sumLnX += lnXc;
+                sumLnY += lnY;
+                sumLnXLnY += lnXc * lnY;
+                sumLnX2 += lnXc * lnXc;
+            }
+        }
+
+        double denom = (count * sumLnX2 - sumLnX * sumLnX);
+        if (Math.abs(denom) <= 1e-9) return null;
+
+        double n = (count * sumLnXLnY - sumLnX * sumLnY) / denom;
+        double lnAAtMeanLnX = (sumLnY - n * sumLnX) / count;
+
+        // "a" bezieht sich auf x=1 (ln(x)=0), nicht auf x=exp(meanLnX) - daher Rückrechnung
+        // analog zur Entzentrierung bei fitExponential.
+        double a = Math.exp(lnAAtMeanLnX - n * meanLnX);
+
+        FunctionEvaluator func = x -> a * Math.pow(x, n);
+
+        String equation = "f(x) = " + fmt(a) + " · x^(" + fmt(n) + ")";
+        List<String> params = new ArrayList<>();
+        params.add("Vorfaktor a = " + fmt(a) + " " + yUnit + " (bei x=1 " + xUnit + ")");
+        params.add("Exponent n = " + fmt(n));
+        if (Math.abs(n) < 1e-9) {
+            params.add("Hinweis: n ≈ 0 → nahezu konstanter Verlauf");
+        } else if (n > 0) {
+            params.add("Verhalten: streng monoton wachsend für x > 0");
+        } else {
+            params.add("Verhalten: streng monoton fallend für x > 0");
         }
 
         return new FitResult(func, 2, new FitDescription(equation, params));
