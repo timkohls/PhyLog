@@ -440,9 +440,19 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
             lblTriggerStatus.setForeground(Theme.WARNING);
         }
         new SwingWorker<String, Void>() {
+            private List<String> refreshedPortNames;
+
             @Override
             protected String doInBackground() {
-                return connectionController.identifyPhyLogPort(candidates);
+                String result = connectionController.identifyPhyLogPort(candidates);
+                // Portliste bewusst erst NACH der Suche neu einlesen: candidates/identifyPhyLogPort
+                // arbeiten ohnehin schon auf den aktuellen System-Ports, aber der portSelector zeigt
+                // noch den Stand vom letzten refreshPortsAsync. War der gefundene Port zu diesem
+                // Zeitpunkt noch nicht verfügbar (z. B. beim Programmstart), fehlte er bisher im
+                // Dropdown, sodass unten kein Eintrag zum Selektieren gefunden wurde - verbunden
+                // wurde trotzdem, nur eben nicht korrekt angezeigt.
+                refreshedPortNames = connectionController.listPortNames();
+                return result;
             }
 
             @Override
@@ -455,6 +465,18 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
                 } catch (Exception ex) {
                     found = null;
                 }
+
+                if (refreshedPortNames != null) {
+                    Object previouslySelected = portSelector.getSelectedItem();
+                    portSelector.removeAllItems();
+                    for (String name : refreshedPortNames) {
+                        portSelector.addItem(name);
+                    }
+                    if (found == null && previouslySelected != null) {
+                        portSelector.setSelectedItem(previouslySelected);
+                    }
+                }
+
                 if (found == null) {
                     updateStatusLabel();
                     JOptionPane.showMessageDialog(GUI.this,
@@ -662,8 +684,9 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     }
 
     /** Importiert eine CSV-Datei in genau einen Kanal, der andere bleibt unangetastet. Leert
-     *  vorher nur dessen Tabelle und schaltet sie von einem eventuellen Momentaufnahme-Modus
-     *  zurück auf die zeitbasierte Spalte. */
+     *  vorher dessen Tabelle; ob die Spalte danach "Zeit (s)" oder "Index" heißt, ergibt sich aus
+     *  der Kopfzeile der importierten Datei (siehe {@link DataFileService#readCsv}) statt fest
+     *  auf Zeit zurückgesetzt zu werden. */
     private void importCsvIntoChannel(File file, MeasurementChannel ch) {
         ch.tableModel.setRowCount(0);
         ch.snapshotMode = false;
@@ -681,8 +704,15 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
                         sensorDetected[0] = true;
                         ch.sensor = detectedSensor;
                         updateTableLayout();
+                    },
+                    () -> {
+                        // Kopfzeile stammt von einer zuvor exportierten Momentaufnahme ("Index"-
+                        // Spalte). Feuert vor der ersten Zeile, daher hier noch gefahrlos umschaltbar.
+                        ch.snapshotMode = true;
+                        configureTableModel(ch);
                     });
             if (!sensorDetected[0]) {
+                updateChartUnits();
                 updateChartData();
             }
         } catch (IOException e) {
@@ -782,6 +812,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         // Momentaufnahme-Spalte "Index".
         resetSnapshotHeaderIfNeeded(channelA);
         resetSnapshotHeaderIfNeeded(channelB);
+        updateChartUnits();
 
         // Ein aktives Zoom-Fenster bezieht sich auf den X-Bereich der vorherigen Aufzeichnung;
         // die neue beginnt wieder bei Zeit 0 und würde sonst außerhalb des alten Fensters landen
@@ -1040,6 +1071,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
 
         prepareSnapshotHeader(channelA);
         prepareSnapshotHeader(channelB);
+        updateChartUnits();
         acquisitionEngine.captureSnapshot();
 
         lblTriggerStatus.setText("Momentaufnahme aufgenommen");
@@ -1189,7 +1221,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     }
 
     /** Setzt Achsentitel, Einheiten und Legendenbeschriftung passend zum aktuellen Sensor-
-     *  Zustand (Zeitreihe vs. Frequenzspektrum, ein vs. zwei aktive Kanäle). */
+     *  Zustand (Zeitreihe vs. Frequenzspektrum vs. Momentaufnahme, ein vs. zwei aktive Kanäle). */
     private void updateChartUnits() {
         if (chartPanel == null) return;
 
@@ -1205,18 +1237,33 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         }
 
         chartPanel.setColorByMagnitude(false);
-        chartPanel.setXAxisTitle("Zeit");
 
         boolean hasA = channelA.hasSensor();
         boolean hasB = channelB.hasSensor();
 
+        // Bei Start/Momentaufnahme über die Toolbar-Buttons schalten prepareSnapshotHeader()/
+        // resetSnapshotHeaderIfNeeded() snapshotMode stets für beide aktiven Kanäle gemeinsam um.
+        // Per CSV-Import (siehe importCsvIntoChannel) kann sich aber jeder Kanal unabhängig auf
+        // Zeit oder Index befinden - dieser Fall wird hier erkannt und sichtbar gemacht, statt
+        // stillschweigend nur Kanal A für die X-Achse zu übernehmen.
         if (!hasA && hasB) {
+            boolean snapshotMode = channelB.snapshotMode;
+            chartPanel.setXAxisTitle(snapshotMode ? "Index" : "Zeit");
             List<Sensor.Quantity> quantitiesB = channelB.sensor.getQuantities();
             String axisLabel = quantitiesB.isEmpty() ? "Messwert" : quantitiesB.getFirst().getColumnHeader();
-            chartPanel.setUnits("s", axisLabel);
+            chartPanel.setUnits(snapshotMode ? "" : "s", axisLabel);
             chartPanel.setMainLabel(quantitiesB.isEmpty() ? "Kanal B" : "Kanal B: " + quantitiesB.getFirst().getColumnHeader());
             return;
         }
+
+        boolean snapshotModeA = channelA.snapshotMode;
+        boolean mixedXAxisModes = hasB && (snapshotModeA != channelB.snapshotMode);
+
+        // Kanal A und B beziehen sich im gemischten Fall (z. B. A: Zeit, B: Index aus einer
+        // importierten Momentaufnahme) nicht auf dieselbe X-Größe - eine gemeinsame Achse wäre
+        // irreführend, daher deutlich als Konflikt kennzeichnen statt einen der beiden Modi
+        // stillschweigend zu bevorzugen.
+        chartPanel.setXAxisTitle(mixedXAxisModes ? "Zeit (s) / Index (gemischt)" : (snapshotModeA ? "Index" : "Zeit"));
 
         List<Sensor.Quantity> quantitiesA = channelA.sensor.getQuantities();
         boolean useSpecificAxisLabels = dualYAxisMode && hasB;
@@ -1224,7 +1271,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         String axisLabel = (hasB && !useSpecificAxisLabels)
                 ? "Messwerte"
                 : (quantitiesA.isEmpty() ? "Messwert" : quantitiesA.getFirst().getColumnHeader());
-        chartPanel.setUnits("s", axisLabel);
+        chartPanel.setUnits(mixedXAxisModes ? "" : (snapshotModeA ? "" : "s"), axisLabel);
 
         String labelA = quantitiesA.isEmpty() ? "Kanal A" : "Kanal A: " + quantitiesA.getFirst().getColumnHeader();
         chartPanel.setMainLabel(labelA);

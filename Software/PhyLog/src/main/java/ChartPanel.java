@@ -186,6 +186,8 @@ public class ChartPanel extends JPanel {
      *  {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL_GAUSSIAN}. */
     private double[] cachedGaussianResiduals = null;
     private double cachedGaussianBandwidth = 0;
+    /** Zwischengespeicherter konstanter Wert für {@link GoodnessOfFit.SigmaMode#DIFFERENCE_BASED}. */
+    private double cachedDifferenceSigma = Double.NaN;
 
     // --- Fit-Cache: Regression ist teuer, wird nur bei tatsächlicher Änderung neu berechnet
     // (nicht bei jedem repaint(), z. B. wegen einer Mausbewegung). Die Standardabweichung
@@ -409,6 +411,13 @@ public class ChartPanel extends JPanel {
     public void setXAxisTitle(String title) {
         this.xAxisTitle = (title != null && !title.isBlank()) ? title.trim() : "Zeit";
         repaint();
+    }
+
+    /** Achsenbeschriftung aus Titel und Einheit; ohne Einheit (z. B. "Index" bei einer
+     *  Momentaufnahme, siehe {@link #setUnits}) wird die Klammer weggelassen statt "Index ()"
+     *  anzuzeigen. */
+    private String xAxisLabelText() {
+        return xUnit.isBlank() ? xAxisTitle : xAxisTitle + " (" + xUnit + ")";
     }
 
     /** Setzt die Bezeichnung der Hauptmessgröße (Kanal A) für die Legende. */
@@ -887,7 +896,7 @@ public class ChartPanel extends JPanel {
 
         g2.setColor(Theme.TEXT);
         g2.setFont(new Font("SansSerif", Font.BOLD, 11));
-        g2.drawString(xAxisTitle + " (" + xUnit + ")", padding + plotWidth / 2 - 30, height - padding + 35);
+        g2.drawString(xAxisLabelText(), padding + plotWidth / 2 - 30, height - padding + 35);
 
         g2.setColor(primaryAxisColor);
         g2.drawString(yUnit, padding - 50, padding - 15);
@@ -1176,7 +1185,11 @@ public class ChartPanel extends JPanel {
 
         int boxX = width - rightPadding - totalWidth - 5;
 
-        Color statusColor = GoodnessOfFit.colorFor(currentReducedChiSquare);
+        // gradientColorFor statt colorFor: die Box soll exakt die Farbe zeigen, die auch an
+        // dieser Stelle auf der Farbskala im ChiSquareInfoDialog steht (kontinuierlich), nicht
+        // die stufige Bewertungskategorie - sonst wich die Farbe nahe einer Stufengrenze sichtbar
+        // vom Farbverlauf im Dialog ab.
+        Color statusColor = GoodnessOfFit.gradientColorFor(currentReducedChiSquare);
 
         g2.setColor(Theme.PANEL);
         g2.fillRoundRect(boxX, topY, totalWidth, boxHeight, 8, 8);
@@ -1244,6 +1257,7 @@ public class ChartPanel extends JPanel {
             case RESIDUAL_LOCAL_GAUSSIAN -> (cachedGaussianResiduals != null)
                     ? GoodnessOfFit.gaussianWeightedSigma(fitData, cachedGaussianResiduals, cachedGaussianBandwidth, fitData.get(i)[0])
                     : standardDeviation;
+            case DIFFERENCE_BASED -> !Double.isNaN(cachedDifferenceSigma) ? cachedDifferenceSigma : standardDeviation;
             default -> standardDeviation;
         };
     }
@@ -1256,6 +1270,7 @@ public class ChartPanel extends JPanel {
             case RESIDUAL_LOCAL_GAUSSIAN -> (cachedGaussianResiduals != null)
                     ? GoodnessOfFit.gaussianWeightedSigma(fitData, cachedGaussianResiduals, cachedGaussianBandwidth, x)
                     : standardDeviation;
+            case DIFFERENCE_BASED -> !Double.isNaN(cachedDifferenceSigma) ? cachedDifferenceSigma : standardDeviation;
             default -> standardDeviation;
         };
     }
@@ -1267,13 +1282,14 @@ public class ChartPanel extends JPanel {
         sigmaCacheDirty = false;
 
         CurveFitting.FunctionEvaluator func = (fit != null) ? fit.function : null;
-        int paramCount = (fit != null) ? fit.parameterCount : 0;
+
         GoodnessOfFit.SigmaEstimate estimate =
                 GoodnessOfFit.estimateSigma(fitData, func, sigmaMode, localSigmaNeighbors);
 
         cachedLocalSigmas = estimate.localSigmas;
         cachedGaussianResiduals = estimate.residuals;
         cachedGaussianBandwidth = estimate.gaussianBandwidth;
+        cachedDifferenceSigma = estimate.constantSigma;
     }
 
     /** Zeichnet die Fit-Kurve als gestrichelte Linie mit einem sigma-breiten Toleranzband
@@ -1350,12 +1366,13 @@ public class ChartPanel extends JPanel {
         double realX = geo.minX + ((double) (mx - geo.padding) / geo.plotWidth) * geo.rangeX;
         double realY = geo.minY + ((double) ((geo.height - geo.padding) - my) / geo.plotHeight) * geo.rangeY;
 
+        String xUnitSuffix = xUnit.isBlank() ? "" : " " + xUnit;
         String coordStr;
         if (geo.hasSecondaryAxis) {
             double realY2 = geo.minY2 + ((double) ((geo.height - geo.padding) - my) / geo.plotHeight) * geo.rangeY2;
-            coordStr = String.format("X: %.2f %s | A: %.2f | B: %.2f", realX, xUnit, realY, realY2);
+            coordStr = String.format("X: %.2f%s | A: %.2f | B: %.2f", realX, xUnitSuffix, realY, realY2);
         } else {
-            coordStr = String.format("X: %.2f %s | Y: %.2f", realX, xUnit, realY);
+            coordStr = String.format("X: %.2f%s | Y: %.2f", realX, xUnitSuffix, realY);
         }
 
         g2.setFont(Theme.FONT_HINT);

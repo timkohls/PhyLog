@@ -39,7 +39,14 @@ public final class GoodnessOfFit {
         RESIDUAL_LOCAL,
         /** Wie {@link #RESIDUAL_LOCAL}, aber mit fließendem Gauß-Kernel über den X-Abstand
          *  gewichtet statt hartem Fenster - dadurch glatt statt stufig. */
-        RESIDUAL_LOCAL_GAUSSIAN
+        RESIDUAL_LOCAL_GAUSSIAN,
+        /** Ein einzelner, konstanter Wert, geschätzt aus den Differenzen benachbarter Messwerte
+         *  (Rice-Schätzer) - unabhängig vom Fit-Modell, daher nicht zirkulär wie die beiden
+         *  {@code RESIDUAL_LOCAL*}-Modi. Setzt voraus, dass sich das zugrunde liegende Signal von
+         *  Punkt zu Punkt nur wenig ändert (glatt relativ zur Punktdichte); sonst wird echte
+         *  Signalkrümmung fälschlich als Rauschen gezählt und sigma überschätzt. Funktioniert auch
+         *  ohne aktiven Fit. */
+        DIFFERENCE_BASED
     }
 
     /** Ergebnis von {@link #calculateReducedChiSquare}. */
@@ -60,11 +67,18 @@ public final class GoodnessOfFit {
         public final double[] localSigmas;
         public final double[] residuals;
         public final double gaussianBandwidth;
+        /** Nur bei {@link SigmaMode#DIFFERENCE_BASED} belegt, sonst {@link Double#NaN}. */
+        public final double constantSigma;
 
         SigmaEstimate(double[] localSigmas, double[] residuals, double gaussianBandwidth) {
+            this(localSigmas, residuals, gaussianBandwidth, Double.NaN);
+        }
+
+        SigmaEstimate(double[] localSigmas, double[] residuals, double gaussianBandwidth, double constantSigma) {
             this.localSigmas = localSigmas;
             this.residuals = residuals;
             this.gaussianBandwidth = gaussianBandwidth;
+            this.constantSigma = constantSigma;
         }
     }
 
@@ -81,14 +95,44 @@ public final class GoodnessOfFit {
         return ChiRating.UNDERFIT;
     }
 
-    /** Liefert die Anzeigefarbe für einen reduzierten Chi-Quadrat-Wert, konsistent mit {@link #rate(double)}. */
-    public static Color colorFor(double reducedChiSquare) {
-        return switch (rate(reducedChiSquare)) {
-            case OVERFIT, MODERATE -> Theme.WARNING;
-            case GOOD -> Theme.SUCCESS;
-            case UNDERFIT -> Theme.DANGER;
-            case NOT_EVALUABLE -> Theme.MUTED;
-        };
+    /** Obere Grenze der Farbskala in {@link #gradientColorFor}; Werte darüber werden wie dieser
+     *  Wert selbst dargestellt. Gemeinsam mit {@link #GRADIENT_MIDPOINT_FRACTION} die einzige
+     *  Quelle für die Balkengeometrie in {@code ChiSquareInfoDialog#buildScaleBar} - so kann die
+     *  dort gezeichnete Skala nicht mehr von der hier berechneten Farbe abweichen. */
+    public static final double GRADIENT_REFERENCE_SCALE = 4.0;
+
+    /** Anteil von {@link #GRADIENT_REFERENCE_SCALE}, an dem die Skala ihren Sattelpunkt
+     *  (reines {@code Theme.SUCCESS}) hat. */
+    public static final double GRADIENT_MIDPOINT_FRACTION = 0.35;
+
+    /**
+     * Liefert dieselbe kontinuierlich interpolierte Farbe, die auch die Farbskala in
+     * {@code ChiSquareInfoDialog} für die jeweilige Stelle zeichnet (WARNING -&gt; SUCCESS ->
+     * DANGER über {@link #GRADIENT_REFERENCE_SCALE}, mit Sattelpunkt bei
+     * {@link #GRADIENT_MIDPOINT_FRACTION}).
+     * Diese Farbe stetig mit {@code reducedChiSquare} - für Anzeigen, die an
+     * exakt derselben Stelle stehen sollen wie der Marker auf der Farbskala (z. B. die
+     * Chi²-Überlagerung im Chart).</p>
+     */
+    public static Color gradientColorFor(double reducedChiSquare) {
+        if (Double.isNaN(reducedChiSquare)) return Theme.MUTED;
+
+        double clamped = Math.clamp(reducedChiSquare, 0, GRADIENT_REFERENCE_SCALE);
+        double midpoint = GRADIENT_MIDPOINT_FRACTION * GRADIENT_REFERENCE_SCALE;
+
+        if (clamped <= midpoint) {
+            return interpolateColor(Theme.WARNING, Theme.SUCCESS, clamped / midpoint);
+        }
+        return interpolateColor(Theme.SUCCESS, Theme.DANGER,
+                (clamped - midpoint) / (GRADIENT_REFERENCE_SCALE - midpoint));
+    }
+
+    private static Color interpolateColor(Color from, Color to, double t) {
+        double clampedT = Math.clamp(t, 0, 1);
+        int r = (int) Math.round(from.getRed() + clampedT * (to.getRed() - from.getRed()));
+        int g = (int) Math.round(from.getGreen() + clampedT * (to.getGreen() - from.getGreen()));
+        int b = (int) Math.round(from.getBlue() + clampedT * (to.getBlue() - from.getBlue()));
+        return new Color(r, g, b);
     }
 
     /**
@@ -139,6 +183,10 @@ public final class GoodnessOfFit {
     public static SigmaEstimate estimateSigma(List<double[]> data, CurveFitting.FunctionEvaluator func,
                                               SigmaMode mode, int localNeighbors) {
         int n = data.size();
+        if (mode == SigmaMode.DIFFERENCE_BASED) {
+            // Modellunabhängig - funktioniert auch ohne aktiven Fit.
+            return new SigmaEstimate(null, null, 0, riceSigma(data));
+        }
         if (func == null || n == 0 || mode == SigmaMode.CONSTANT) {
             return new SigmaEstimate(null, null, 0);
         }
@@ -160,6 +208,31 @@ public final class GoodnessOfFit {
             localSigmas[i] = Math.max(1e-6, localWindowStdDev(residuals, i, k));
         }
         return new SigmaEstimate(localSigmas, null, 0);
+    }
+
+    /**
+     * Modellunabhängige Schätzung eines konstanten Rauschpegels aus den Differenzen benachbarter
+     * Messwerte (Rice-Schätzer): sigma² &asymp; Summe((y_i+1 - y_i)&sup2;) / (2&middot;(n-1)).
+     *
+     * <p>Verwendet keinen Fit und ist daher nicht zirkulär wie {@link SigmaMode#RESIDUAL_LOCAL}
+     * bzw. {@link SigmaMode#RESIDUAL_LOCAL_GAUSSIAN}. Die Annahme dahinter: das zugrunde liegende
+     * Signal ändert sich von einem Messpunkt zum nächsten kaum, sodass die Differenz benachbarter
+     * y-Werte überwiegend vom Messrauschen stammt. Bei grober Punktdichte relativ zur
+     * Signalkrümmung überschätzt dieser Schätzer sigma, da echte Signaländerung mit eingerechnet
+     * wird. Erwartet nach x sortierte Daten.</p>
+     *
+     * @return 0 bei weniger als 2 Datenpunkten
+     */
+    public static double riceSigma(List<double[]> data) {
+        int n = data.size();
+        if (n < 2) return 0;
+
+        double sumSq = 0;
+        for (int i = 1; i < n; i++) {
+            double dy = data.get(i)[1] - data.get(i - 1)[1];
+            sumSq += dy * dy;
+        }
+        return Math.sqrt(sumSq / (2.0 * (n - 1)));
     }
 
     /** Mittlere quadratische Residuenstreuung im Index-Fenster um Punkt {@code i}. */

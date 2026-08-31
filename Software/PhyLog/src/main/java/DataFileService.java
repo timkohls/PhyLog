@@ -51,10 +51,13 @@ public final class DataFileService {
      * Sensor-Erkennung genutzt; jede gültige Zahlen-Zeile mit mindestens {@code columnCount}
      * Spalten wird an {@code rowConsumer} übergeben.
      *
-     * @param onSensorDetected Callback, falls aus der Kopfzeile ein Sensor erkannt wurde (optional)
+     * @param onSensorDetected        Callback, falls aus der Kopfzeile ein Sensor erkannt wurde (optional)
+     * @param onSnapshotHeaderDetected Callback, falls die erste Spalte der Kopfzeile "Index" heißt,
+     *                                 die Datei also eine zuvor exportierte Momentaufnahme ist (optional).
+     *                                 Feuert vor dem ersten Aufruf von {@code rowConsumer}.
      */
     public static void readCsv(File file, int columnCount, RowConsumer rowConsumer,
-                                Consumer<Sensor> onSensorDetected) throws IOException {
+                               Consumer<Sensor> onSensorDetected, Runnable onSnapshotHeaderDetected) throws IOException {
         try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
             String line;
             boolean isFirstLine = true;
@@ -68,6 +71,9 @@ public final class DataFileService {
                 if (isFirstLine) {
                     isFirstLine = false;
                     if (line.toLowerCase().contains("zeit") || (parts.length >= 2 && !isNumeric(parts[0]))) {
+                        if (parts[0].trim().equalsIgnoreCase("Index") && onSnapshotHeaderDetected != null) {
+                            onSnapshotHeaderDetected.run();
+                        }
                         if (parts.length >= 2 && onSensorDetected != null) {
                             Sensor detected = detectSensorFromHeader(parts[1]);
                             if (detected != null) onSensorDetected.accept(detected);

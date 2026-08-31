@@ -8,9 +8,6 @@ import java.util.List;
 public class ChiSquareInfoDialog extends JDialog {
 
     private static final int CONTENT_WIDTH = 420;
-    /** Obere Grenze der animierten Farbskala, siehe {@link #buildScaleBar}; Werte darüber werden
-     *  auf diesen Wert begrenzt dargestellt. */
-    private static final double BAR_REFERENCE_SCALE = 4.0;
 
     /** Als Feld gehalten, damit {@link #buildScaleBar} sie beim Schließen des Dialogs stoppen
      *  kann - sonst würde die bis zu 3s laufende Animation nach vorzeitigem Schließen unnötig
@@ -39,11 +36,16 @@ public class ChiSquareInfoDialog extends JDialog {
 
         mainPanel.add(buildHeader(sigmaMode));
         mainPanel.add(Box.createVerticalStrut(16));
+        mainPanel.add(buildSigmaGuideCard(sigmaMode));
+        mainPanel.add(Box.createVerticalStrut(14));
 
         if (rating == GoodnessOfFit.ChiRating.NOT_EVALUABLE) {
             mainPanel.add(buildNotEvaluableCard(degreesOfFreedom));
         } else {
-            Color ratingColor = GoodnessOfFit.colorFor(reducedChiSquare);
+            // gradientColorFor statt colorFor, damit die Bewertungsfarbe hier exakt der Stelle auf
+            // der Farbskala weiter unten entspricht (siehe #buildScaleBar) statt an den
+            // rate()-Stufengrenzen abrupt zu springen.
+            Color ratingColor = GoodnessOfFit.gradientColorFor(reducedChiSquare);
             String ratingText = ratingText(rating);
 
             mainPanel.add(buildStatRow(reducedChiSquare, degreesOfFreedom, ratingText, ratingColor));
@@ -168,7 +170,65 @@ public class ChiSquareInfoDialog extends JDialog {
             case CONSTANT -> "konstant";
             case RESIDUAL_LOCAL -> "lokal, hartes Fenster";
             case RESIDUAL_LOCAL_GAUSSIAN -> "lokal, Gauß-gewichtet";
+            case DIFFERENCE_BASED -> "differenzbasiert";
         };
+    }
+
+    /** Kurze, modusunabhängig immer sichtbare Entscheidungshilfe: wann welcher σ-Modus
+     *  sinnvoll ist. Der aktuell gewählte Modus wird hervorgehoben, die anderen bleiben als
+     *  Vergleich sichtbar - ansonsten müsste man den Dialog neu öffnen, um zwischen den
+     *  Optionen abzuwägen. */
+    private JPanel buildSigmaGuideCard(GoodnessOfFit.SigmaMode current) {
+        RoundedPanel card = new RoundedPanel(Theme.CARD, Theme.CARD_ARC);
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setBorder(BorderFactory.createEmptyBorder(10, 14, 10, 14));
+        card.setAlignmentX(Component.CENTER_ALIGNMENT);
+        card.setMaximumSize(new Dimension(CONTENT_WIDTH, Integer.MAX_VALUE));
+
+        JLabel title = new JLabel("Welchen σ-Modus wählen?");
+        title.setFont(new Font("SansSerif", Font.BOLD, 12));
+        title.setForeground(Theme.TEXT);
+        title.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.add(title);
+
+        JLabel subtitle = new JLabel("Je nachdem, wie die Punkte um deine Kurve streuen:");
+        subtitle.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        subtitle.setForeground(Theme.MUTED);
+        subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.add(subtitle);
+        card.add(Box.createVerticalStrut(6));
+
+        String html = "<html><div style='width: 340px;'>" + guideLine("Konstant", current == GoodnessOfFit.SigmaMode.CONSTANT,
+                "Sensorgenauigkeit ist bekannt (Datenblatt, Kalibrierschein) - unabhängig davon, wie die "
+                        + "Daten aussehen.") +
+                guideLine("Differenzbasiert", current == GoodnessOfFit.SigmaMode.DIFFERENCE_BASED,
+                        "Sensorgenauigkeit unbekannt, Streuung der Punkte um die Kurve sieht überall etwa gleich "
+                                + "breit aus. Im Zweifel die einfachste automatische Wahl.") +
+                guideLine("Lokal, stufig", current == GoodnessOfFit.SigmaMode.RESIDUAL_LOCAL,
+                        "Streuung der Punkte ändert sich sichtbar über den Messbereich, x-Werte einigermaßen "
+                                + "gleichmäßig verteilt.") +
+                guideLine("Lokal, weich", current == GoodnessOfFit.SigmaMode.RESIDUAL_LOCAL_GAUSSIAN,
+                        "Wie „lokal, stufig“, aber x-Werte ungleichmäßig verteilt oder glatter statt "
+                                + "stufiger Verlauf gewünscht.") +
+                "</div></html>";
+
+        JLabel body = new JLabel(html);
+        body.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        body.setForeground(Theme.TEXT);
+        body.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.add(body);
+
+        return card;
+    }
+
+    /** Baut eine einzelne Zeile der Entscheidungshilfe; die aktive Auswahl wird fett und in der
+     *  Akzentfarbe hervorgehoben, damit man sie unter den anderen Optionen sofort wiederfindet. */
+    private String guideLine(String modeName, boolean isCurrent, String explanation) {
+        String accentHex = String.format("#%02x%02x%02x", Theme.ACCENT.getRed(), Theme.ACCENT.getGreen(), Theme.ACCENT.getBlue());
+        String label = isCurrent
+                ? "<b style='color:" + accentHex + "'>" + modeName + " (aktuell)</b>"
+                : "<b>" + modeName + "</b>";
+        return label + " – " + explanation + "<br><br>";
     }
 
     private JPanel buildStatRow(double reducedChiSquare, int degreesOfFreedom, String ratingText, Color ratingColor) {
@@ -240,12 +300,19 @@ public class ChiSquareInfoDialog extends JDialog {
                 int barHeight = 14;
                 int barY = 4;
 
-                g2.setPaint(new GradientPaint(0, 0, Theme.WARNING, w * 0.35f, 0, Theme.SUCCESS));
-                g2.fillRoundRect(0, barY, (int) (w * 0.5f), barHeight, 6, 6);
-                g2.setPaint(new GradientPaint(w * 0.35f, 0, Theme.SUCCESS, w, 0, Theme.DANGER));
-                g2.fillRoundRect((int) (w * 0.35f) - 2, barY, w - (int) (w * 0.35f) + 2, barHeight, 6, 6);
+                // Geometrie bewusst aus denselben Konstanten wie GoodnessOfFit.gradientColorFor
+                // abgeleitet (GRADIENT_REFERENCE_SCALE/GRADIENT_MIDPOINT_FRACTION) - so kann diese
+                // gezeichnete Skala nie mehr von der dort berechneten Farbe abweichen, z. B. in der
+                // Chi²-Überlagerung im Chart.
+                float midpointX = w * (float) GoodnessOfFit.GRADIENT_MIDPOINT_FRACTION;
+                double referenceScale = GoodnessOfFit.GRADIENT_REFERENCE_SCALE;
 
-                double normalized = Math.min(markerValue[0], BAR_REFERENCE_SCALE) / BAR_REFERENCE_SCALE;
+                g2.setPaint(new GradientPaint(0, 0, Theme.WARNING, midpointX, 0, Theme.SUCCESS));
+                g2.fillRoundRect(0, barY, (int) (w * 0.5f), barHeight, 6, 6);
+                g2.setPaint(new GradientPaint(midpointX, 0, Theme.SUCCESS, w, 0, Theme.DANGER));
+                g2.fillRoundRect((int) midpointX - 2, barY, w - (int) midpointX + 2, barHeight, 6, 6);
+
+                double normalized = Math.min(markerValue[0], referenceScale) / referenceScale;
                 int markerX = (int) (normalized * (w - 6));
                 g2.setColor(Theme.TEXT);
                 g2.fillRoundRect(markerX, barY - 3, 6, barHeight + 6, 2, 2);
@@ -254,9 +321,9 @@ public class ChiSquareInfoDialog extends JDialog {
                 g2.setColor(Theme.MUTED);
                 int labelY = barY + barHeight + 13;
                 drawCenteredTick(g2, 0, "0", w, labelY);
-                drawCenteredTick(g2, (int) Math.round(GoodnessOfFit.CHI_OVERFIT_THRESHOLD / BAR_REFERENCE_SCALE * w), "0.8", w, labelY);
-                drawCenteredTick(g2, (int) Math.round(GoodnessOfFit.CHI_GOOD_THRESHOLD / BAR_REFERENCE_SCALE * w), "1.5", w, labelY);
-                drawCenteredTick(g2, (int) Math.round(GoodnessOfFit.CHI_MODERATE_THRESHOLD / BAR_REFERENCE_SCALE * w), "3.0", w, labelY);
+                drawCenteredTick(g2, (int) Math.round(GoodnessOfFit.CHI_OVERFIT_THRESHOLD / referenceScale * w), "0.8", w, labelY);
+                drawCenteredTick(g2, (int) Math.round(GoodnessOfFit.CHI_GOOD_THRESHOLD / referenceScale * w), "1.5", w, labelY);
+                drawCenteredTick(g2, (int) Math.round(GoodnessOfFit.CHI_MODERATE_THRESHOLD / referenceScale * w), "3.0", w, labelY);
             }
         };
         panel.setOpaque(false);
@@ -279,7 +346,7 @@ public class ChiSquareInfoDialog extends JDialog {
                     final long startTime = System.nanoTime();
 
                     final double targetValue =
-                            Math.min(reducedChiSquare, BAR_REFERENCE_SCALE);
+                            Math.min(reducedChiSquare, GoodnessOfFit.GRADIENT_REFERENCE_SCALE);
 
                     animationTimer = new Timer(16, null);
 

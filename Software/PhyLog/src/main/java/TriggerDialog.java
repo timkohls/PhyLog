@@ -11,8 +11,8 @@ public class TriggerDialog extends FormDialog {
         public boolean thresholdMode = false;
         /** {@code true} für steigende, {@code false} für fallende Flanke. */
         public boolean risingEdge = true;
-        /** Schwellenwert in Volt. */
-        public double threshold = 2.5;
+        /** Schwellenwert. */
+        public double threshold = 10;
         /** Vorlaufzeit vor dem Trigger in Millisekunden. */
         public int preTriggerMs = 100;
         /** Maximale Messdauer in ms (0 = unbegrenzt). */
@@ -50,7 +50,7 @@ public class TriggerDialog extends FormDialog {
         spPreTrigger = new JSpinner(new SpinnerNumberModel(current.preTriggerMs, 0, 5000, 50));
         addRow("Vorlaufzeit (ms):", spPreTrigger);
 
-        cbLimitDuration = new JCheckBox("Messdauer:");
+        cbLimitDuration = new JCheckBox("Messdauer (s):");
         cbLimitDuration.setFont(Theme.FONT_UI);
         cbLimitDuration.setOpaque(false);
         cbLimitDuration.setSelected(current.maxDurationMs > 0);
