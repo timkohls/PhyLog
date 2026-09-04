@@ -33,8 +33,20 @@ public abstract class Sensor {
     /** Dekodiert einen Rohwert der Firmware in eine physikalische Größe. */
     public abstract double decode(int slot, long rawValue);
 
-    /** @return Firmware-Typbezeichnung für den Sensor. */
+    /** @return Firmware-Typbezeichnung für den Sensor. Bei generischen Sensoren (siehe
+     *  {@link I2CSensor}) nur noch die Buskategorie (z. B. "I2C"), nicht mehr das konkrete
+     *  Sensormodell - die Firmware kennt einzelne Modelle wie INA219 oder VEML7700 nicht mehr. */
     public abstract String getFirmwareTypeName();
+
+    /** @return das komplette Payload für das serielle "SET,&lt;Kanal&gt;,&lt;Payload&gt;"-Kommando
+     *  (siehe {@code GUI.pushSensorSelectionToFirmware} und {@code processCommand} in
+     *  phylog_firmware.ino). Für die meisten Sensoren identisch zu {@link #getFirmwareTypeName()};
+     *  generische Sensortypen wie {@link I2CSensor} hängen hier zusätzlich ihre Konfiguration
+     *  (Adresse, Init-/Lesesequenz) an, damit die Firmware sie ansteuern kann, ohne das konkrete
+     *  Modell zu kennen. */
+    public String getFirmwareSetPayload() {
+        return getFirmwareTypeName();
+    }
 
     /** @return Liste der Messgrößen dieses Sensors. */
     public abstract List<Quantity> getQuantities();

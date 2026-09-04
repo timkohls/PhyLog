@@ -1,202 +1,34 @@
 /*
- * PhyLog ESP32 Firmware v8.3
+ * PhyLog ESP32 Firmware v9.0
  *
- * Sensortypen: I2C (INA219, VEML7700), HX711 (DOUT/SCK, kein I2C), Analog-Pin, ein
- * INMP441-Mikrofon (I2S), ein KY-003-Hall-Modul (digital) sowie ein DS18B20-Digitalthermometer
- * (1-Wire, siehe v8.1-Hinweis unten). Welcher Sensortyp auf Kanal A/B aktiv ist, wird
- * ausschließlich über das serielle Kommando SET,<Kanal>,<Typ> gesetzt (siehe
- * GUI.pushSensorSelectionToFirmware). Beide Kanäle starten bei TYPE_NONE, bis die Software eine
- * Auswahl sendet.
+ * Steuert zwei unabhängige Messkanäle (A/B). Ein Kanal bekommt seinen Sensortyp per
+ * SET,<Kanal>,<Typ>[,<Konfiguration>] (siehe GUI.pushSensorSelectionToFirmware), startet immer
+ * bei TYPE_NONE.
  *
- * <p>Jeder Kanal-Port (RJ45, 9 Pins) hat genau drei Signal-Pins (Pin 2, 3, 4 - siehe
- * pinout.md), deren Rolle sich erst beim SET-Kommando aus dem gewählten Sensortyp ergibt (siehe
- * {@link #configureChannelHardware}):
- *   I2C:       Pin2=SDA,  Pin3=SCL
- *   HX711:     Pin2=DOUT, Pin3=SCK
- *   I2S (Mic): Pin2=WS,   Pin3=BCLK, Pin4=SD
- *   Analog:    Pin2=Eingang
- *   1-Wire (DS18B20): Pin2=Datenleitung (braucht externen Pull-up nach 3,3V, siehe DS18B20Sensor.java)
- * Nie mehr als drei Adern pro Sensor, unabhängig vom Typ.</p>
+ * Die Firmware kennt nur noch generische Buskategorien, keine konkreten Sensormodelle mehr:
+ *   ANALOG    Pin2=Eingang                          keine Konfiguration
+ *   DIGITAL   Pin2=Eingang                           keine Konfiguration
+ *   I2C       Pin2=SDA, Pin3=SCL                     Adresse + Init-/Lese-Register, siehe parseI2CSetPayload
+ *   I2S       Pin2=WS, Pin3=BCLK, Pin4=SD            Modus RAW|SPEC
+ *   ONEWIRE   Pin2=Datenleitung (ext. Pull-up 4,7kΩ) Konversions-/Lesekommando + Byte-Layout, siehe parseOneWireSetPayload
+ *   HX711     Pin2=DOUT, Pin3=SCK                    keine Konfiguration (eigenes Protokoll, kein generisches Bus-Muster)
+ * Ein neuer Sensor mit einer dieser Schnittstellen (z.B. ein zweiter I2C-Sensor) braucht deshalb
+ * kein Firmware-Update - nur eine neue Java-Klasse (siehe I2CSensor.java/OneWireSensor.java).
  *
- * <p>Das Mikrofon nutzt bewusst den NEUEN I2S-Standardtreiber (driver/i2s_std.h), nicht den
- * alten driver/i2s.h: der alte Treiber bringt intern noch den Legacy-ADC-Treiber mit, der auf
- * aktuellen arduino-esp32-Versionen mit dem von analogRead() genutzten ADC-Treiber
- * ("driver_ng") kollidiert - das führte zu einem abort() beim Start, sobald irgendein Kanal auf
- * TYPE_ANALOG stand. Der neue Treiber betrifft den ADC-Pfad nicht.</p>
+ * Kanal A und B hängen an physisch getrennten Bussen (I2C: Wire/Wire1, I2S: Port 0/1), damit
+ * beide gleichzeitig denselben Typ nutzen können.
  *
- * <p>Kanal A und Kanal B hängen an physisch getrennten Bussen (I2C: Wire/Wire1, I2S: Port 0/1) -
- * das ist notwendig, sobald beide Kanäle gleichzeitig einen Sensor betreiben, auch denselben
- * Typ zweimal.</p>
- *
- * <p>v7.4: Kanal A, Pin 2 (SCL/SCK/BCLK) lag bisher auf GPIO12 - einem Strapping-Pin, der beim
- * Reset die Flash-Spannung festlegt. War beim Reset bereits ein Sensor angeschlossen, konnte der
- * ESP32 dadurch mit falscher Flash-Spannung booten und landete in einer Watchdog-Reset-Schleife
- * (TG0WDT_SYS_RESET), noch bevor setup() lief - nur per Reflash (zufällig verbunden mit einem
- * sauberen Reset) zu beheben. Kanal A liegt jetzt komplett auf GPIO 17/16/4 (Pin 2/3/4) - eine
- * auf dem 38-Pin-DevKitC zusammenhängende Dreiergruppe ohne Strapping-Pins, analog zu Kanal B
- * auf 27/26/25. Zusätzlich: automatischer I2C-Bus-Reset nach mehreren Fehlern in Folge (siehe
- * {@link #resetI2CBus}). (Stand v7.4 - diese Belegung wurde in v8.0 wegen fehlender ADC-Hardware
- * auf GPIO17/16 nochmal geändert, siehe dortiger Hinweis.)</p>
- *
- * <p>v7.5: Neuer Live-Modus fürs Mikrofon - statt (bzw. zusätzlich zu) dem einzelnen dB-Wert pro
- * Zyklus liefert das SPEC-Kommando laufend ein 512-Bin-Amplitudenspektrum (siehe
- * {@link #captureAndSendSpectrum}), berechnet über eine selbst geschriebene Radix-2-FFT
- * ({@link #computeFFT}) auf 1024 Samples je Bild.</p>
- *
- * <p>v7.6: Das separate SPEC-Kommando ist wieder weg - das Spektrum ist jetzt schlicht ein
- * eigener Sensortyp (TYPE_MIC_SPECTRUM, GUI-seitig "MICSPEC"), der sich wie jeder andere Sensor
- * über SET auswählen lässt und ganz normal an START/STOP hängt, statt eine eigene
- * Start/Stopp-Logik zu brauchen. captureAndSendSpectrum() läuft dabei weiterhin mit eigener
- * Taktung (SPECTRUM_INTERVAL_MS), unabhängig von der für normale Sensoren gedachten Abtastrate.</p>
- *
- * <p>v7.7: Baudrate auf 460800 vervierfacht (siehe BAUD_RATE) und SPECTRUM_INTERVAL_MS von
- * 250ms auf 60ms verkürzt - das Spektrum ist damit an der tatsächlich erreichbaren Grenze statt
- * an einer für die alte, langsamere Baudrate konservativ gewählten Konstante. GUI-seitig
- * erzwingt der Sensor-Dialog jetzt außerdem, dass ein Kanal automatisch auf "kein Sensor"
- * zurückfällt, sobald der andere Kanal ein Frequenzspektrum aufnimmt - zwei Mikrofon-Captures
- * gleichzeitig ergäben ohnehin nur unnötige Konkurrenz um dieselbe, jetzt knappere Bandbreite.</p>
- *
- * <p>v7.8: Neuer Sensortyp TYPE_HALL für das KY-003-Hall-Sensor-Modul - ein einfacher digitaler
- * Eingang (nur Pin 0 genutzt), Rohwert ist direkt digitalRead(). Wie bei allen anderen Sensoren
- * übernimmt die Java-Seite (HallEffectSensor) die Interpretation des Rohwerts, hier inklusive
- * der Invertierung, da das Modul active-low ist.</p>
- *
- * <p>v7.9: Zwei Sensoren konnten die eingestellte Abtastrate faktisch nicht einhalten, egal wie
- * hoch sie in der GUI gewählt wurde: Das Mikrofon (dB-Modus) las immer 256 I2S-Samples pro
- * Zyklus, was allein schon 16ms dauert und die Rate hart auf ~62 Hz deckelte - jetzt liest
- * {@link #microphoneReadSampleCount} dynamisch so viele Samples, wie in das aktuell eingestellte
- * Intervall passen. Der VEML7700 hatte eine Integrationszeit von 100ms (max. 10 Hz) - jetzt auf
- * die kürzeste verfügbare Einstellung (25ms, max. 40 Hz) reduziert. Java-seitig kennt jeder
- * Sensor jetzt seine realistische Obergrenze ({@link Sensor#getMaxSampleRateHz}), damit die GUI
- * gar nicht erst höhere Raten anbietet, als der jeweilige Sensor tatsächlich liefern kann.</p>
- *
- * <p>v8.0: TYPE_ANALOG las auf Kanal A immer 0 statt eines echten Messwerts - dessen Pin 2 lag
- * auf GPIO17, das hat auf dem klassischen ESP32 schlicht keine ADC-Hardware, {@code analogRead()}
- * darauf liefert deshalb unabhängig vom tatsächlich angelegten Signal konstant 0. Kanal B (Pin 2
- * = GPIO27, ein regulärer ADC2-Kanal) war davon nie betroffen - deshalb lag es nicht an
- * Wackelkontakt oder Spannungspegel, sondern schlicht an einem für Analog-Sensoren ungeeigneten
- * Pin. Statt das nur für TYPE_ANALOG per Sonderfall zu umgehen (und Kanal A/B dadurch dauerhaft
- * unterschiedliche Pin-Belegungen für Analog-Sensoren zu geben), liegt Kanal A jetzt komplett auf
- * GPIO 32/33/35 statt 17/16/4 (siehe {@link #PINS_CHANNEL_A}) - alle drei ADC1-fähig (Kanal B auf
- * 27/26/25 bleibt unverändert, dort war ohnehin schon jeder Pin ADC-fähig). Pin 2 ist damit auf
- * beiden Kanälen gleichermaßen der Analog-Eingang, ohne Sonderfall in {@link #sampleChannel} - nur
- * die interne Verdrahtung zwischen ESP32 und der Kanal-A-Buchse ändert sich (GPIO17->32,
- * GPIO16->33, GPIO4->35), an der Steckerbelegung selbst (Pin 2/3/4) ändert sich nichts. 35 statt
- * dem anfangs gewählten 34, weil 34/35/32/33 auf den gängigen 38-Pin-DevKitC-Boards als
- * zusammenhängender Viererblock direkt nebeneinander auf der Buchsenleiste liegen (34 am Rand,
- * dann 35/32/33) - mit 32/33/35 landen die drei tatsächlich genutzten Pins ohne Lücke
- * nebeneinander, statt mit 34 einen Pin mittendrin ungenutzt zu lassen. Genaue Reihenfolge je
- * nach Board-Variante im Zweifel gegen den eigenen Bestückungsplan/Aufdruck prüfen.</p>
- *
- * <p>v8.1: Neuer Sensortyp TYPE_DS18B20 für das digitale DS18B20-Thermometer am 1-Wire-Bus
- * (ersetzt den bisherigen NTC-Spannungsteiler-Aufbau über TYPE_ANALOG). Anders als bei allen
- * bisherigen Sensoren braucht eine einzelne Messung hier bis zu 750ms Konversionszeit (12-Bit-
- * Auflösung, siehe DS18B20-Datenblatt) - ein direktes {@code delay(750)} mitten in {@link #loop}
- * hätte in dieser Zeit auch Serial-Kommandos (inkl. STOP) und die Abtastung des jeweils anderen
- * Kanals eingefroren. {@link #sampleDS18B20} löst die Konversion deshalb nur an und holt das
- * Ergebnis erst im nächsten Aufruf ab, sobald genug Zeit vergangen ist - keine Blockade, aber
- * dadurch auch kein Datenpaket bei jedem einzelnen Zyklus (analog zu TYPE_MIC_SPECTRUM, das mit
- * SPECTRUM_INTERVAL_MS ebenfalls eigenem statt dem regulären Abtasttakt folgt). Das 1-Wire-
- * Protokoll selbst ist wie beim HX711 ({@link #readHX711}) von Hand bit-gebangt, keine externe
- * OneWire-Bibliothek nötig.</p>
- *
- * <p>v8.2: {@link #oneWireReset}/{@link #oneWireWriteBit}/{@link #oneWireReadBit} nutzten bisher
- * die normalen Arduino-Funktionen {@code pinMode()}/{@code digitalWrite()}/{@code digitalRead()}.
- * Auf dem ESP32 kosten diese (anders als auf AVR) jeweils mehrere hundert ns bis über 1µs
- * (IO-MUX-Rekonfiguration, Bounds-Checks) - bei den hier genutzten 1-2µs-Zeitfenstern verschob
- * das den tatsächlichen Abtast-/Flankenzeitpunkt gegenüber dem 1-Wire-Timing so stark, dass die
- * Kommunikation mit einem angeschlossenen DS18B20 fast durchgehend an der CRC8-Prüfung scheiterte
- * (dauerhafte {@code #ERR,DS18B20}-Meldungen bei korrekt beschaltetem externen Pull-up). Ohne
- * Pull-up blieb der Bus dagegen dauerhaft auf LOW - dabei "passt" der CRC8 von neun gelesenen
- * Nullbytes zufällig gegen die ebenfalls gelesene Null-CRC, was eine augenscheinlich gültige,
- * aber falsche 0°C-Messung ergab, statt eines Fehlers. Fix: {@link #owLow}/{@link #owRelease}/
- * {@link #owRead} greifen direkt auf die GPIO-Register zu (wenige Taktzyklen statt hunderte ns)
- * und ersetzen die drei Arduino-HAL-Aufrufe in den zeitkritischen 1-Wire-Grundoperationen.</p>
- *
- * <p>v8.3: Zwei Nachbesserungen an v8.2. Erstens ein Tippfehler in {@link #owLow}/{@link #owRelease}:
- * Für Pins &ge; 32 (GPIO32-39, zweiter Registersatz - auf Kanal A betrifft das bereits den
- * DS18B20-Datenpin selbst, GPIO32) wurde für die Schreib-Register fälschlich {@code .data} statt
- * {@code .val} verwendet - dadurch schaltete der Bus auf Kanal A faktisch nie sauber um, mit
- * demselben "0°C ohne Fehler"-Symptom wie beim fehlenden Pull-up (siehe v8.2-Absatz); Kanal B
- * (Pins 27/26/25, alle &lt; 32) war nie betroffen. Zweitens ein Zeitverhalten-Bug in
- * {@link #sampleDS18B20}: die nächste Konversion wurde bisher erst beim übernächsten Aufruf
- * gestartet statt direkt im Anschluss ans Lesen der vorherigen - dadurch kam bei einem
- * Abtastintervall knapp über der Konversionszeit (z. B. 1 Hz, 1000ms &gt; 750ms) nur alle zwei
- * Intervalle ein Datenpaket statt bei jedem.</p>
- *
- * <p>v8.4: Drei Nachbesserungen, keine davon durch konkret beobachtete Fehlfunktion ausgelöst,
- * sondern beim Review gefunden.</p>
- * <p>Erstens dieselbe Schwachstellen-Klasse wie beim 1-Wire-Timing (siehe v8.2) jetzt auch bei
- * {@link #readHX711} behoben: Die 24 Taktflanken liefen bisher über {@code digitalWrite()}/
- * {@code digitalRead()} (mehrere hundert ns IO-MUX-Overhead je Aufruf, siehe dort) und ohne
- * {@code noInterrupts()} um die Schleife - ein dazwischenfunkender Interrupt (z. B. der
- * Millis-Timer) konnte SCK im ungünstigsten Fall über die ~60µs-Sleep-Schwelle des HX711 hinaus
- * verzögern und den Chip mitten im Auslesen in den Sleep-Modus schicken. Jetzt per neuer
- * {@link #gpioWriteFast}/{@link #gpioReadFast}-Hilfsfunktionen (direkter Registerzugriff wie bei
- * {@link #owLow} & Co., aber als reiner Push-Pull-Zugriff ohne dessen Open-Drain-Semantik - SCK
- * ist ein regulärer Ausgang) und mit der gesamten 24-Bit-Schleife innerhalb von
- * {@code noInterrupts()}/{@code interrupts()}, analog zu den 1-Wire-Grundoperationen.</p>
- * <p>Zweitens {@link #sendSpectrumPacket} auf einen einzigen {@code Serial.write()} pro Bild
- * umgestellt statt bisher 512 einzelner {@code Serial.print()}-Aufrufe für die Magnituden (plus
- * Header) - jeder einzelne Aufruf formatiert eine Zahl in ASCII und schreibt sie separat raus,
- * bei 512 Bins und ~16 Bildern/Sekunde (siehe {@link #SPECTRUM_INTERVAL_MS}) waren das über 8000
- * Print-Aufrufe pro Sekunde, die spürbar CPU-Zeit kosteten - Zeit, die für die zeitkritische
- * Abtastung des jeweils anderen Kanals fehlte. Jetzt wird das Paket in einen statischen Puffer
- * ({@link #SPECTRUM_PACKET_BUF_SIZE}) formatiert und als ein einziger {@code Serial.write()}
- * verschickt.</p>
- * <p>Drittens die {@code i2s_channel_read()}-Timeouts in {@link #sampleMicrophone} (50ms) und
- * {@link #captureAndSendSpectrum} (200ms) verkleinert (auf 20ms bzw. 100ms) - beide lagen mit
- * deutlichem Sicherheitsabstand über der tatsächlich benötigten Zeit, um die jeweils angeforderte
- * Samplezahl bei {@link #MIC_SAMPLE_RATE_HZ} zu sammeln (max. 32ms bzw. 64ms). Ein hängendes oder
- * getrenntes Mikrofon blockiert {@code loop()} - und damit auch die Abtastung des jeweils anderen
- * Kanals, siehe {@link #sampleChannel} - dadurch spürbar kürzer. Behebt das Problem nicht
- * grundsätzlich: Bei sehr hohen Abtastraten auf dem Nicht-Mikrofon-Kanal bleibt eine denkbare,
- * wenn auch kleinere, Verzögerung. Eine echte Entkopplung bräuchte einen eigenen FreeRTOS-Task
- * für die I2S-Lesevorgänge (mit Ringpuffer statt direktem Aufruf aus {@code loop()}) - das ist ein
- * größerer struktureller Umbau und hier bewusst nicht mitgemacht.</p>
- *
- * <p>v8.5: Bluetooth Classic (SPP) als zweiter, gleichberechtigter Weg zum PC - zusätzlich zur
- * bisherigen USB-Verbindung, nicht als Ersatz. Der klassische ESP32 kann beides gleichzeitig
- * betreiben (anders als ESP32-S2/S3/C3, die kein Classic-Bluetooth haben, nur BLE). Ein per SPP
- * gepairtes Gerät erscheint auf dem PC als ganz normaler virtueller COM-Port - GUI.java/
- * DeviceConnection.java brauchten dafür praktisch keine strukturelle Änderung (siehe dortiger
- * Kommentar), da beide ohnehin nur mit einem Portnamen + Baudrate arbeiten, ohne zwischen "echtem"
- * USB-COM-Port und einem SPP-COM-Port zu unterscheiden.</p>
- * <p>Firmware-seitig lief bisher jede Ausgabe direkt über {@code Serial.print}/{@code println}/
- * {@code write}, verstreut über {@link #reportSensorError}, {@link #sendDataPacket},
- * {@link #sendSpectrumPacket} und {@link #processCommand}. Alle Stellen jetzt über die neuen
- * {@link #hostWrite}/{@link #hostPrint}-Hilfsfunktionen, die konsequent an beide Schnittstellen
- * schreiben (USB immer, Bluetooth nur falls {@link #SerialBT}.hasClient()) - so bekommt die
- * Software dieselben Pakete unabhängig davon, über welchen der beiden Wege sie gerade verbunden
- * ist, ohne dass die Firmware wissen müsste, welche der beiden Verbindungen gerade "die aktive"
- * ist. Eingehende Kommandos entsprechend aus {@link #handleSerialCommunication} jetzt aus beiden
- * Quellen in denselben Zeilenpuffer gelesen - bewusst kein getrennter Puffer je Schnittstelle: In
- * der Praxis ist ohnehin nur eine der beiden Verbindungen tatsächlich benutzt, ein Client an
- * beiden gleichzeitig aktiv sendend würde die Kommandos ineinander mischen, das wird hier nicht
- * abgefangen.</p>
- * <p>Bewusst nicht gemacht: Ein eigener "USB"/"Bluetooth"-Unterschied im seriellen Protokoll oder
- * in der Portbezeichnung, die die Software sieht - das wäre reine GUI-Kosmetik (siehe
- * DeviceConnection.java: {@code getDescriptivePortName()} statt {@code getSystemPortName()} für
- * die Anzeige) und hat mit der Firmware nichts zu tun.</p>
- * <p>v8.6: Zwei redundante Berechnungen im Spektrum-Pfad entfernt, keine davon durch beobachtete
- * Fehlfunktion ausgelöst, sondern beim Review gefunden - beide betreffen nur {@code cosf()}/
- * {@code sinf()}-Aufrufe, die block- bzw. frame-unabhängig immer dasselbe Ergebnis lieferten.
- * Erstens berechnete {@link #captureAndSendSpectrum} das Hann-Fenster bisher bei jedem Frame neu
- * (1024x {@code cosf()}, bei ~16 Bildern/Sekunde also ~16.000 Aufrufe/Sekunde für dieselben 1024
- * Werte) - jetzt einmalig in {@link #hannWindow} vorberechnet ({@link #ensureHannWindow}).
- * Zweitens berechnete {@link #computeFFT} die Twiddle-Faktoren (wr/wi) mit der start-Schleife
- * außen und der k-Schleife innen - wr/wi hängen aber nur von size und k ab, nicht von start,
- * wurden also für dieselbe (size,k)-Kombination pro Block neu berechnet. Mit k außen und start
- * innen sinkt die Zahl der Trig-Aufrufe pro FFT von 5120 auf 1023 (Faktor ~5, bei
- * SPECTRUM_FFT_SIZE=1024). Beides spart CPU-Zeit, die sonst für die zeitkritische Abtastung des
- * jeweils anderen Kanals fehlte (siehe auch v8.4-Hinweis oben zu {@link #sendSpectrumPacket}).</p>
- *
- * <p><b>Hardware-/Board-Hinweis:</b> Braucht in der Arduino-IDE unter Werkzeuge -&gt;
- * "Partition Scheme" ein Schema mit genug Platz für den Bluetooth-Stack (z. B. "Default" statt
- * eines reinen "No OTA (2MB APP...)"-Schemas) - der Bluedroid-Stack braucht deutlich mehr
- * Flash/RAM als nur WLAN oder nur USB-Serial. Bei "Bluetooth is not enabled"-Kompilierfehlern:
- * Board-Paket zu alt bzw. Bluetooth im Menü "Tools -&gt; Zusätzliche Boardinformationen" o.ä.
- * deaktiviert.</p>
+ * Hardware-Notizen:
+ * - I2S nutzt den neuen Treiber (driver/i2s_std.h) statt des alten driver/i2s.h - der alte bringt
+ *   einen Legacy-ADC-Treiber mit, der mit dem von analogRead() genutzten Treiber kollidiert.
+ * - Kanal-A-Pins liegen auf GPIO32/33/35 (ADC1-fähig, keine Strapping-Pins), Kanal B auf
+ *   GPIO27/26/25 - siehe PINS_CHANNEL_A/B. Nicht ändern, ohne die ADC-Tauglichkeit/Strapping-Pin-
+ *   Eigenschaften der Ziel-GPIOs zu prüfen.
+ * - HX711 und 1-Wire nutzen direkten GPIO-Registerzugriff (gpioWriteFast/-ReadFast, owLow/
+ *   owRelease/owRead) statt digitalWrite()/digitalRead() - deren IO-MUX-Overhead würde das
+ *   µs-genaue Timing beider Protokolle sprengen.
+ * - Arduino-IDE: "Partition Scheme" braucht Platz für den Bluetooth-Stack (z.B. "Default", nicht
+ *   "No OTA (2MB APP...)").
  */
 
 #include <Wire.h>
@@ -206,53 +38,119 @@
 #include "BluetoothSerial.h"
 
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
-#error Bluetooth ist im Board-/Menuconfig-Profil deaktiviert - siehe Hardware-/Board-Hinweis \
-       zu v8.5 im Dateikopf (Partition Scheme mit Bluetooth-Unterstützung wählen).
+#error Bluetooth ist im Board-/Menuconfig-Profil deaktiviert - Partition Scheme mit \
+       Bluetooth-Unterstützung wählen (siehe Dateikopf).
 #endif
 
 enum SensorType {
   TYPE_NONE = 0,
   TYPE_ANALOG = 1,
-  TYPE_INA219 = 2,
-  TYPE_VEML7700 = 3,
-  TYPE_HX711 = 4,
-  TYPE_MICROPHONE = 5,
-  TYPE_MIC_SPECTRUM = 6,
-  TYPE_HALL = 7,
-  TYPE_DS18B20 = 8
+  TYPE_I2C = 2,
+  TYPE_HX711 = 4,   // eigenes Protokoll, kein generisches Bus-Muster wie I2C/1-Wire
+  TYPE_I2S = 5,
+  TYPE_DIGITAL = 7,
+  TYPE_ONEWIRE = 8
 };
 
 SensorType configChannelA = TYPE_NONE;
 SensorType configChannelB = TYPE_NONE;
 
-/** Die drei Signal-Pins eines Kanal-Ports (Steckerposition 2, 3, 4 - siehe pinout.md), deren
- *  Rolle vom gewählten Sensortyp abhängt (siehe {@link #configureChannelHardware}):
- *  I2C: [0]=SDA, [1]=SCL   HX711: [0]=DOUT, [1]=SCK   I2S: [0]=WS, [1]=BCLK, [2]=SD
- *  Analog: [0]=Eingang (auf beiden Kanälen, siehe v8.0-Hinweis oben)   Hall (KY-003): [0]=Signal
- *  DS18B20 (1-Wire): [0]=Datenleitung (braucht externen Pull-up nach 3,3V)
+/** Ein Registerschreibvorgang der I2C-Init-Sequenz. */
+struct I2CWriteSpec {
+  uint8_t reg = 0;
+  uint8_t data[4] = {0, 0, 0, 0};
+  uint8_t dataLen = 0;
+};
+
+/** Ein Register-Lesevorgang je Abtastzyklus eines I2C-Sensors. */
+struct I2CReadSpec {
+  uint8_t reg = 0;
+  uint8_t len = 0;      // 1-4 Byte
+  bool bigEndian = true;
+  uint8_t slot = 0;
+};
+
+const uint8_t MAX_I2C_WRITES = 4;
+const uint8_t MAX_I2C_READS = 4;
+
+/** Komplette, vom Host per SET-Kommando übertragene I2C-Sensorkonfiguration eines Kanals. */
+struct I2CSensorConfig {
+  uint8_t address = 0;
+  I2CWriteSpec initWrites[MAX_I2C_WRITES];
+  uint8_t initWriteCount = 0;
+  I2CReadSpec reads[MAX_I2C_READS];
+  uint8_t readCount = 0;
+};
+
+I2CSensorConfig i2cConfigChannelA;
+I2CSensorConfig i2cConfigChannelB;
+I2CSensorConfig &i2cConfigForChannel(char channelName);
+
+/** Modus eines TYPE_I2S-Kanals: Einzelwert pro Zyklus oder laufendes Spektrum. Die
+ *  I2S-Hardwarekonfiguration selbst ist für beide Modi identisch. */
+struct I2SSensorConfig {
+  bool spectrumMode = false;
+};
+
+I2SSensorConfig i2sConfigChannelA;
+I2SSensorConfig i2sConfigChannelB;
+I2SSensorConfig &i2sConfigForChannel(char channelName);
+
+/** Generische 1-Wire-Sensorbeschreibung: Konversion anstoßen (convertCmd), warten
+ *  (conversionDelayMs), Ergebnis lesen (readCmd, readLen Byte), Rohwert ab valueOffset/
+ *  valueLen extrahieren, optional per CRC8 prüfen. "Skip ROM" (0xCC) nimmt die Firmware selbst
+ *  an - unterstützt wird nur ein Sensor pro Bus. */
+struct OneWireSensorConfig {
+  uint8_t convertCmd = 0;
+  unsigned long conversionDelayMs = 0;
+  uint8_t readCmd = 0;
+  uint8_t readLen = 0;
+  uint8_t valueOffset = 0;
+  uint8_t valueLen = 0;
+  bool littleEndian = true;
+  bool checkCrc = true;
+  uint8_t slot = 0;
+};
+
+OneWireSensorConfig oneWireConfigChannelA;
+OneWireSensorConfig oneWireConfigChannelB;
+OneWireSensorConfig &oneWireConfigForChannel(char channelName);
+
+// Arduino generiert für alle unten definierten Funktionen automatisch Prototypen ganz am
+// Dateianfang - noch bevor die obigen Structs bekannt sind. Für Funktionen, die einen dieser
+// Struct-Typen in Parametern/Rückgabewert verwenden, schlägt die automatisch generierte
+// Deklaration deshalb fehl ("does not name a type"). Fix: eigene Prototypen HIER, direkt nach
+// den Structs - Arduino erkennt vorhandene Prototypen und generiert dafür keinen eigenen mehr.
+bool readOneWireResult(int pin, const OneWireSensorConfig &cfg, long &outValue);
+bool parseI2CWriteEntry(const String &entry, I2CWriteSpec &out);
+bool parseI2CReadEntry(const String &entry, I2CReadSpec &out);
+bool parseI2CWriteList(const String &list, I2CWriteSpec specs[], uint8_t &countOut, uint8_t maxCount);
+bool parseI2CReadList(const String &list, I2CReadSpec specs[], uint8_t &countOut, uint8_t maxCount);
+
+I2CSensorConfig &i2cConfigForChannel(char channelName) {
+  return (channelName == 'A') ? i2cConfigChannelA : i2cConfigChannelB;
+}
+
+I2SSensorConfig &i2sConfigForChannel(char channelName) {
+  return (channelName == 'A') ? i2sConfigChannelA : i2sConfigChannelB;
+}
+
+OneWireSensorConfig &oneWireConfigForChannel(char channelName) {
+  return (channelName == 'A') ? oneWireConfigChannelA : oneWireConfigChannelB;
+}
+
+/** Die drei Signal-Pins eines Kanal-Ports (Steckerposition 2, 3, 4), Rolle je nach Sensortyp
+ *  (siehe {@link #configureChannelHardware}): I2C=SDA/SCL, HX711=DOUT/SCK, I2S=WS/BCLK/SD,
+ *  Analog/Digital/1-Wire nutzen nur [0].
  *
- *  ACHTUNG bei künftigen Pin-Änderungen: GPIO 0, 2, 5, 12 und 15 sind beim ESP32
- *  "Strapping-Pins" - ihr Pegel wird nur im Moment des Resets ausgelesen und beeinflusst u. a.
- *  Boot-Modus bzw. Flash-Spannung. Hängt hier bereits ein Sensor (z. B. ein I2C-Pull-up) an
- *  einem solchen Pin, wenn der ESP32 einen Reset macht, kann der Chip mit falscher
- *  Flash-Spannung booten und landet in einer Watchdog-Reset-Schleife (TG0WDT_SYS_RESET), noch
- *  bevor setup() überhaupt läuft - genau das Bild "geht nur nach Reflash weg, tritt vor allem
- *  auf, wenn Sensoren schon beim Einstecken angeschlossen sind". Deshalb bewusst KEINER dieser
- *  Pins hier verwendet.
+ *  GPIO 0, 2, 5, 12, 15 sind ESP32-Strapping-Pins (Pegel beim Reset beeinflusst Boot-Modus/
+ *  Flash-Spannung) - bewusst keiner davon hier verwendet, sonst droht ein Boot-Loop, sobald
+ *  beim Reset bereits ein Sensor angeschlossen ist.
  *
- *  Kanal A liegt seit v8.0 auf GPIO 32/33/35 statt vormals 17/16/4 - alle drei ADC1-fähig (32/33
- *  zusätzlich normale, bidirektionale GPIOs für SDA/SCK/WS-Rollen; 35 ist ADC1-fähig, aber
- *  Eingang-only, was für die dort einzige benötigte Rolle - I2S "din" - ausreicht). GPIO16/17
- *  wurden verlassen, weil sie auf dem klassischen ESP32 gar keine ADC-Hardware besitzen und
- *  TYPE_ANALOG dort immer 0 lieferte, unabhängig vom angelegten Signal (siehe v8.0-Hinweis oben).
- *  Kanal B auf 27/26/25 bleibt unverändert, dort war ohnehin schon jeder der drei Pins ADC-fähig
- *  (Bonus: 32/33/35 hängen an ADC1, das anders als ADC2 - auf dem 27/26/25 von Kanal B - nicht mit
- *  WiFi kollidiert, hier aktuell aber ungenutzt, da diese Firmware kein WiFi verwendet). */
+ *  Kanal A: GPIO 32/33/35 (alle ADC1-fähig, nötig für TYPE_ANALOG - GPIO16/17 haben keine
+ *  ADC-Hardware). Kanal B: GPIO 27/26/25 (ebenfalls ADC-fähig). */
 const int PINS_CHANNEL_A[3] = {32, 33, 35};
 const int PINS_CHANNEL_B[3] = {27, 26, 25};
-
-const uint8_t ADDR_INA219   = 0x40;
-const uint8_t ADDR_VEML7700 = 0x10;
 
 /** Maximale Wartezeit in ms auf ein bereites HX711-Modul, bevor der Zyklus als Fehler gilt. */
 const unsigned long HX711_TIMEOUT_MS = 100;
@@ -333,7 +231,7 @@ int i2cFailStreakA = 0;
 int i2cFailStreakB = 0;
 const int I2C_FAIL_STREAK_RESET_THRESHOLD = 20;
 
-// --- Host-Kommunikation (USB + Bluetooth), siehe v8.5-Hinweis im Dateikopf ---
+// --- Host-Kommunikation (USB + Bluetooth gleichzeitig, siehe hostWrite/hostPrint) ---
 //
 // Ab hier läuft jede Ausgabe an den PC über hostWrite()/hostPrint() statt direkter Serial.*-
 // Aufrufe: beide schreiben immer auf die USB-Verbindung und zusätzlich auf SerialBT, sofern
@@ -397,42 +295,31 @@ i2s_chan_handle_t &micHandleForChannel(char channelName) {
   return (channelName == 'A') ? micHandleA : micHandleB;
 }
 
-/**
- * Liest ein 16-Bit-I2C-Register MSB-zuerst (big-endian, TI-Konvention - passend für den
- * INA219). Gibt bei Erfolg true zurück und schreibt den Rohwert nach outValue; bei einem
- * Übertragungsfehler wird false zurückgegeben und outValue nicht verändert.
- *
- * <p>outValue ist bewusst uint16_t (nicht int16_t): der Rohwert wird unverändert als 0..65535
- * über die serielle Schnittstelle geschickt, die softwareseitige Sensor-Klasse entscheidet dann
- * je nach physikalischer Größe, ob und wie er vorzeichenbehaftet zu interpretieren ist.</p>
- */
-bool readI2CRegister16(TwoWire &bus, uint8_t addr, uint8_t reg, uint16_t &outValue) {
+/** Liest 1-4 Byte ab Register {@code reg} und setzt sie je nach {@code bigEndian} zu einem
+ *  Rohwert zusammen (Länge/Reihenfolge kommen von der Software, siehe {@link I2CReadSpec}).
+ *  Rückgabewert false bei Übertragungsfehler, outValue bleibt dann unverändert. outValue ist
+ *  bewusst unsigned - Vorzeicheninterpretation macht die Java-Sensor-Klasse. */
+bool readI2CRegisterN(TwoWire &bus, uint8_t addr, uint8_t reg, uint8_t len, bool bigEndian, uint32_t &outValue) {
+  if (len == 0 || len > 4) return false;
+
   bus.beginTransmission(addr);
   bus.write(reg);
   if (bus.endTransmission(false) != 0) return false;
 
-  if (bus.requestFrom((int)addr, 2) != 2) return false;
+  if (bus.requestFrom((int)addr, (int)len) != len) return false;
 
-  uint8_t msb = bus.read();
-  uint8_t lsb = bus.read();
-  outValue = ((uint16_t)msb << 8) | lsb;
-  return true;
-}
+  uint8_t bytes[4];
+  for (int i = 0; i < len; i++) {
+    bytes[i] = bus.read();
+  }
 
-/**
- * Wie {@link #readI2CRegister16}, aber LSB-zuerst (little-endian). Vishay-Bausteine wie der
- * VEML7700 senden ihre 16-Bit-Register in dieser Reihenfolge, anders als der INA219.
- */
-bool readI2CRegister16LE(TwoWire &bus, uint8_t addr, uint8_t reg, uint16_t &outValue) {
-  bus.beginTransmission(addr);
-  bus.write(reg);
-  if (bus.endTransmission(false) != 0) return false;
-
-  if (bus.requestFrom((int)addr, 2) != 2) return false;
-
-  uint8_t lsb = bus.read();
-  uint8_t msb = bus.read();
-  outValue = ((uint16_t)msb << 8) | lsb;
+  uint32_t value = 0;
+  if (bigEndian) {
+    for (int i = 0; i < len; i++) value = (value << 8) | bytes[i];
+  } else {
+    for (int i = len - 1; i >= 0; i--) value = (value << 8) | bytes[i];
+  }
+  outValue = value;
   return true;
 }
 
@@ -468,23 +355,14 @@ static inline int gpioReadFast(int pin) {
   }
 }
 
-/**
- * Liest einen 24-Bit-Rohwert vom HX711 per Bit-Banging (kein I2C, sondern eigenes DOUT/SCK-
- * Protokoll). Wartet zunächst, bis das Modul über DOUT LOW signalisiert, dass ein Wert bereit
- * ist; ist das nach {@link #HX711_TIMEOUT_MS} nicht der Fall, gilt der Zyklus als fehlgeschlagen
- * (kein angeschlossenes Modul oder noch nicht bereit), statt einen falschen Wert zu senden.
- *
- * <p>Die eigentlichen 24 Taktflanken (inkl. der 25., Gain-wählenden) laufen komplett innerhalb
- * von {@code noInterrupts()}/{@code interrupts()} und nutzen {@link #gpioWriteFast}/
- * {@link #gpioReadFast} statt {@code digitalWrite()}/{@code digitalRead()} - siehe v8.4-Hinweis
- * im Dateikopf. Der HX711 geht in Sleep, sobald SCK länger als ~60µs am Stück HIGH bleibt; ohne
- * diese Absicherung konnte sowohl der IO-MUX-Overhead der Arduino-HAL-Aufrufe als auch ein
- * dazwischenfunkender Interrupt (z. B. der Millis-Timer) dieses Fenster im ungünstigen Fall
- * reißen. Die gesamte Schleife (24 Bits + 25. Flanke, je 2µs) bleibt mit rund 50µs klar unter der
- * Sleep-Schwelle und ist kurz genug, um das System nicht spürbar zu blockieren.</p>
- *
- * <p>Die 25. Taktflanke (nach den 24 Datenbits) wählt Kanal A mit Gain 128 für den nächsten
- * Messzyklus - die in dieser Firmware fest verwendete Standardkonfiguration des HX711.</p>
+/** Liest einen 24-Bit-Rohwert vom HX711 per Bit-Banging (eigenes DOUT/SCK-Protokoll, kein I2C).
+ *  Wartet auf DOUT=LOW (Wert bereit); Timeout {@link #HX711_TIMEOUT_MS} -> Zyklus fehlgeschlagen.
+ *  Die 24+1 Taktflanken laufen in {@code noInterrupts()}/{@code interrupts()} über
+ *  {@link #gpioWriteFast}/{@link #gpioReadFast} (direkter Registerzugriff) statt
+ *  {@code digitalWrite()}/{@code digitalRead()} - der HX711 schläft ein, wenn SCK länger als
+ *  ~60µs HIGH bleibt, und sowohl HAL-Overhead als auch ein dazwischenfunkender Interrupt könnten
+ *  das reißen. Die Schleife bleibt mit ~50µs klar darunter. Die 25. Taktflanke wählt Kanal A mit
+ *  Gain 128 für den nächsten Zyklus (feste Standardkonfiguration dieser Firmware).
  *
  * @param doutPin  GPIO, an dem das Modul die Daten ausgibt
  * @param sckPin   GPIO, über den der Takt an das Modul gesendet wird
@@ -520,7 +398,7 @@ bool readHX711(int doutPin, int sckPin, long &outValue) {
   return true;
 }
 
-// --- DS18B20 (1-Wire), TYPE_DS18B20 ---
+// --- Generisches 1-Wire, TYPE_ONEWIRE (aktuell nur DS18B20 als Sensor implementiert) ---
 //
 // Von Hand bit-gebangtes 1-Wire-Protokoll nach den Timing-Vorgaben aus dem DS18B20-Datenblatt -
 // keine externe OneWire-Bibliothek, analog zur bereits manuell implementierten HX711-Anbindung
@@ -533,7 +411,7 @@ bool readHX711(int doutPin, int sckPin, long &outValue) {
 // (anders als auf AVR) jeweils mehrere hundert ns bis über 1µs (IO-MUX-Rekonfiguration,
 // Bounds-Checks) - bei den hier genutzten 1-2µs-Zeitfenstern verschiebt allein das
 // Umschalten von Pinrichtung/Pegel den eigentlichen Abtast-/Flankenzeitpunkt erheblich und
-// zerstört damit praktisch jede Übertragung (siehe v8.2-Hinweis im Dateikopf). Direkter
+// zerstört damit praktisch jede Übertragung. Direkter
 // Registerzugriff kostet dagegen nur wenige CPU-Taktzyklen. GPIO32-39 hängen an einem zweiten
 // Register-Satz (GPIO.out1/enable1/in1 statt .../in), daher die Fallunterscheidung nach Pin 32.
 
@@ -638,7 +516,7 @@ uint8_t oneWireReadByte(int pin) {
 
 /** Dallas/Maxim-CRC8 (Polynom x^8+x^5+x^4+1, reflektiert) über das Scratchpad, zur Absicherung
  *  gegen durch Störungen verfälschte 1-Wire-Übertragungen - anders als bei I2C (siehe
- *  {@link #readI2CRegister16}) gibt es hier keine Hardware-Bestätigung auf Byte-Ebene. */
+ *  {@link #readI2CRegisterN}) gibt es hier keine Hardware-Bestätigung auf Byte-Ebene. */
 uint8_t oneWireCRC8(const uint8_t *data, uint8_t len) {
   uint8_t crc = 0;
   for (uint8_t i = 0; i < len; i++) {
@@ -653,113 +531,94 @@ uint8_t oneWireCRC8(const uint8_t *data, uint8_t len) {
   return crc;
 }
 
-/** Konversionszeit bei 12-Bit-Auflösung (Werkseinstellung des DS18B20 nach jedem Power-on/Reset,
- *  hier nie umkonfiguriert) - siehe DS18B20-Datenblatt sowie DS18B20Sensor.java, das denselben
- *  Wert für {@link Sensor#getMaxSampleRateHz} zugrunde legt. */
-const unsigned long DS18B20_CONVERSION_MS = 750;
-
 /** Ob für den jeweiligen Kanal aktuell eine Konversion läuft, deren Ergebnis noch nicht
- *  abgeholt wurde - siehe {@link #sampleDS18B20}. Bei einem Kanalwechsel weg von TYPE_DS18B20
+ *  abgeholt wurde - siehe {@link #sampleOneWire}. Bei einem Kanalwechsel weg von TYPE_ONEWIRE
  *  über {@link #releaseChannelHardware} zurückgesetzt, damit ein späteres erneutes Einschalten
- *  nicht versucht, das Scratchpad einer nie gestarteten (oder eines ganz anderen Sensors
+ *  nicht versucht, das Ergebnis einer nie gestarteten (oder eines ganz anderen Sensors
  *  zugehörigen) Konversion zu lesen. */
-bool ds18b20ConversionPendingA = false;
-bool ds18b20ConversionPendingB = false;
-unsigned long ds18b20ConversionStartMsA = 0;
-unsigned long ds18b20ConversionStartMsB = 0;
+bool oneWireConversionPendingA = false;
+bool oneWireConversionPendingB = false;
+unsigned long oneWireConversionStartMsA = 0;
+unsigned long oneWireConversionStartMsB = 0;
 
-/** Liest (ohne selbst eine neue Konversion anzustoßen) das Scratchpad einer bereits
- *  abgeschlossenen DS18B20-Konversion aus und prüft dessen CRC8.
- *
- * @param outValue Ziel für das vorzeichenbehaftete 16-Bit-Temperaturregister (1/16°C-Schritte,
- *                 siehe DS18B20Sensor.decode)
- * @return {@code true} bei Erfolg (Presence-Puls und gültige CRC8)
- */
-bool readDS18B20Scratchpad(int pin, long &outValue) {
+/** Liest (ohne neue Konversion anzustoßen) das Ergebnis einer bereits abgeschlossenen 1-Wire-
+ *  Konversion gemäß {@code cfg} und prüft optional die CRC8.
+ * @return {@code true} bei Erfolg (Presence-Puls, plausible Länge, ggf. gültige CRC8) */
+bool readOneWireResult(int pin, const OneWireSensorConfig &cfg, long &outValue) {
+  if (cfg.readLen == 0 || cfg.readLen > 16) return false;
+  if ((int) cfg.valueOffset + (int) cfg.valueLen > cfg.readLen) return false;
+
   if (!oneWireReset(pin)) return false;
   oneWireWriteByte(pin, 0xCC); // Skip ROM - setzt genau einen Sensor an diesem Pin voraus
-  oneWireWriteByte(pin, 0xBE); // Read Scratchpad
+  oneWireWriteByte(pin, cfg.readCmd);
 
-  uint8_t scratchpad[9];
-  for (int i = 0; i < 9; i++) {
-    scratchpad[i] = oneWireReadByte(pin);
+  uint8_t buffer[16];
+  for (int i = 0; i < cfg.readLen; i++) {
+    buffer[i] = oneWireReadByte(pin);
   }
-  if (oneWireCRC8(scratchpad, 8) != scratchpad[8]) return false;
 
-  outValue = (int16_t) ((scratchpad[1] << 8) | scratchpad[0]);
+  if (cfg.checkCrc) {
+    if (cfg.readLen < 2) return false;
+    if (oneWireCRC8(buffer, cfg.readLen - 1) != buffer[cfg.readLen - 1]) return false;
+  }
+
+  uint32_t value = 0;
+  if (cfg.littleEndian) {
+    for (int i = cfg.valueLen - 1; i >= 0; i--) value = (value << 8) | buffer[cfg.valueOffset + i];
+  } else {
+    for (int i = 0; i < cfg.valueLen; i++) value = (value << 8) | buffer[cfg.valueOffset + i];
+  }
+  outValue = (long) value;
   return true;
 }
 
-/**
- * Tastet einen DS18B20 nicht-blockierend ab. Anders als bei allen anderen Sensortypen liefert
- * ein Aufruf hier nicht bei jedem Zyklus ein Datenpaket: Die bis zu {@link #DS18B20_CONVERSION_MS}
- * dauernde Konversion würde als direktes {@code delay()} mitten in {@link #loop} auch Serial-
- * Kommandos (inkl. STOP) und die Abtastung des jeweils anderen Kanals blockieren (siehe
- * Klassenkommentar, v8.1-Absatz). Stattdessen: Bei einer laufenden Konversion wird zuerst geprüft,
- * ob genug Zeit vergangen ist - falls ja, wird das Scratchpad gelesen und ein Datenpaket verschickt
- * (bzw. bei einem CRC-/Presence-Fehler {@link #reportSensorError} aufgerufen). Direkt im Anschluss
- * (noch im selben Aufruf, ohne auf den nächsten Zyklus zu warten) wird sofort die nächste
- * Konversion gestartet - das hält den Abstand zwischen zwei Datenpaketen bei genau einem
- * Abtastintervall, sofern dieses &ge; {@link #DS18B20_CONVERSION_MS} ist. (v8.2 startete die
- * nächste Konversion erst beim nachfolgenden Aufruf statt sofort - das verdoppelte den
- * tatsächlichen Abstand zwischen zwei Werten gegenüber dem in der GUI eingestellten Intervall,
- * z. B. nur noch 1 Wert alle 2s bei eingestellter 1 Hz statt jede Sekunde einer.)
- */
-void sampleDS18B20(char channelName, int pin) {
-  bool &pending = (channelName == 'A') ? ds18b20ConversionPendingA : ds18b20ConversionPendingB;
-  unsigned long &startMs = (channelName == 'A') ? ds18b20ConversionStartMsA : ds18b20ConversionStartMsB;
+/** Tastet einen 1-Wire-Sensor gemäß {@code cfg} nicht-blockierend ab: löst bei einer laufenden
+ *  Konversion nur ab (kein {@code delay()}, das würde den anderen Kanal einfrieren), holt das
+ *  Ergebnis erst, sobald {@code conversionDelayMs} vergangen ist, und startet dann sofort die
+ *  nächste Konversion. Liefert deshalb nicht bei jedem Aufruf ein Datenpaket. */
+void sampleOneWire(char channelName, int pin) {
+  bool &pending = (channelName == 'A') ? oneWireConversionPendingA : oneWireConversionPendingB;
+  unsigned long &startMs = (channelName == 'A') ? oneWireConversionStartMsA : oneWireConversionStartMsB;
+  const OneWireSensorConfig &cfg = oneWireConfigForChannel(channelName);
 
   if (pending) {
-    if (millis() - startMs < DS18B20_CONVERSION_MS) return; // Konversion läuft noch
+    if (millis() - startMs < cfg.conversionDelayMs) return; // Konversion läuft noch
 
-    long rawTemp;
-    bool ok = readDS18B20Scratchpad(pin, rawTemp);
+    long rawValue;
+    bool ok = readOneWireResult(pin, cfg, rawValue);
     pending = false;
 
     if (ok) {
-      sendDataPacket(channelName, 0, rawTemp);
+      sendDataPacket(channelName, cfg.slot, rawValue);
     } else {
-      reportSensorError(channelName, "DS18B20");
+      reportSensorError(channelName, "1WIRE");
     }
   }
 
-  // Nächste Konversion sofort anstoßen, statt erst beim nächsten Aufruf (siehe Methodenkommentar).
+  // Nächste Konversion sofort anstoßen, statt erst beim nächsten Aufruf.
   if (!oneWireReset(pin)) {
-    reportSensorError(channelName, "DS18B20");
+    reportSensorError(channelName, "1WIRE");
     return;
   }
   oneWireWriteByte(pin, 0xCC); // Skip ROM
-  oneWireWriteByte(pin, 0x44); // Convert T
+  oneWireWriteByte(pin, cfg.convertCmd);
   startMs = millis();
   pending = true;
 }
 
-/** Schreibt die Init-Konfiguration eines I2C-Sensortyps auf den angegebenen (bereits über
- *  {@link #configureChannelHardware} gestarteten) Bus. Meldet einen Fehler, falls einer der
- *  Schreibvorgänge fehlschlägt. */
-void configureSensorOnBus(TwoWire &bus, SensorType type, char channelName) {
+/** Schreibt die vom Host konfigurierte Init-Sequenz ({@link I2CSensorConfig}) auf den Bus.
+ *  Meldet einen Fehler, falls ein Schreibvorgang fehlschlägt. */
+void configureSensorOnBus(TwoWire &bus, char channelName) {
+  const I2CSensorConfig &cfg = i2cConfigForChannel(channelName);
   bool ok = true;
 
-  if (type == TYPE_INA219) {
-    bus.beginTransmission(ADDR_INA219);
-    bus.write(0x00); // Config Register
-    bus.write(0x39); bus.write(0x9F); // 32V, Gain 8, 12-bit ADC
-    ok &= (bus.endTransmission() == 0);
-
-    bus.beginTransmission(ADDR_INA219);
-    bus.write(0x05); // Calibration Register
-    bus.write(0x10); bus.write(0x00);
-    ok &= (bus.endTransmission() == 0);
-  } else if (type == TYPE_VEML7700) {
-    bus.beginTransmission(ADDR_VEML7700);
-    bus.write(0x00); // ALS_CONF Register
-    // Gain 1x, Integrationszeit 25ms (kürzeste verfügbare Einstellung statt der 100ms im
-    // Standard-Reset-Zustand) - der Sensor liefert dadurch maximal alle 25ms (~40 Hz) einen
-    // neuen Messwert; schnelleres Abfragen würde nur wiederholt denselben Wert zurückgeben.
-    // Kürzere Integrationszeit bedeutet weniger gesammeltes Licht pro Messung, also etwas mehr
-    // Rauschen bzw. geringere Empfindlichkeit bei sehr wenig Licht - Tausch von Genauigkeit
-    // gegen Reaktionsgeschwindigkeit.
-    bus.write(0x00); bus.write(0x03);
+  for (int i = 0; i < cfg.initWriteCount; i++) {
+    const I2CWriteSpec &w = cfg.initWrites[i];
+    bus.beginTransmission(cfg.address);
+    bus.write(w.reg);
+    for (int b = 0; b < w.dataLen; b++) {
+      bus.write(w.data[b]);
+    }
     ok &= (bus.endTransmission() == 0);
   }
 
@@ -769,34 +628,35 @@ void configureSensorOnBus(TwoWire &bus, SensorType type, char channelName) {
 }
 
 /** Initialisiert den I2C-Bus eines Kanals neu (Bus schließen, kurz warten, neu starten und den
- *  Sensor neu konfigurieren). Wird nach mehreren I2C-Fehlern in Folge aufgerufen, um einen durch
- *  einen Wackelkontakt "hängen gebliebenen" Bus wieder freizubekommen, statt dass der Kanal bis
- *  zum nächsten manuellen Reset dauerhaft Fehler meldet. */
-void resetI2CBus(char channelName, SensorType type) {
+ *  Sensor mit der zuletzt vom Host gesendeten Konfiguration neu initialisieren). Wird nach
+ *  mehreren I2C-Fehlern in Folge aufgerufen, um einen durch einen Wackelkontakt "hängen
+ *  gebliebenen" Bus wieder freizubekommen, statt dass der Kanal bis zum nächsten manuellen Reset
+ *  dauerhaft Fehler meldet. */
+void resetI2CBus(char channelName) {
   TwoWire &bus = busForChannel(channelName);
   bus.end();
   delay(5);
   const int *pins = (channelName == 'A') ? PINS_CHANNEL_A : PINS_CHANNEL_B;
   bus.begin(pins[0], pins[1], 400000);
-  configureSensorOnBus(bus, type, channelName);
+  configureSensorOnBus(bus, channelName);
 }
 
 /** Zählt aufeinanderfolgende I2C-Fehler je Kanal und stößt ab {@link #I2C_FAIL_STREAK_RESET_THRESHOLD}
  *  einen automatischen Bus-Reset an (siehe {@link #resetI2CBus}). Nach jedem I2C-Zugriff
  *  (erfolgreich oder nicht) aufzurufen. */
-void noteI2CResult(char channelName, SensorType type, bool success) {
+void noteI2CResult(char channelName, bool success) {
   int &streak = (channelName == 'A') ? i2cFailStreakA : i2cFailStreakB;
   if (success) {
     if (streak > 0) {
       streak = 0;
-      resetI2CBus(channelName, type);
+      resetI2CBus(channelName);
     }
     return;
   }
   streak++;
   if (streak >= I2C_FAIL_STREAK_RESET_THRESHOLD) {
     streak = 0;
-    resetI2CBus(channelName, type);
+    resetI2CBus(channelName);
   }
 }
 
@@ -839,19 +699,19 @@ void configureMicrophone(char channelName, const int pins[3]) {
  *  anderen Sensortyp neu konfiguriert werden können. Für HX711/Analog/NONE ist nichts
  *  freizugeben - die neue Konfiguration überschreibt deren Pin-Modi einfach direkt. */
 void releaseChannelHardware(char channelName, SensorType oldType) {
-  if (oldType == TYPE_INA219 || oldType == TYPE_VEML7700) {
+  if (oldType == TYPE_I2C) {
     busForChannel(channelName).end();
-  } else if (oldType == TYPE_MICROPHONE || oldType == TYPE_MIC_SPECTRUM) {
+  } else if (oldType == TYPE_I2S) {
     i2s_chan_handle_t &handle = micHandleForChannel(channelName);
     if (handle != NULL) {
       i2s_channel_disable(handle);
       i2s_del_channel(handle);
       handle = NULL;
     }
-  } else if (oldType == TYPE_DS18B20) {
-    // Siehe Kommentar bei ds18b20ConversionPendingA/B: eine noch laufende Konversion wird beim
+  } else if (oldType == TYPE_ONEWIRE) {
+    // Siehe Kommentar bei oneWireConversionPendingA/B: eine noch laufende Konversion wird beim
     // Wegschalten verworfen, statt ihr Ergebnis später fälschlich einem neuen Sensor zuzuordnen.
-    (channelName == 'A' ? ds18b20ConversionPendingA : ds18b20ConversionPendingB) = false;
+    (channelName == 'A' ? oneWireConversionPendingA : oneWireConversionPendingB) = false;
   }
 }
 
@@ -862,11 +722,10 @@ void configureChannelHardware(char channelName, SensorType newType, const int pi
   switch (newType) {
     case TYPE_ANALOG:
       break; // analogRead() braucht keine explizite pinMode()
-    case TYPE_INA219:
-    case TYPE_VEML7700: {
+    case TYPE_I2C: {
       TwoWire &bus = busForChannel(channelName);
       bus.begin(pins[0], pins[1], 400000);
-      configureSensorOnBus(bus, newType, channelName);
+      configureSensorOnBus(bus, channelName);
       break;
     }
     case TYPE_HX711:
@@ -874,24 +733,25 @@ void configureChannelHardware(char channelName, SensorType newType, const int pi
       pinMode(pins[1], OUTPUT);
       digitalWrite(pins[1], LOW);
       break;
-    case TYPE_HALL:
-      // Nur Pin 0 genutzt (Signal-Pin des KY-003) - der interne Pull-up ist redundant, falls das
-      // Modul bereits einen eigenen besitzt, schadet aber nicht und macht die Beschaltung
-      // robuster gegen Module ohne eigenen Pull-up.
+    case TYPE_DIGITAL:
+      // Nur Pin 0 genutzt. Interner Pull-up ist redundant, falls das Modul einen eigenen hat,
+      // schadet aber nicht - macht die Beschaltung robuster gegen Module ohne eigenen.
       pinMode(pins[0], INPUT_PULLUP);
       break;
-    case TYPE_DS18B20:
+    case TYPE_ONEWIRE:
       // Bus in Ruhestellung: oneWireReset()/-WriteBit()/-ReadBit() schalten pinMode() für die
       // eigentliche Kommunikation ohnehin bei jedem Zugriff selbst um (siehe dort) - hier nur
-      // der definierte Ausgangszustand. Kein interner Pull-up wie bei TYPE_HALL: der 1-Wire-Bus
-      // braucht einen externen Pull-up nach 3,3V (typisch 4,7kΩ), der interne ESP32-Pull-up ist
-      // dafür in der Praxis zu hochohmig (siehe Hardware-Hinweis in DS18B20Sensor.java).
+      // der definierte Ausgangszustand. Kein interner Pull-up wie bei TYPE_DIGITAL: der
+      // 1-Wire-Bus braucht einen externen Pull-up nach 3,3V (typisch 4,7kΩ), der interne
+      // ESP32-Pull-up ist dafür in der Praxis zu hochohmig (siehe Hardware-Hinweis in
+      // DS18B20Sensor.java).
       pinMode(pins[0], INPUT);
       break;
-    case TYPE_MICROPHONE:
-    case TYPE_MIC_SPECTRUM:
-      // Identische I2S-Hardware für beide Mikrofon-"Sensoren" - TYPE_MIC_SPECTRUM liefert nur
-      // ein anderes Ausgabeformat (Spektrum statt Einzelwert), siehe sampleChannel()/loop().
+    case TYPE_I2S:
+      // Identische I2S-Hardware unabhängig vom Modus - ob pro Zyklus ein Einzelwert oder in
+      // festem Intervall ein Spektrum verschickt wird, entscheidet nur noch
+      // i2sConfigForChannel(channelName).spectrumMode (siehe sampleChannel()/loop()), nicht mehr
+      // der Sensortyp selbst.
       configureMicrophone(channelName, pins);
       break;
     case TYPE_NONE:
@@ -900,11 +760,155 @@ void configureChannelHardware(char channelName, SensorType newType, const int pi
   }
 }
 
+/** Parst eine Hex-Teilzeichenkette (ohne "0x"-Präfix), z. B. aus {@link #parseI2CSetPayload}. */
+long parseHexToken(const String &s) {
+  return strtol(s.c_str(), nullptr, 16);
+}
+
+/** Parst einen einzelnen Init-Write-Eintrag "reg:byte:byte:..." (alles hex) in {@code out}.
+ *  @return false bei erkennbar kaputtem Format (kein ':' oder keine Datenbytes) */
+bool parseI2CWriteEntry(const String &entry, I2CWriteSpec &out) {
+  int firstColon = entry.indexOf(':');
+  if (firstColon == -1) return false;
+
+  out.reg = (uint8_t) parseHexToken(entry.substring(0, firstColon));
+  out.dataLen = 0;
+
+  int start = firstColon + 1;
+  while (start <= (int) entry.length() && out.dataLen < 4) {
+    int sep = entry.indexOf(':', start);
+    String byteStr = (sep == -1) ? entry.substring(start) : entry.substring(start, sep);
+    out.data[out.dataLen++] = (uint8_t) parseHexToken(byteStr);
+    if (sep == -1) break;
+    start = sep + 1;
+  }
+  return out.dataLen > 0;
+}
+
+/** Parst einen einzelnen Read-Eintrag "reg:len:B|L:slot" (reg hex, len/slot dezimal) in
+ *  {@code out}. @return false bei erkennbar kaputtem Format oder ungültiger Länge (nicht 1-4) */
+bool parseI2CReadEntry(const String &entry, I2CReadSpec &out) {
+  int c1 = entry.indexOf(':');
+  int c2 = (c1 == -1) ? -1 : entry.indexOf(':', c1 + 1);
+  int c3 = (c2 == -1) ? -1 : entry.indexOf(':', c2 + 1);
+  if (c1 == -1 || c2 == -1 || c3 == -1) return false;
+
+  out.reg = (uint8_t) parseHexToken(entry.substring(0, c1));
+  out.len = (uint8_t) entry.substring(c1 + 1, c2).toInt();
+  out.bigEndian = entry.substring(c2 + 1, c3).equalsIgnoreCase("B");
+  out.slot = (uint8_t) entry.substring(c3 + 1).toInt();
+
+  return out.len >= 1 && out.len <= 4;
+}
+
+/** Zerlegt eine ';'-getrennte Liste von Init-Write-Einträgen in {@code specs} (siehe
+ *  {@link #parseI2CWriteEntry}), bis zu {@code maxCount} Einträge. Leere Liste ist gültig (ein
+ *  Sensor ohne Init-Sequenz). */
+bool parseI2CWriteList(const String &list, I2CWriteSpec specs[], uint8_t &countOut, uint8_t maxCount) {
+  countOut = 0;
+  if (list.length() == 0) return true;
+
+  int start = 0;
+  while (start <= (int) list.length() && countOut < maxCount) {
+    int sep = list.indexOf(';', start);
+    String entry = (sep == -1) ? list.substring(start) : list.substring(start, sep);
+    if (!parseI2CWriteEntry(entry, specs[countOut])) return false;
+    countOut++;
+    if (sep == -1) break;
+    start = sep + 1;
+  }
+  return true;
+}
+
+/** Wie {@link #parseI2CWriteList}, aber für Read-Einträge (siehe {@link #parseI2CReadEntry}). */
+bool parseI2CReadList(const String &list, I2CReadSpec specs[], uint8_t &countOut, uint8_t maxCount) {
+  countOut = 0;
+  if (list.length() == 0) return true;
+
+  int start = 0;
+  while (start <= (int) list.length() && countOut < maxCount) {
+    int sep = list.indexOf(';', start);
+    String entry = (sep == -1) ? list.substring(start) : list.substring(start, sep);
+    if (!parseI2CReadEntry(entry, specs[countOut])) return false;
+    countOut++;
+    if (sep == -1) break;
+    start = sep + 1;
+  }
+  return true;
+}
+
+/** Zerlegt das Payload eines "SET,<Kanal>,I2C,..."-Kommandos - alles nach "I2C," - in die
+ *  generische I2C-Konfiguration des Kanals. Format: "<Adresse hex>,<Init-Writes>,<Reads>".
+ *  Init-Writes: "-" oder ';'-getrennt "reg:byte:byte:..." (alles hex).
+ *  Reads: ';'-getrennt "reg:len:B|L:slot" (reg hex, len/slot dezimal).
+ *  Beispiel INA219: "40,0:39:9f;5:10:0,2:2:B:0;4:2:B:1"
+ *  @return false bei erkennbar kaputtem Format */
+bool parseI2CSetPayload(char channelName, const String &params) {
+  I2CSensorConfig &cfg = i2cConfigForChannel(channelName);
+  cfg = I2CSensorConfig(); // vorherige Konfiguration verwerfen
+
+  int p1 = params.indexOf(',');
+  if (p1 == -1) return false;
+  int p2 = params.indexOf(',', p1 + 1);
+  if (p2 == -1) return false;
+
+  cfg.address = (uint8_t) parseHexToken(params.substring(0, p1));
+
+  String initsStr = params.substring(p1 + 1, p2);
+  if (initsStr == "-") initsStr = "";
+  if (!parseI2CWriteList(initsStr, cfg.initWrites, cfg.initWriteCount, MAX_I2C_WRITES)) {
+    return false;
+  }
+
+  String readsStr = params.substring(p2 + 1);
+  if (!parseI2CReadList(readsStr, cfg.reads, cfg.readCount, MAX_I2C_READS)) {
+    return false;
+  }
+
+  return cfg.readCount > 0;
+}
+
+/** Zerlegt das Payload eines "SET,<Kanal>,ONEWIRE,..."-Kommandos - alles nach "ONEWIRE," - in
+ *  die generische {@link OneWireSensorConfig}. Format:
+ *  "ConvertCmd(hex),DelayMs,ReadCmd(hex),ReadLen,ValueOffset,ValueLen,B|L,0|1,Slot".
+ *  Beispiel DS18B20: "44,750,be,9,0,2,L,1,0"
+ *  @return false bei erkennbar kaputtem Format */
+bool parseOneWireSetPayload(char channelName, const String &params) {
+  OneWireSensorConfig &cfg = oneWireConfigForChannel(channelName);
+  cfg = OneWireSensorConfig(); // vorherige Konfiguration verwerfen
+
+  const int fieldCount = 9;
+  int fieldStart[fieldCount];
+  int fieldEnd[fieldCount];
+  int start = 0;
+  for (int i = 0; i < fieldCount; i++) {
+    int sep = (i == fieldCount - 1) ? params.length() : params.indexOf(',', start);
+    if (sep == -1) return false;
+    fieldStart[i] = start;
+    fieldEnd[i] = sep;
+    start = sep + 1;
+  }
+
+  cfg.convertCmd = (uint8_t) parseHexToken(params.substring(fieldStart[0], fieldEnd[0]));
+  cfg.conversionDelayMs = (unsigned long) params.substring(fieldStart[1], fieldEnd[1]).toInt();
+  cfg.readCmd = (uint8_t) parseHexToken(params.substring(fieldStart[2], fieldEnd[2]));
+  cfg.readLen = (uint8_t) params.substring(fieldStart[3], fieldEnd[3]).toInt();
+  cfg.valueOffset = (uint8_t) params.substring(fieldStart[4], fieldEnd[4]).toInt();
+  cfg.valueLen = (uint8_t) params.substring(fieldStart[5], fieldEnd[5]).toInt();
+  cfg.littleEndian = params.substring(fieldStart[6], fieldEnd[6]).equalsIgnoreCase("L");
+  cfg.checkCrc = params.substring(fieldStart[7], fieldEnd[7]) == "1";
+  cfg.slot = (uint8_t) params.substring(fieldStart[8], fieldEnd[8]).toInt();
+
+  if (cfg.readLen == 0 || cfg.readLen > 16) return false;
+  if ((int) cfg.valueOffset + (int) cfg.valueLen > cfg.readLen) return false;
+  return true;
+}
+
 void processCommand(String command) {
   command.trim();
 
   if (command.equalsIgnoreCase("PING")) {
-    hostPrint("#HELLO,PhyLog-ESP32,fw=8.6\n");
+    hostPrint("#HELLO,PhyLog-ESP32,fw=9.0\n");
   } else if (command.equalsIgnoreCase("START")) {
     isStreaming = true;
     hostPrint("#OK,START\n");
@@ -920,48 +924,70 @@ void processCommand(String command) {
       hostWrite(buf, len);
     }
   } else if (command.startsWith("SET,")) {
-    // Format: SET,<Kanal>,<SensorTyp> (z.B. SET,A,INA219)
+    // Vier Formate:
+    //   SET,<Kanal>,<SensorTyp>                          z.B. SET,A,HX711 / SET,A,DIGITAL
+    //   SET,<Kanal>,I2C,<Adresse>,<Init-Writes>,<Reads>   z.B. SET,A,I2C,40,0:39:9f;5:10:0,2:2:B:0;4:2:B:1
+    //   SET,<Kanal>,I2S,RAW|SPEC                          z.B. SET,A,I2S,RAW
+    //   SET,<Kanal>,ONEWIRE,<9 Felder, siehe parseOneWireSetPayload>  z.B. SET,A,ONEWIRE,44,750,be,9,0,2,L,1,0
     int firstComma = command.indexOf(',');
     int secondComma = command.indexOf(',', firstComma + 1);
+    if (firstComma == -1 || secondComma == -1) return;
 
-    if (firstComma != -1 && secondComma != -1) {
-      char targetChannel = command.charAt(firstComma + 1);
-      String sensorTypeName = command.substring(secondComma + 1);
+    char targetChannel = command.charAt(firstComma + 1);
+    if (targetChannel != 'A' && targetChannel != 'B') return;
 
-      SensorType newType = TYPE_NONE;
-      if (sensorTypeName.equalsIgnoreCase("INA219")) newType = TYPE_INA219;
-      else if (sensorTypeName.equalsIgnoreCase("VEML7700")) newType = TYPE_VEML7700;
-      else if (sensorTypeName.equalsIgnoreCase("ANALOG")) newType = TYPE_ANALOG;
-      else if (sensorTypeName.equalsIgnoreCase("HX711")) newType = TYPE_HX711;
-      else if (sensorTypeName.equalsIgnoreCase("MIC")) newType = TYPE_MICROPHONE;
-      else if (sensorTypeName.equalsIgnoreCase("MICSPEC")) newType = TYPE_MIC_SPECTRUM;
-      else if (sensorTypeName.equalsIgnoreCase("HALL")) newType = TYPE_HALL;
-      else if (sensorTypeName.equalsIgnoreCase("DS18B20")) newType = TYPE_DS18B20;
+    String rest = command.substring(secondComma + 1); // "<SensorTyp>" bzw. "I2C,..."/"I2S,..."/"ONEWIRE,..."
+    int thirdComma = rest.indexOf(',');
+    String firstToken = (thirdComma == -1) ? rest : rest.substring(0, thirdComma);
+    String extraParams = (thirdComma == -1) ? "" : rest.substring(thirdComma + 1);
 
-      if (targetChannel == 'A') {
-        releaseChannelHardware('A', configChannelA);
-        configChannelA = newType;
-        configureChannelHardware('A', newType, PINS_CHANNEL_A);
-      } else if (targetChannel == 'B') {
-        releaseChannelHardware('B', configChannelB);
-        configChannelB = newType;
-        configureChannelHardware('B', newType, PINS_CHANNEL_B);
+    SensorType newType = TYPE_NONE;
+    String ackPayload = firstToken;
+
+    if (firstToken.equalsIgnoreCase("I2C")) {
+      newType = TYPE_I2C;
+      if (!parseI2CSetPayload(targetChannel, extraParams)) {
+        // Kaputtes Payload: Kanal sicherheitshalber auf "kein Sensor" statt mit einer
+        // halbfertigen Konfiguration weiterzumachen.
+        newType = TYPE_NONE;
+        reportSensorError(targetChannel, "I2CCFG");
       }
+      ackPayload = rest;
+    } else if (firstToken.equalsIgnoreCase("I2S")) {
+      newType = TYPE_I2S;
+      i2sConfigForChannel(targetChannel).spectrumMode = extraParams.equalsIgnoreCase("SPEC");
+      ackPayload = rest;
+    } else if (firstToken.equalsIgnoreCase("ONEWIRE")) {
+      newType = TYPE_ONEWIRE;
+      if (!parseOneWireSetPayload(targetChannel, extraParams)) {
+        newType = TYPE_NONE;
+        reportSensorError(targetChannel, "1WIRECFG");
+      }
+      ackPayload = rest;
+    } else if (firstToken.equalsIgnoreCase("ANALOG")) newType = TYPE_ANALOG;
+    else if (firstToken.equalsIgnoreCase("HX711")) newType = TYPE_HX711;
+    else if (firstToken.equalsIgnoreCase("DIGITAL")) newType = TYPE_DIGITAL;
 
-      char buf[64];
-      int len = snprintf(buf, sizeof(buf), "#OK,SET,%c,%s\n", targetChannel, sensorTypeName.c_str());
-      hostWrite(buf, len);
+    if (targetChannel == 'A') {
+      releaseChannelHardware('A', configChannelA);
+      configChannelA = newType;
+      configureChannelHardware('A', newType, PINS_CHANNEL_A);
+    } else {
+      releaseChannelHardware('B', configChannelB);
+      configChannelB = newType;
+      configureChannelHardware('B', newType, PINS_CHANNEL_B);
     }
+
+    char buf[96];
+    int len = snprintf(buf, sizeof(buf), "#OK,SET,%c,%s\n", targetChannel, ackPayload.c_str());
+    hostWrite(buf, len);
   }
 }
 
-/** Liest ein einzelnes Kommandozeichen aus einer der beiden Host-Schnittstellen (USB oder
- *  Bluetooth) in {@code inputBuffer} ein und stößt bei einem Zeilenumbruch die Verarbeitung an -
- *  gemeinsame Zeilen-Puffer-Logik für {@link #handleSerialCommunication}, das denselben Puffer
- *  für beide Quellen nacheinander füttert (siehe v8.5-Hinweis im Dateikopf: kein getrennter
- *  Puffer je Schnittstelle, ein gleichzeitig aktiv sendender Client auf beiden Wegen würde die
- *  Kommandos ineinander mischen - in der Praxis ist ohnehin nur eine der beiden Verbindungen
- *  tatsächlich benutzt). */
+/** Liest ein Kommandozeichen aus einer der beiden Host-Schnittstellen (USB/Bluetooth) in
+ *  {@code inputBuffer} und stößt bei Zeilenumbruch die Verarbeitung an. Ein gemeinsamer Puffer
+ *  für beide Quellen - in der Praxis ist ohnehin nur eine Verbindung aktiv genutzt, ein
+ *  gleichzeitig sendender Client auf beiden Wegen würde die Kommandos mischen. */
 void feedCommandChar(String &inputBuffer, char incomingChar) {
   if (incomingChar == '\n' || incomingChar == '\r') {
     if (inputBuffer.length() > 0) {
@@ -1049,22 +1075,17 @@ void computeFFT(float *real, float *imag, int n) {
 
 /** Sendet ein zuvor über {@link #computeFFT} berechnetes Spektrum als ein Paket:
  *  {@code #SPEC,<Kanal>,<Bins>,<Abtastrate>,<mag_0>,<mag_1>,...}. Magnituden als dBFS·10,
- *  auf int gerundet - spart deutlich Bandbreite gegenüber Floats (bei 512 Werten pro Bild sonst
- *  schnell ein Vielfaches an Übertragungszeit).
+ *  auf int gerundet - spart Bandbreite gegenüber Floats.
  *
  * <p>Baut das gesamte Paket in {@link #SPECTRUM_PACKET_BUF_SIZE} zusammen und verschickt es mit
- * einem einzigen {@code hostWrite()} (siehe v8.5-Hinweis im Dateikopf), statt wie zuvor mit 512+
- * einzelnen {@code Serial.print()}
- * -Aufrufen (siehe v8.4-Hinweis im Dateikopf) - jeder einzelne Aufruf formatiert eine Zahl separat
- * und schreibt sie einzeln raus, was bei ~16 Bildern/Sekunde spürbar CPU-Zeit kostete, die dann
- * z. B. für die zeitkritische Abtastung des jeweils anderen Kanals fehlte. Der Puffer ist
- * {@code static}, um bei jedem Aufruf denselben (im BSS-Bereich liegenden) Speicher
- * wiederzuverwenden, statt ~3,6 KB auf dem Stack des Loop-Tasks zu allozieren.</p>
+ * einem einzigen {@code hostWrite()} statt vieler einzelner {@code Serial.print()}-Aufrufe - das
+ * spart bei ~16 Bildern/Sekunde CPU-Zeit, die sonst für die Abtastung des anderen Kanals fehlt.
+ * Der Puffer ist {@code static}, um denselben BSS-Speicher wiederzuverwenden statt ~3,6 KB auf
+ * dem Stack zu allozieren.</p>
  *
- * <p>Die Abbruchbedingung {@code offset < SPECTRUM_PACKET_BUF_SIZE - 8} in der Schleife ist eine
- * reine Sicherheitsgrenze gegen einen Pufferüberlauf (acht Byte Reserve für den längsten
- * möglichen einzelnen Bin-Eintrag plus Newline) - bei der aktuellen Puffergröße und
- * {@link #SPECTRUM_OUTPUT_BINS}=512 wird sie in der Praxis nie erreicht.</p> */
+ * <p>Die Abbruchbedingung {@code offset < SPECTRUM_PACKET_BUF_SIZE - 8} ist eine reine
+ * Sicherheitsgrenze gegen Pufferüberlauf, bei aktueller Puffergröße/Bin-Zahl praktisch nie
+ * erreicht.</p> */
 void sendSpectrumPacket(char channelName, float *real, float *imag) {
   static const float FULL_SCALE = 8388607.0f; // 2^23 - 1, wie in der Software-Sensorklasse
   static char packetBuf[SPECTRUM_PACKET_BUF_SIZE];
@@ -1083,12 +1104,8 @@ void sendSpectrumPacket(char channelName, float *real, float *imag) {
   hostWrite(packetBuf, offset);
 }
 
-/** Vorberechnetes Hann-Fenster für {@link #captureAndSendSpectrum} - hängt nur von {@code i} und
- *  der fest kompilierten {@link #SPECTRUM_FFT_SIZE} ab, ist also für jeden Frame identisch. Ohne
- *  diese Vorberechnung rief captureAndSendSpectrum bei jedem Frame 1024x {@code cosf()} auf, bei
- *  ~16 Bildern/Sekunde (siehe {@link #SPECTRUM_INTERVAL_MS}) also ~16.000 unnötige Aufrufe pro
- *  Sekunde derselben 1024 Werte - CPU-Zeit, die dann für die Abtastung des jeweils anderen Kanals
- *  fehlte (siehe auch v8.4-Hinweis im Dateikopf zu {@link #sendSpectrumPacket}). */
+/** Vorberechnetes Hann-Fenster für {@link #captureAndSendSpectrum} - identisch für jeden Frame,
+ *  spart ~16.000 unnötige {@code cosf()}-Aufrufe/Sekunde gegenüber Neuberechnung je Frame. */
 float hannWindow[SPECTRUM_FFT_SIZE];
 bool hannWindowReady = false;
 
@@ -1103,7 +1120,8 @@ void ensureHannWindow() {
 /** Nimmt {@link #SPECTRUM_FFT_SIZE} Samples vom Mikrofon des angegebenen Kanals auf, wendet ein
  *  Hann-Fenster an (reduziert den "Leckeffekt" durch den scharfen Rand des Ausschnitts, der sonst
  *  als zusätzliche, falsche Frequenzanteile im Spektrum erscheinen würde), berechnet per FFT das
- *  Amplitudenspektrum und verschickt es. Wird für Kanäle mit TYPE_MIC_SPECTRUM aufgerufen. */
+ *  Amplitudenspektrum und verschickt es. Wird für Kanäle mit TYPE_I2S im Spektrum-Modus
+ *  (siehe {@link I2SSensorConfig#spectrumMode}) aufgerufen. */
 void captureAndSendSpectrum(char channelName) {
   i2s_chan_handle_t handle = micHandleForChannel(channelName);
   if (handle == NULL) {
@@ -1113,9 +1131,8 @@ void captureAndSendSpectrum(char channelName) {
 
   static int32_t rawBuffer[SPECTRUM_FFT_SIZE];
   size_t bytesRead = 0;
-  // Wie bei sampleMicrophone (siehe dort und v8.4-Hinweis im Dateikopf): SPECTRUM_FFT_SIZE
-  // Samples bei MIC_SAMPLE_RATE_HZ sind 64ms, 100ms statt vormals 200ms genügt als Marge und
-  // begrenzt eine mögliche Verzögerung des jeweils anderen Kanals im Fehlerfall stärker.
+  // SPECTRUM_FFT_SIZE Samples bei MIC_SAMPLE_RATE_HZ brauchen ~64ms; 100ms Timeout-Marge
+  // begrenzt eine mögliche Verzögerung des anderen Kanals im Fehlerfall.
   esp_err_t err = i2s_channel_read(handle, rawBuffer, sizeof(rawBuffer), &bytesRead, pdMS_TO_TICKS(100));
   int sampleCount = bytesRead / sizeof(int32_t);
   if (err != ESP_OK || sampleCount < SPECTRUM_FFT_SIZE) {
@@ -1165,12 +1182,9 @@ void sampleMicrophone(char channelName) {
   int32_t buffer[MIC_MAX_READ_SAMPLES];
   size_t bytesRead = 0;
 
-  // Timeout bewusst knapp über der maximal benötigten Sammelzeit gewählt (MIC_MAX_READ_SAMPLES
-  // Samples bei MIC_SAMPLE_RATE_HZ sind 32ms) statt der vorherigen 50ms mit größerer Marge -
-  // siehe v8.4-Hinweis im Dateikopf: ein blockierender Lesevorgang hier verzögert auch die
-  // Abtastung des jeweils anderen Kanals (siehe #loop/#sampleChannel), ein kleineres Timeout
-  // begrenzt diese Verzögerung im Fehlerfall (hängendes/getrenntes Mikrofon), ohne bei normalem
-  // Betrieb je greifen zu müssen.
+  // Timeout knapp über der maximal benötigten Sammelzeit (MIC_MAX_READ_SAMPLES bei
+  // MIC_SAMPLE_RATE_HZ = 32ms): ein blockierender Lesevorgang verzögert auch den anderen Kanal
+  // (siehe loop()/sampleChannel), ein kleines Timeout begrenzt das im Fehlerfall.
   esp_err_t err = i2s_channel_read(handle, buffer, samplesToRead * sizeof(int32_t), &bytesRead, pdMS_TO_TICKS(20));
   if (err != ESP_OK || bytesRead == 0) {
     reportSensorError(channelName, "I2S");
@@ -1195,32 +1209,25 @@ void sampleChannel(char channelName, SensorType type, const int pins[3]) {
   if (type == TYPE_ANALOG) {
     int analogVal = analogRead(pins[0]);
     sendDataPacket(channelName, 0, analogVal);
-  } else if (type == TYPE_INA219) {
+  } else if (type == TYPE_I2C) {
+    // Register, Länge, Bytereihenfolge und Ziel-Slot kommen aus der vom Host per SET
+    // übertragenen Konfiguration - die Firmware kennt kein konkretes Sensormodell.
     TwoWire &bus = busForChannel(channelName);
-    uint16_t rawVoltage, rawCurrent;
-    bool okVoltage = readI2CRegister16(bus, ADDR_INA219, 0x02, rawVoltage);
-    if (okVoltage) {
-      sendDataPacket(channelName, 0, rawVoltage);
-    } else {
-      reportSensorError(channelName, "I2C");
+    const I2CSensorConfig &cfg = i2cConfigForChannel(channelName);
+    bool allOk = (cfg.readCount > 0);
+
+    for (int i = 0; i < cfg.readCount; i++) {
+      const I2CReadSpec &r = cfg.reads[i];
+      uint32_t rawValue;
+      bool ok = readI2CRegisterN(bus, cfg.address, r.reg, r.len, r.bigEndian, rawValue);
+      if (ok) {
+        sendDataPacket(channelName, r.slot, (long) rawValue);
+      } else {
+        reportSensorError(channelName, "I2C");
+      }
+      allOk &= ok;
     }
-    bool okCurrent = readI2CRegister16(bus, ADDR_INA219, 0x04, rawCurrent);
-    if (okCurrent) {
-      sendDataPacket(channelName, 1, rawCurrent);
-    } else {
-      reportSensorError(channelName, "I2C");
-    }
-    noteI2CResult(channelName, type, okVoltage && okCurrent);
-  } else if (type == TYPE_VEML7700) {
-    TwoWire &bus = busForChannel(channelName);
-    uint16_t rawLux;
-    bool okLux = readI2CRegister16LE(bus, ADDR_VEML7700, 0x04, rawLux);
-    if (okLux) {
-      sendDataPacket(channelName, 0, rawLux);
-    } else {
-      reportSensorError(channelName, "I2C");
-    }
-    noteI2CResult(channelName, type, okLux);
+    noteI2CResult(channelName, allOk);
   } else if (type == TYPE_HX711) {
     long rawWeight;
     if (readHX711(pins[0], pins[1], rawWeight)) {
@@ -1228,20 +1235,22 @@ void sampleChannel(char channelName, SensorType type, const int pins[3]) {
     } else {
       reportSensorError(channelName, "HX711");
     }
-  } else if (type == TYPE_HALL) {
+  } else if (type == TYPE_DIGITAL) {
     // Kein Übertragungsfehler möglich wie bei I2C/HX711 - digitalRead() liefert immer einen
-    // Wert. Die Umrechnung "0/1 -> Magnetfeld ja/nein" (inkl. Invertierung, da das Modul
+    // Wert. Die Umrechnung "0/1 -> Magnetfeld ja/nein" (inkl. Invertierung, da das KY-003-Modul
     // active-low ist) übernimmt bewusst erst die Java-Seite (HallEffectSensor.decode), wie bei
     // allen anderen Sensoren auch - die Firmware kennt nur Rohwerte.
     int rawState = digitalRead(pins[0]);
     sendDataPacket(channelName, 0, rawState);
-  } else if (type == TYPE_DS18B20) {
-    sampleDS18B20(channelName, pins[0]);
-  } else if (type == TYPE_MICROPHONE) {
-    sampleMicrophone(channelName);
-  } else if (type == TYPE_MIC_SPECTRUM) {
-    // Bewusst kein Aufruf hier: das Spektrum braucht eine eigene, von der normalen Abtastrate
-    // unabhängige Taktung (SPECTRUM_INTERVAL_MS) und wird deshalb direkt in loop() behandelt.
+  } else if (type == TYPE_ONEWIRE) {
+    sampleOneWire(channelName, pins[0]);
+  } else if (type == TYPE_I2S) {
+    if (i2sConfigForChannel(channelName).spectrumMode) {
+      // Bewusst kein Aufruf hier: das Spektrum braucht eine eigene, von der normalen Abtastrate
+      // unabhängige Taktung (SPECTRUM_INTERVAL_MS) und wird deshalb direkt in loop() behandelt.
+    } else {
+      sampleMicrophone(channelName);
+    }
   }
 }
 
@@ -1272,11 +1281,13 @@ void loop() {
   // ggf. viel höheren) Abtastrate unabhängige Taktung - eine einzelne FFT dauert zwar nur
   // Millisekunden, aber 512 Bins pro Bild sind schon einige hundert Byte, die bei dieser Baudrate
   // nicht beliebig oft pro Sekunde übertragen werden können (siehe SPECTRUM_INTERVAL_MS).
-  if (configChannelA == TYPE_MIC_SPECTRUM && currentTimeMs - lastSpectrumTimeMsA >= SPECTRUM_INTERVAL_MS) {
+  if (configChannelA == TYPE_I2S && i2sConfigChannelA.spectrumMode
+      && currentTimeMs - lastSpectrumTimeMsA >= SPECTRUM_INTERVAL_MS) {
     lastSpectrumTimeMsA = currentTimeMs;
     captureAndSendSpectrum('A');
   }
-  if (configChannelB == TYPE_MIC_SPECTRUM && currentTimeMs - lastSpectrumTimeMsB >= SPECTRUM_INTERVAL_MS) {
+  if (configChannelB == TYPE_I2S && i2sConfigChannelB.spectrumMode
+      && currentTimeMs - lastSpectrumTimeMsB >= SPECTRUM_INTERVAL_MS) {
     lastSpectrumTimeMsB = currentTimeMs;
     captureAndSendSpectrum('B');
   }

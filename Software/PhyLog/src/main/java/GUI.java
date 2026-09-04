@@ -763,7 +763,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         if (!connectionController.isConnected()) {
             return;
         }
-        connectionController.sendLine("SET," + channelId + "," + sensor.getFirmwareTypeName());
+        connectionController.sendLine("SET," + channelId + "," + sensor.getFirmwareSetPayload());
     }
 
     private void onTareRequested(char channelId) {
@@ -858,10 +858,16 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
     }
 
     /** {@inheritDoc} Die serielle Verbindung selbst bleibt bestehen - nur der Sensor auf
-     *  {@code channelId} konnte wiederholt nicht ausgelesen werden. */
+     *  {@code channelId} konnte wiederholt nicht ausgelesen werden. Zeigt den Sensornamen statt
+     *  des rohen Protokoll-Tags (z. B. "I2C"/"1WIRE") an, damit auf einen Blick klar ist, welcher
+     *  Sensor betroffen ist - besonders auf Kanälen mit mehreren Sensoren derselben Buskategorie
+     *  (z. B. zwei I2C-Sensoren an unterschiedlichen Adressen) wäre der reine Tag sonst nicht
+     *  aussagekräftig genug. */
     @Override
     public void onSensorErrorDuringRecording(char channelId, String errorTag) {
-        lblTriggerStatus.setText("Sensorfehler Kanal " + channelId + " (" + errorTag + ") - Aufnahme gestoppt");
+        MeasurementChannel ch = acquisitionEngine.channel(channelId);
+        String sensorName = ch.hasSensor() ? ch.sensor.getName() : ("Kanal " + channelId);
+        lblTriggerStatus.setText("Sensorfehler: " + sensorName + " - Aufnahme gestoppt");
         lblTriggerStatus.setForeground(Theme.DANGER);
     }
 

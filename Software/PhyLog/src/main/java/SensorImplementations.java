@@ -22,9 +22,61 @@ class NoSensor extends Sensor {
     }
 }
 
-/** INA219-Sensorprofil für Strommessungen. */
-class INA219CurrentSensor extends Sensor{
+/**
+ * Generisches 0-25V-Spannungsteiler-Modul (Teilerverhältnis 5:1) an einem ESP32-Analogeingang.
+ *
+ * <p><b>Wichtiger Hardware-Hinweis:</b> Der ESP32-Analogeingang ist auf ca. 3,3V ausgelegt, das
+ * absolute Maximum liegt bei ca. 3,6V - deutlich unter den 5V, die dieses Modul bei 25V Eingang
+ * an "S" ausgibt. Direkt angeschlossen ist sicher nur eine Eingangsspannung bis ca. 16,5V nutzbar;
+ * für den vollen 25V-Bereich braucht es einen weiteren Spannungsteiler bzw. Levelshifter.</p>
+ */
+class VoltageDividerSensor extends Sensor {
+
+    /** Referenzspannung des ESP32-ADC bei Standard-Dämpfung (ADC_11db). */
+    static final double ADC_REFERENCE_VOLTAGE = 3.3;
+    /** Auflösung des ESP32-ADC (12 Bit -> 0..4095). */
+    static final double ADC_MAX_COUNT = 4095.0;
+
+    /** Teilerverhältnis Eingangsspannung/Ausgangsspannung; über den Kalibrierdialog feinjustierbar. */
+    private double dividerRatio = 3.3;
+
+    public VoltageDividerSensor() {
+        super("Spannungssensor", "V", List.of("V", "VOLT"));
+    }
+
+    @Override
+    public double decode(int slot, long rawValue) {
+        double adcVoltage = (rawValue / ADC_MAX_COUNT) * ADC_REFERENCE_VOLTAGE;
+        return adcVoltage * dividerRatio;
+    }
+
+    @Override
+    public List<Quantity> getQuantities() {
+        return List.of(new Quantity("Spannung", "V", 0));
+    }
+
+    @Override
+    public String getFirmwareTypeName() {
+        return "ANALOG";
+    }
+
+    @Override
+    public List<CalibrationParameter> getCalibrationParameters() {
+        return List.of(new CalibrationParameter("Teilerverhältnis", "Vin/Vout",
+                () -> dividerRatio, v -> dividerRatio = v));
+    }
+}
+
+/**
+ * INA219-Sensorprofil für Strommessungen. Die Firmware kennt seit v8.7 kein "INA219" mehr,
+ * sondern nur noch generisches I2C (siehe {@link I2CSensor}) - Adresse, Init-Register
+ * (Config + Kalibrierung) und die beiden Leseregister (Bus-Spannung, Strom) liefert allein diese
+ * Klasse. Slot 0 (Spannung) wird zwar mitgelesen, aber (wie schon vor dem Umbau) von
+ * {@link AcquisitionEngine} verworfen, da {@link #getQuantities()} nur Slot 1 (Strom) meldet.
+ */
+class INA219CurrentSensor extends I2CSensor {
     private static final double CURRENT_LSB = 0.0001; // 0.1 mA pro Bit
+    private static final int ADDRESS = 0x40;
 
     public INA219CurrentSensor() {
         super("INA219 (Strom)", "A", List.of("A", "AMP", "MA"));
@@ -42,13 +94,35 @@ class INA219CurrentSensor extends Sensor{
     }
 
     @Override
-    public String getFirmwareTypeName() {
-        return "INA219";
+    public int getI2CAddress() {
+        return ADDRESS;
+    }
+
+    @Override
+    public List<Write> getInitWrites() {
+        return List.of(
+                new Write(0x00, 0x39, 0x9F), // Config-Register: 32V, Gain 8, 12-Bit-ADC
+                new Write(0x05, 0x10, 0x00)  // Kalibrierregister
+        );
+    }
+
+    @Override
+    public List<Read> getReads() {
+        return List.of(
+                new Read(0x02, 2, true, 0), // Bus-Spannungsregister -> Slot 0 (ungenutzt, s. o.)
+                new Read(0x04, 2, true, 1)  // Stromregister -> Slot 1
+        );
     }
 }
 
-/** VEML7700-Sensor zur Beleuchtungsstärkemessung in Lux. */
-class VEML7700Sensor extends Sensor {
+/**
+ * VEML7700-Sensor zur Beleuchtungsstärkemessung in Lux. Wie {@link INA219CurrentSensor} seit
+ * v8.7 ein generischer {@link I2CSensor} - die Firmware sieht nur noch "I2C-Gerät an 0x10 mit
+ * dieser Init-/Lesekonfiguration", nicht mehr "VEML7700".
+ */
+class VEML7700Sensor extends I2CSensor {
+    private static final int ADDRESS = 0x10;
+
     public VEML7700Sensor() {
         super("VEML7700 (Licht / Lux)", "lx", List.of("LX", "LUX"));
     }
@@ -65,13 +139,26 @@ class VEML7700Sensor extends Sensor {
     }
 
     @Override
-    public String getFirmwareTypeName() {
-        return "VEML7700";
+    public int getMaxSampleRateHz() {
+        return 40; // Integrationszeit 25ms -> max. 40 Hz neue Messwerte
     }
 
     @Override
-    public int getMaxSampleRateHz() {
-        return 40; // Integrationszeit 25ms -> max. 40 Hz neue Messwerte
+    public int getI2CAddress() {
+        return ADDRESS;
+    }
+
+    @Override
+    public List<Write> getInitWrites() {
+        // ALS_CONF-Register: Gain 1x, Integrationszeit 25ms (kürzeste verfügbare Einstellung
+        // statt der 100ms im Reset-Zustand) - siehe getMaxSampleRateHz().
+        return List.of(new Write(0x00, 0x00, 0x03));
+    }
+
+    @Override
+    public List<Read> getReads() {
+        // VEML7700 sendet 16-Bit-Register LSB-zuerst (little-endian), anders als der INA219.
+        return List.of(new Read(0x04, 2, false, 0));
     }
 }
 
@@ -114,7 +201,9 @@ class HX711Sensor extends Sensor {
 
 /** INMP441-Mikrofon als Frequenzspektrum statt einzelnem dB-Wert, siehe {@link MicrophoneSensor}
  *  für die klassische Variante. {@code decode} wird nie aufgerufen, da die Firmware für diesen
- *  Sensortyp ausschließlich Spektrum-Pakete schickt. */
+ *  Sensortyp ausschließlich Spektrum-Pakete schickt. Firmware-seitig seit v8.8 derselbe generische
+ *  Typ "I2S" wie {@link MicrophoneSensor}, nur mit anderem Modus ({@code SET,<Kanal>,I2S,SPEC}) -
+ *  die I2S-Hardwarekonfiguration ist identisch, nur die Ausgabeform unterscheidet sich. */
 class MicrophoneSpectrumSensor extends Sensor {
     public MicrophoneSpectrumSensor() {
         super("INMP441 (Audio-Frequenzspektrum)", "dB", List.of("DB"));
@@ -132,7 +221,12 @@ class MicrophoneSpectrumSensor extends Sensor {
 
     @Override
     public String getFirmwareTypeName() {
-        return "MICSPEC";
+        return "I2S";
+    }
+
+    @Override
+    public String getFirmwareSetPayload() {
+        return "I2S,SPEC";
     }
 
     @Override
@@ -142,7 +236,10 @@ class MicrophoneSpectrumSensor extends Sensor {
 }
 
 /** KY-003-Hall-Sensor-Modul: digitaler Schalter, der 1 liefert, wenn ein Magnetfeld erkannt
- *  wird, sonst 0. Typischer Einsatz: Drehzahl- oder Periodendauer-Messung. */
+ *  wird, sonst 0. Typischer Einsatz: Drehzahl- oder Periodendauer-Messung. Firmware-seitig seit
+ *  v8.8 generisches "DIGITAL" statt "HALL" - ein reiner Pin-Lesevorgang braucht (anders als I2C
+ *  oder 1-Wire) keine weitere Konfiguration, deshalb hier keine eigene Basisklasse wie
+ *  {@link I2CSensor}/{@link OneWireSensor}. */
 class HallEffectSensor extends Sensor {
     public HallEffectSensor() {
         super("KY-003 (Hall-Sensor)", "", List.of());
@@ -161,11 +258,13 @@ class HallEffectSensor extends Sensor {
 
     @Override
     public String getFirmwareTypeName() {
-        return "HALL";
+        return "DIGITAL";
     }
 }
 
-/** INMP441 I2S-Mikrofon zur Schätzung des Schalldruckpegels in dB. */
+/** INMP441 I2S-Mikrofon zur Schätzung des Schalldruckpegels in dB. Firmware-seitig seit v8.8
+ *  generisches "I2S" im Einzelwert-Modus ({@code SET,<Kanal>,I2S,RAW}) statt des früheren "MIC" -
+ *  siehe {@link MicrophoneSpectrumSensor} für den Spektrum-Modus derselben I2S-Hardware. */
 class MicrophoneSensor extends Sensor {
     private static final double FULL_SCALE = 8_388_607.0; // 2^23 - 1
     private static final double REFERENCE_SPL_DB = 94.0;
@@ -213,7 +312,12 @@ class MicrophoneSensor extends Sensor {
 
     @Override
     public String getFirmwareTypeName() {
-        return "MIC";
+        return "I2S";
+    }
+
+    @Override
+    public String getFirmwareSetPayload() {
+        return "I2S,RAW";
     }
 
     @Override
@@ -229,60 +333,18 @@ class MicrophoneSensor extends Sensor {
 }
 
 /**
- * Generisches 0-25V-Spannungsteiler-Modul (Teilerverhältnis 5:1) an einem ESP32-Analogeingang.
- *
- * <p><b>Wichtiger Hardware-Hinweis:</b> Der ESP32-Analogeingang ist auf ca. 3,3V ausgelegt, das
- * absolute Maximum liegt bei ca. 3,6V - deutlich unter den 5V, die dieses Modul bei 25V Eingang
- * an "S" ausgibt. Direkt angeschlossen ist sicher nur eine Eingangsspannung bis ca. 16,5V nutzbar;
- * für den vollen 25V-Bereich braucht es einen weiteren Spannungsteiler bzw. Levelshifter.</p>
- */
-class VoltageDividerSensor extends Sensor {
-
-    /** Referenzspannung des ESP32-ADC bei Standard-Dämpfung (ADC_11db). */
-    static final double ADC_REFERENCE_VOLTAGE = 3.3;
-    /** Auflösung des ESP32-ADC (12 Bit -> 0..4095). */
-    static final double ADC_MAX_COUNT = 4095.0;
-
-    /** Teilerverhältnis Eingangsspannung/Ausgangsspannung; über den Kalibrierdialog feinjustierbar. */
-    private double dividerRatio = 3.3;
-
-    public VoltageDividerSensor() {
-        super("Spannungssensor", "V", List.of("V", "VOLT"));
-    }
-
-    @Override
-    public double decode(int slot, long rawValue) {
-        double adcVoltage = (rawValue / ADC_MAX_COUNT) * ADC_REFERENCE_VOLTAGE;
-        return adcVoltage * dividerRatio;
-    }
-
-    @Override
-    public List<Quantity> getQuantities() {
-        return List.of(new Quantity("Spannung", "V", 0));
-    }
-
-    @Override
-    public String getFirmwareTypeName() {
-        return "ANALOG";
-    }
-
-    @Override
-    public List<CalibrationParameter> getCalibrationParameters() {
-        return List.of(new CalibrationParameter("Teilerverhältnis", "Vin/Vout",
-                () -> dividerRatio, v -> dividerRatio = v));
-    }
-}
-
-/**
  * DS18B20-Digitalthermometer (Dallas/Maxim) am 1-Wire-Bus.
  *
  * <p>Registerformat bei 12-Bit-Auflösung: vorzeichenbehafteter 16-Bit-Wert in 1/16°C-Schritten.
- * Konversionszeit bis zu 750ms, siehe {@link #getMaxSampleRateHz}.</p>
+ * Konversionszeit bis zu 750ms, siehe {@link #getMaxSampleRateHz}. Die Firmware kennt seit v8.8
+ * kein "DS18B20" mehr, sondern nur noch generisches 1-Wire (siehe {@link OneWireSensor}) - alle
+ * hier implementierten Getter beschreiben Konversions-/Lesekommando und Scratchpad-Layout, die
+ * Firmware führt sie nur noch generisch aus.</p>
  *
  * <p><b>Hardware-Hinweis:</b> Datenleitung braucht einen Pull-up-Widerstand nach 3,3V (typisch
  * 4,7kΩ) - ohne den bleibt der Bus permanent LOW und die Firmware findet keinen Sensor.</p>
  */
-class DS18B20Sensor extends Sensor {
+class DS18B20Sensor extends OneWireSensor {
 
     private static final double REGISTER_LSB = 1.0 / 16.0;
 
@@ -305,11 +367,6 @@ class DS18B20Sensor extends Sensor {
     }
 
     @Override
-    public String getFirmwareTypeName() {
-        return "DS18B20";
-    }
-
-    @Override
     public List<CalibrationParameter> getCalibrationParameters() {
         return List.of(new CalibrationParameter("Offset", "°C",
                 () -> calibrationOffsetC, v -> calibrationOffsetC = v));
@@ -318,5 +375,45 @@ class DS18B20Sensor extends Sensor {
     @Override
     public int getMaxSampleRateHz() {
         return 1; // 750ms Konversionszeit -> abgerundet auf 1 Hz als sichere Obergrenze
+    }
+
+    @Override
+    public int getConvertCommand() {
+        return 0x44; // Convert T
+    }
+
+    @Override
+    public long getConversionDelayMs() {
+        return 750; // 12-Bit-Auflösung, siehe getMaxSampleRateHz()
+    }
+
+    @Override
+    public int getReadCommand() {
+        return 0xBE; // Read Scratchpad
+    }
+
+    @Override
+    public int getReadLength() {
+        return 9; // vollständiges Scratchpad inkl. CRC8-Byte
+    }
+
+    @Override
+    public int getValueOffset() {
+        return 0; // Temperaturregister: Byte 0 (LSB) + Byte 1 (MSB)
+    }
+
+    @Override
+    public int getValueLength() {
+        return 2;
+    }
+
+    @Override
+    public boolean isLittleEndian() {
+        return true;
+    }
+
+    @Override
+    public boolean isCrcChecked() {
+        return true;
     }
 }
