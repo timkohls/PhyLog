@@ -18,18 +18,6 @@ benötigt.
 
 Für die Sensoren gibt es ein gemeinsames `Sensor_Top`, das für alle Sensoren verwendet werden kann. Für jeden Sensortyp wird zusätzlich das jeweils passende `*_Sensor_Bottom` benötigt.
 
-Beispiel:
-
-```text
-ESP32
-├── ESP_Bottom
-└── ESP_Top
-
-Sensor
-├── Sensor_Top
-└── <passendes Sensor_Bottom>
-```
-
 Die Anzahl der zu druckenden Sensor-Bottoms richtet sich daher danach, wie viele Sensoren des jeweiligen Typs gebaut werden sollen.
 
 Aktuell liegen unter anderem Bottoms für Strom, Spannung, Kraft, Licht, Magnetfeld, Schall und Temperatur sowie ein gemeinsames Sensor-Top und ESP-Gehäuse im Repository.
