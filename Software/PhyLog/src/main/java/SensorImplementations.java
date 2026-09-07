@@ -23,51 +23,6 @@ class NoSensor extends Sensor {
 }
 
 /**
- * Generisches 0-25V-Spannungsteiler-Modul (Teilerverhältnis 5:1) an einem ESP32-Analogeingang.
- *
- * <p><b>Wichtiger Hardware-Hinweis:</b> Der ESP32-Analogeingang ist auf ca. 3,3V ausgelegt, das
- * absolute Maximum liegt bei ca. 3,6V - deutlich unter den 5V, die dieses Modul bei 25V Eingang
- * an "S" ausgibt. Direkt angeschlossen ist sicher nur eine Eingangsspannung bis ca. 16,5V nutzbar;
- * für den vollen 25V-Bereich braucht es einen weiteren Spannungsteiler bzw. Levelshifter.</p>
- */
-class VoltageDividerSensor extends Sensor {
-
-    /** Referenzspannung des ESP32-ADC bei Standard-Dämpfung (ADC_11db). */
-    static final double ADC_REFERENCE_VOLTAGE = 3.3;
-    /** Auflösung des ESP32-ADC (12 Bit -> 0..4095). */
-    static final double ADC_MAX_COUNT = 4095.0;
-
-    /** Teilerverhältnis Eingangsspannung/Ausgangsspannung; über den Kalibrierdialog feinjustierbar. */
-    private double dividerRatio = 3.3;
-
-    public VoltageDividerSensor() {
-        super("Spannungssensor", "V", List.of("V", "VOLT"));
-    }
-
-    @Override
-    public double decode(int slot, long rawValue) {
-        double adcVoltage = (rawValue / ADC_MAX_COUNT) * ADC_REFERENCE_VOLTAGE;
-        return adcVoltage * dividerRatio;
-    }
-
-    @Override
-    public List<Quantity> getQuantities() {
-        return List.of(new Quantity("Spannung", "V", 0));
-    }
-
-    @Override
-    public String getFirmwareTypeName() {
-        return "ANALOG";
-    }
-
-    @Override
-    public List<CalibrationParameter> getCalibrationParameters() {
-        return List.of(new CalibrationParameter("Teilerverhältnis", "Vin/Vout",
-                () -> dividerRatio, v -> dividerRatio = v));
-    }
-}
-
-/**
  * INA219-Sensorprofil für Strommessungen. Die Firmware kennt seit v8.7 kein "INA219" mehr,
  * sondern nur noch generisches I2C (siehe {@link I2CSensor}) - Adresse, Init-Register
  * (Config + Kalibrierung) und die beiden Leseregister (Bus-Spannung, Strom) liefert allein diese
@@ -162,9 +117,26 @@ class VEML7700Sensor extends I2CSensor {
     }
 }
 
-/** HX711-Sensor zur Kraft- und Gewichtsmessung via Wägezelle. */
+/**
+ * HX711-Sensor zur Kraft- und Gewichtsmessung via Wägezelle.
+ *
+ * <p>Anders als z. B. der DS18B20 (CRC8, siehe {@link OneWireSensor#isCrcChecked()}) hat das
+ * bit-gebangte HX711-Protokoll (siehe {@code sampleHX711} in phylog_firmware.ino) keinerlei
+ * eigene Datenintegritätsprüfung. Einzelne, stark abweichende Störwerte - typischerweise durch
+ * eingekoppeltes Netzbrumm oder eine kleine elektrostatische Entladung beim Berühren des
+ * Metallkörpers der Wägezelle - werden deshalb hier softwareseitig über einen {@link
+ * OutlierFilter} abgefangen, bevor sie überhaupt in die Kalibrierumrechnung gehen. Das ersetzt
+ * keine saubere Erdung/Schirmung der Wägezelle, macht das System aber robuster gegen einzelne
+ * Störimpulse, die trotzdem noch durchkommen.</p>
+ */
 class HX711Sensor extends Sensor {
     private double calibrationFactor = 10000.0;
+
+    /** Fenstergröße 7 Samples, Schwelle 6x skalierte MAD, Mindestschwelle 2000 Rohcounts (grober
+     *  Richtwert oberhalb des typischen Eigenrauschens eines ruhenden 24-Bit-HX711-Signals) -
+     *  siehe {@link OutlierFilter} für Details. Bei Bedarf (z. B. sehr rauscharme oder sehr
+     *  unruhige Wägezellen) hier anpassen. */
+    private final OutlierFilter outlierFilter = new OutlierFilter(7, 6.0, 2000.0);
 
     public HX711Sensor() {
         super("HX711 (Kraft / Gewicht)", "N", List.of("N", "G", "KG"));
@@ -172,7 +144,14 @@ class HX711Sensor extends Sensor {
 
     @Override
     public double decode(int slot, long rawValue) {
-        return rawValue / calibrationFactor;
+        double filteredRaw = outlierFilter.filter(rawValue);
+        if (Double.isNaN(filteredRaw)) {
+            // Als Ausreißer erkannt - AcquisitionEngine.ingestSample() verwirft NaN automatisch,
+            // der Messwert fehlt dann einfach für diesen einen Zyklus statt falsch angezeigt zu
+            // werden.
+            return Double.NaN;
+        }
+        return filteredRaw / calibrationFactor;
     }
 
     @Override
@@ -193,18 +172,17 @@ class HX711Sensor extends Sensor {
 
     @Override
     public int getMaxSampleRateHz() {
-        // Der HX711-Chip liefert je nach RATE-Pin-Verdrahtung des Breakout-Boards nur 10 oder
-        // 80 neue Werte/Sekunde; 80 als Obergrenze angenommen.
-        return 80;
+        return 10;
     }
 }
 
 /** INMP441-Mikrofon als Frequenzspektrum statt einzelnem dB-Wert, siehe {@link MicrophoneSensor}
  *  für die klassische Variante. {@code decode} wird nie aufgerufen, da die Firmware für diesen
- *  Sensortyp ausschließlich Spektrum-Pakete schickt. Firmware-seitig seit v8.8 derselbe generische
- *  Typ "I2S" wie {@link MicrophoneSensor}, nur mit anderem Modus ({@code SET,<Kanal>,I2S,SPEC}) -
- *  die I2S-Hardwarekonfiguration ist identisch, nur die Ausgabeform unterscheidet sich. */
-class MicrophoneSpectrumSensor extends Sensor {
+ *  Sensortyp ausschließlich Spektrum-Pakete schickt. Firmware-seitig seit v9.1 generisches
+ *  {@link I2SSensor} wie {@link MicrophoneSensor}, nur mit {@link #producesSpectrum()}
+ *  {@code true} - die I2S-Hardwarekonfiguration (Abtastrate, Slot, Bit-Ausrichtung) ist identisch,
+ *  nur die Ausgabeform unterscheidet sich. */
+class MicrophoneSpectrumSensor extends I2SSensor {
     public MicrophoneSpectrumSensor() {
         super("INMP441 (Audio-Frequenzspektrum)", "dB", List.of("DB"));
     }
@@ -220,13 +198,13 @@ class MicrophoneSpectrumSensor extends Sensor {
     }
 
     @Override
-    public String getFirmwareTypeName() {
-        return "I2S";
+    public int getSampleRateHz() {
+        return 16000;
     }
 
     @Override
-    public String getFirmwareSetPayload() {
-        return "I2S,SPEC";
+    public int getShiftBits() {
+        return 8; // 24 gültige Bits linksbündig in einem 32-Bit-I2S-Wort, siehe MicrophoneSensor
     }
 
     @Override
@@ -262,20 +240,31 @@ class HallEffectSensor extends Sensor {
     }
 }
 
-/** INMP441 I2S-Mikrofon zur Schätzung des Schalldruckpegels in dB. Firmware-seitig seit v8.8
- *  generisches "I2S" im Einzelwert-Modus ({@code SET,<Kanal>,I2S,RAW}) statt des früheren "MIC" -
- *  siehe {@link MicrophoneSpectrumSensor} für den Spektrum-Modus derselben I2S-Hardware. */
-class MicrophoneSensor extends Sensor {
+/** INMP441 I2S-Mikrofon zur Schätzung des Schalldruckpegels in dB. Firmware-seitig seit v9.1
+ *  generisches {@link I2SSensor} im Einzelwert-Modus - siehe {@link MicrophoneSpectrumSensor} für
+ *  den Spektrum-Modus derselben I2S-Hardware. Ein Sensor mit anderer Abtastrate, anderem I2S-Slot
+ *  oder anderer Bit-Tiefe (z. B. ein SPH0645 oder ICS-43434 statt des INMP441) braucht dank der
+ *  generischen Firmware-Konfiguration keine Firmware-Änderung mehr - nur eine eigene Unterklasse
+ *  von {@link I2SSensor} mit den passenden Werten für {@link #getSampleRateHz()}/
+ *  {@link #getShiftBits()} und eigener {@link #decode}-Umrechnung. */
+class MicrophoneSensor extends I2SSensor {
     private static final double FULL_SCALE = 8_388_607.0; // 2^23 - 1
     private static final double REFERENCE_SPL_DB = 94.0;
-    private static final int SMOOTHING_WINDOW_SAMPLES = 20;
-    private static final double ALPHA = 2.0 / (SMOOTHING_WINDOW_SAMPLES + 1);
+    /** Zeitkonstante der Glättung in ms, angelehnt an die "Fast"-Zeitkonstante (125ms) für
+     *  Schallpegelmesser nach IEC 61672. Bewusst als Zeitkonstante statt fester Sample-Anzahl:
+     *  eine feste Anzahl Pakete hätte bei niedriger Abtastrate eine viel zu träge (z. B. 1s bei
+     *  20 Hz statt der gewünschten 125ms), bei hoher Abtastrate eine viel zu hektische Anzeige
+     *  zur Folge - siehe {@link #decode}. */
+    private static final double TIME_CONSTANT_MS = 125.0;
 
     private double sensitivityDbfsAt94db = 0.0;
     /** Exponentiell geglättetes mittleres Leistungssignal (Quadrat des Effektivwerts), Basis
      *  für den ausgegebenen Pegel. */
     private double meanSquare = 0.0;
-    private boolean initialized = false;
+    /** Zeitpunkt (siehe {@link System#nanoTime}) des letzten {@link #decode}-Aufrufs, für die
+     *  tatsächlich vergangene Zeit zwischen zwei Paketen (siehe {@link #TIME_CONSTANT_MS}).
+     *  {@code < 0}, solange noch kein Aufruf stattfand. */
+    private long lastUpdateNanos = -1;
 
     public MicrophoneSensor() {
         super("INMP441 (Mikrofon)", "dB", List.of("DB", "DBSPL"));
@@ -283,22 +272,23 @@ class MicrophoneSensor extends Sensor {
 
     @Override
     public double decode(int slot, long rawValue) {
-        // rawValue ist ein vorzeichenbehaftetes 24-Bit-I2S-Sample, das bei Stille um 0 pendelt.
-        // Der Momentanwert allein ist als Pegel ungeeignet: bei jedem Nulldurchgang der
-        // Schwingung geht die Amplitude gegen 0 und log10 dessen gegen -unendlich, während der
-        // nächste Peak wieder nahe am Vollausschlag liegt - das erzeugt Sprünge von 20 dB und
-        // mehr allein durch die Wellenform, nicht durch tatsächliche Pegeländerungen.
-        // Abhilfe: laufender Effektivwert (RMS) der Signal-Leistung statt Momentanwert, über eine
-        // feste Anzahl Samples gemittelt (siehe SMOOTHING_WINDOW_SAMPLES).
+        // rawValue ist der Spitzenbetrag eines vorzeichenbehafteten 24-Bit-I2S-Fensters (siehe
+        // sampleI2SRaw in der Firmware) - schon eine Art Momentanpegel, kein Rohsample mehr.
+        // Trotzdem noch zu unruhig für eine direkte Anzeige, deshalb zusätzliche Glättung der
+        // Leistung (Quadrat) über die Zeit statt über eine feste Paketanzahl (siehe
+        // TIME_CONSTANT_MS-Kommentar).
         double sample = rawValue / FULL_SCALE;
         double instantaneousPower = sample * sample;
 
-        if (!initialized) {
+        long now = System.nanoTime();
+        if (lastUpdateNanos < 0) {
             meanSquare = instantaneousPower;
-            initialized = true;
         } else {
-            meanSquare += ALPHA * (instantaneousPower - meanSquare);
+            double deltaMs = (now - lastUpdateNanos) / 1_000_000.0;
+            double alpha = 1.0 - Math.exp(-deltaMs / TIME_CONSTANT_MS);
+            meanSquare += alpha * (instantaneousPower - meanSquare);
         }
+        lastUpdateNanos = now;
 
         double rms = Math.sqrt(Math.max(meanSquare, 1e-12));
         double dbFullScale = 20.0 * Math.log10(rms);
@@ -311,13 +301,13 @@ class MicrophoneSensor extends Sensor {
     }
 
     @Override
-    public String getFirmwareTypeName() {
-        return "I2S";
+    public int getSampleRateHz() {
+        return 16000;
     }
 
     @Override
-    public String getFirmwareSetPayload() {
-        return "I2S,RAW";
+    public int getShiftBits() {
+        return 8; // 24 gültige Bits linksbündig in einem 32-Bit-I2S-Wort, siehe FULL_SCALE oben
     }
 
     @Override
@@ -329,6 +319,51 @@ class MicrophoneSensor extends Sensor {
     @Override
     public int getMaxSampleRateHz() {
         return 1000;
+    }
+}
+
+/**
+ * Generisches 0-25V-Spannungsteiler-Modul (Teilerverhältnis 5:1) an einem ESP32-Analogeingang.
+ *
+ * <p><b>Wichtiger Hardware-Hinweis:</b> Der ESP32-Analogeingang ist auf ca. 3,3V ausgelegt, das
+ * absolute Maximum liegt bei ca. 3,6V - deutlich unter den 5V, die dieses Modul bei 25V Eingang
+ * an "S" ausgibt. Direkt angeschlossen ist sicher nur eine Eingangsspannung bis ca. 16,5V nutzbar;
+ * für den vollen 25V-Bereich braucht es einen weiteren Spannungsteiler bzw. Levelshifter.</p>
+ */
+class VoltageDividerSensor extends Sensor {
+
+    /** Referenzspannung des ESP32-ADC bei Standard-Dämpfung (ADC_11db). */
+    static final double ADC_REFERENCE_VOLTAGE = 3.3;
+    /** Auflösung des ESP32-ADC (12 Bit -> 0..4095). */
+    static final double ADC_MAX_COUNT = 4095.0;
+
+    /** Teilerverhältnis Eingangsspannung/Ausgangsspannung; über den Kalibrierdialog feinjustierbar. */
+    private double dividerRatio = 3.3;
+
+    public VoltageDividerSensor() {
+        super("Spannungssensor", "V", List.of("V", "VOLT"));
+    }
+
+    @Override
+    public double decode(int slot, long rawValue) {
+        double adcVoltage = (rawValue / ADC_MAX_COUNT) * ADC_REFERENCE_VOLTAGE;
+        return adcVoltage * dividerRatio;
+    }
+
+    @Override
+    public List<Quantity> getQuantities() {
+        return List.of(new Quantity("Spannung", "V", 0));
+    }
+
+    @Override
+    public String getFirmwareTypeName() {
+        return "ANALOG";
+    }
+
+    @Override
+    public List<CalibrationParameter> getCalibrationParameters() {
+        return List.of(new CalibrationParameter("Teilerverhältnis", "Vin/Vout",
+                () -> dividerRatio, v -> dividerRatio = v));
     }
 }
 
