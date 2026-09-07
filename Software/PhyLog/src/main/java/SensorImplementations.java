@@ -122,21 +122,17 @@ class VEML7700Sensor extends I2CSensor {
  *
  * <p>Anders als z. B. der DS18B20 (CRC8, siehe {@link OneWireSensor#isCrcChecked()}) hat das
  * bit-gebangte HX711-Protokoll (siehe {@code sampleHX711} in phylog_firmware.ino) keinerlei
- * eigene Datenintegritätsprüfung. Einzelne, stark abweichende Störwerte - typischerweise durch
- * eingekoppeltes Netzbrumm oder eine kleine elektrostatische Entladung beim Berühren des
- * Metallkörpers der Wägezelle - werden deshalb hier softwareseitig über einen {@link
- * OutlierFilter} abgefangen, bevor sie überhaupt in die Kalibrierumrechnung gehen. Das ersetzt
- * keine saubere Erdung/Schirmung der Wägezelle, macht das System aber robuster gegen einzelne
- * Störimpulse, die trotzdem noch durchkommen.</p>
+ * eigene Datenintegritätsprüfung. Ein früherer Versuch, das softwareseitig über einen
+ * Median/MAD-basierten Ausreißerfilter abzufangen, wurde wieder entfernt: Da abgelehnte Werte
+ * nie ins Vergleichsfenster übernommen wurden, blieb der Filter nach jeder echten, größeren
+ * Kraftänderung dauerhaft auf dem alten Wert hängen und verwarf danach praktisch jeden weiteren
+ * Messwert (verstärkt dadurch, dass diese Sensor-Instanz als Singleton über die gesamte
+ * Programmlaufzeit wiederverwendet wird, siehe {@link SensorRegistry}). Echtes Rauschen bzw.
+ * Störimpulse sollten stattdessen hardwareseitig (Erdung/Schirmung der Wägezelle) angegangen
+ * werden.</p>
  */
 class HX711Sensor extends Sensor {
-    private double calibrationFactor = 10000.0;
-
-    /** Fenstergröße 7 Samples, Schwelle 6x skalierte MAD, Mindestschwelle 2000 Rohcounts (grober
-     *  Richtwert oberhalb des typischen Eigenrauschens eines ruhenden 24-Bit-HX711-Signals) -
-     *  siehe {@link OutlierFilter} für Details. Bei Bedarf (z. B. sehr rauscharme oder sehr
-     *  unruhige Wägezellen) hier anpassen. */
-    private final OutlierFilter outlierFilter = new OutlierFilter(7, 6.0, 2000.0);
+    private double calibrationFactor = 200000.0;
 
     public HX711Sensor() {
         super("HX711 (Kraft / Gewicht)", "N", List.of("N", "G", "KG"));
@@ -144,14 +140,7 @@ class HX711Sensor extends Sensor {
 
     @Override
     public double decode(int slot, long rawValue) {
-        double filteredRaw = outlierFilter.filter(rawValue);
-        if (Double.isNaN(filteredRaw)) {
-            // Als Ausreißer erkannt - AcquisitionEngine.ingestSample() verwirft NaN automatisch,
-            // der Messwert fehlt dann einfach für diesen einen Zyklus statt falsch angezeigt zu
-            // werden.
-            return Double.NaN;
-        }
-        return filteredRaw / calibrationFactor;
+        return rawValue / calibrationFactor;
     }
 
     @Override
