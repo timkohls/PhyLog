@@ -2,7 +2,7 @@
 
 Dieser Quickstart beschreibt den Aufbau der PhyLog-Hardware sowie das erste Bespielen und Verbinden des ESP32.
 
-PhyLog besteht aus einem ESP32-Hub und verschiedenen steckbaren Sensormodulen. Die Sensormodule können je nach benötigter Messgröße ausgetauscht und erweitert werden. Die verfügbaren Sensoren und die zugehörigen Hardware-Dateien befinden sich im Ordner [`Hardware/prints`](https://github.com/timkohls/PhyLog/tree/main/Hardware).
+PhyLog besteht aus einem ESP32-Hub und verschiedenen steckbaren Sensormodulen. Die Sensormodule können je nach benötigter Messgröße ausgetauscht und erweitert werden. Die verfügbaren Sensoren und die zugehörigen Hardware-Dateien befinden sich im Ordner [`Hardware/prints`](https://github.com/timkohls/PhyLog/tree/main/Hardware/prints).
 
 ## 1. 3D-Druck
 
