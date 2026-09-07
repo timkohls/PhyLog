@@ -2,7 +2,7 @@
 
 Dieser Quickstart beschreibt den Aufbau der PhyLog-Hardware sowie das erste Bespielen und Verbinden des ESP32.
 
-PhyLog besteht aus einem ESP32-Hub und verschiedenen steckbaren Sensormodulen. Die Sensormodule können je nach benötigter Messgröße ausgetauscht und erweitert werden. Die verfügbaren Sensoren und die zugehörigen Hardware-Dateien befinden sich im Ordner [`Hardware/prints`](https://chatgpt.com/c/prints/).
+PhyLog besteht aus einem ESP32-Hub und verschiedenen steckbaren Sensormodulen. Die Sensormodule können je nach benötigter Messgröße ausgetauscht und erweitert werden. Die verfügbaren Sensoren und die zugehörigen Hardware-Dateien befinden sich im Ordner [`Hardware/prints`](https://github.com/timkohls/PhyLog/edit/main/Hardware).
 
 ## 1. 3D-Druck
 
@@ -38,7 +38,7 @@ Aktuell liegen unter anderem Bottoms für Strom, Spannung, Kraft, Licht, Magnetf
 
 Die jeweilige Sensorplatine wird in das passende Bottom eingesetzt und mit **M3 × 4 mm Schrauben** befestigt.
 
-Die Verdrahtung zwischen Sensor und ESP32 ist dem [Pinout](https://chatgpt.com/c/pinout.md) zu entnehmen. Dort ist für die verschiedenen Sensortypen angegeben, welche RJ45-Pins mit welchen ESP32-Pins verbunden werden müssen.
+Die Verdrahtung zwischen Sensor und ESP32 ist dem [Pinout](https://github.com/timkohls/PhyLog/edit/main/Hardware/pinout.md) zu entnehmen. Dort ist für die verschiedenen Sensortypen angegeben, welche RJ45-Pins mit welchen ESP32-Pins verbunden werden müssen.
 
 Dabei gilt grundsätzlich:
 
