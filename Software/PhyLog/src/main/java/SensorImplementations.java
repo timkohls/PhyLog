@@ -239,13 +239,7 @@ class HallEffectSensor extends Sensor {
 class MicrophoneSensor extends I2SSensor {
     private static final double FULL_SCALE = 8_388_607.0; // 2^23 - 1
     private static final double REFERENCE_SPL_DB = 94.0;
-    /** Zeitkonstante der Glättung in ms, angelehnt an die "Fast"-Zeitkonstante (125ms) für
-     *  Schallpegelmesser nach IEC 61672. Bewusst als Zeitkonstante statt fester Sample-Anzahl:
-     *  eine feste Anzahl Pakete hätte bei niedriger Abtastrate eine viel zu träge (z. B. 1s bei
-     *  20 Hz statt der gewünschten 125ms), bei hoher Abtastrate eine viel zu hektische Anzeige
-     *  zur Folge - siehe {@link #decode}. */
-    private static final double TIME_CONSTANT_MS = 125.0;
-
+    private static final double TIME_CONSTANT_MS = 0.0;
     private double sensitivityDbfsAt94db = 0.0;
     /** Exponentiell geglättetes mittleres Leistungssignal (Quadrat des Effektivwerts), Basis
      *  für den ausgegebenen Pegel. */
@@ -270,7 +264,10 @@ class MicrophoneSensor extends I2SSensor {
         double instantaneousPower = sample * sample;
 
         long now = System.nanoTime();
-        if (lastUpdateNanos < 0) {
+        // TIME_CONSTANT_MS == 0 bedeutet "keine Glättung"; die exp-Formel unten würde dafür durch
+        // 0 dividieren (bei deltaMs > 0 zufällig noch alpha = 1.0, bei deltaMs == 0 aber 0.0/0.0 =
+        // NaN, was meanSquare dauerhaft vergiftet). Daher hier explizit statt über die Formel.
+        if (lastUpdateNanos < 0 || TIME_CONSTANT_MS <= 0.0) {
             meanSquare = instantaneousPower;
         } else {
             double deltaMs = (now - lastUpdateNanos) / 1_000_000.0;
@@ -359,11 +356,21 @@ class VoltageDividerSensor extends Sensor {
 /**
  * DS18B20-Digitalthermometer (Dallas/Maxim) am 1-Wire-Bus.
  *
- * <p>Registerformat bei 12-Bit-Auflösung: vorzeichenbehafteter 16-Bit-Wert in 1/16°C-Schritten.
- * Konversionszeit bis zu 750ms, siehe {@link #getMaxSampleRateHz}. Die Firmware kennt seit v8.8
- * kein "DS18B20" mehr, sondern nur noch generisches 1-Wire (siehe {@link OneWireSensor}) - alle
- * hier implementierten Getter beschreiben Konversions-/Lesekommando und Scratchpad-Layout, die
- * Firmware führt sie nur noch generisch aus.</p>
+ * <p>Registerformat: vorzeichenbehafteter 16-Bit-Wert in 1/16°C-Schritten, unabhängig von der
+ * eingestellten Auflösung - der Chip füllt die durch die reduzierte Auflösung nicht mehr
+ * gemessenen niederwertigen Bits laut Datenblatt selbst korrekt gerundet auf, {@link #decode}
+ * bleibt deshalb unverändert. Die Firmware kennt seit v8.8 kein "DS18B20" mehr, sondern nur noch
+ * generisches 1-Wire (siehe {@link OneWireSensor}) - alle hier implementierten Getter
+ * beschreiben Init-/Konversions-/Lesekommando und Scratchpad-Layout, die Firmware führt sie nur
+ * noch generisch aus.</p>
+ *
+ * <p><b>Auflösung:</b> Standardmäßig 9 Bit (0,5°C-Schritte, 94ms Konversionszeit) statt der
+ * werkseitigen 12 Bit (0,0625°C, 750ms) - über {@link #getInitWrites()} per "Write Scratchpad"
+ * (0x4E) im Konfigregister eingestellt (seit Firmware v9.2 unterstützt, siehe
+ * {@link OneWireSensor#getInitWrites()}). Das erlaubt bis zu {@link #getMaxSampleRateHz()} statt
+ * vorher 1 Hz, auf Kosten der Temperaturauflösung. TH/TL-Alarmregister werden mitgeschrieben
+ * (auf 0), da "Write Scratchpad" immer alle drei Bytes zusammen erwartet - Alarmsuche wird von
+ * dieser Firmware ohnehin nicht genutzt.</p>
  *
  * <p><b>Hardware-Hinweis:</b> Datenleitung braucht einen Pull-up-Widerstand nach 3,3V (typisch
  * 4,7kΩ) - ohne den bleibt der Bus permanent LOW und die Firmware findet keinen Sensor.</p>
@@ -371,6 +378,9 @@ class VoltageDividerSensor extends Sensor {
 class DS18B20Sensor extends OneWireSensor {
 
     private static final double REGISTER_LSB = 1.0 / 16.0;
+
+    /** Konfigregister-Wert für 9-Bit-Auflösung (R1:R0 = 00, Bits 4:0 laut Datenblatt fest auf 1). */
+    private static final int CONFIG_RESOLUTION_9BIT = 0x1F;
 
     /** Additiver Korrekturwert gegenüber einem Referenzthermometer. */
     private double calibrationOffsetC = 0.0;
@@ -398,7 +408,13 @@ class DS18B20Sensor extends OneWireSensor {
 
     @Override
     public int getMaxSampleRateHz() {
-        return 1; // 750ms Konversionszeit -> abgerundet auf 1 Hz als sichere Obergrenze
+        return 10; // 94ms Konversionszeit bei 9-Bit -> abgerundet auf 10 Hz als sichere Obergrenze
+    }
+
+    @Override
+    public List<Write> getInitWrites() {
+        // Write Scratchpad: TH, TL (Alarmregister, ungenutzt, siehe Klassenkommentar), Config.
+        return List.of(new Write(0x4E, 0x00, 0x00, CONFIG_RESOLUTION_9BIT));
     }
 
     @Override
@@ -408,7 +424,7 @@ class DS18B20Sensor extends OneWireSensor {
 
     @Override
     public long getConversionDelayMs() {
-        return 750; // 12-Bit-Auflösung, siehe getMaxSampleRateHz()
+        return 94; // 9-Bit-Auflösung: max. 93,75ms lt. Datenblatt, aufgerundet
     }
 
     @Override

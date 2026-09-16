@@ -606,7 +606,12 @@ public class ChartPanel extends JPanel {
         int rightEdge = geo.width - geo.rightPadding;
 
         for (Series series : extraSeries) {
-            List<double[]> renderData = downsampleForRendering(series.data, geo);
+            // Wie bei der Hauptgröße (siehe #displayData) muss das Downsampling nach jedem
+            // Zoom neu anhand der tatsächlich sichtbaren Punktzahl entscheiden, ob überhaupt
+            // noch verdichtet werden muss - sonst bliebe Kanal B beim Reinzoomen weiterhin auf
+            // Basis aller Punkte verdichtet, während Kanal A schon exakte Werte zeigt.
+            List<double[]> visibleSeriesData = filterToViewport(series.data);
+            List<double[]> renderData = downsampleForRendering(visibleSeriesData, geo);
             List<Point2DDouble> points = new ArrayList<>();
             for (double[] point : renderData) {
                 double px = geo.padding + ((point[0] - geo.minX) / geo.rangeX) * geo.plotWidth;
@@ -1370,9 +1375,9 @@ public class ChartPanel extends JPanel {
         String coordStr;
         if (geo.hasSecondaryAxis) {
             double realY2 = geo.minY2 + ((double) ((geo.height - geo.padding) - my) / geo.plotHeight) * geo.rangeY2;
-            coordStr = String.format("X: %.2f%s | A: %.2f | B: %.2f", realX, xUnitSuffix, realY, realY2);
+            coordStr = String.format("X: %.3f%s | A: %.3f | B: %.3f", realX, xUnitSuffix, realY, realY2);
         } else {
-            coordStr = String.format("X: %.2f%s | Y: %.2f", realX, xUnitSuffix, realY);
+            coordStr = String.format("X: %.3f%s | Y: %.3f", realX, xUnitSuffix, realY);
         }
 
         g2.setFont(Theme.FONT_HINT);

@@ -1,5 +1,5 @@
 /*
- * PhyLog ESP32 Firmware v9.1
+ * PhyLog ESP32 Firmware v9.2
  *
  * Steuert zwei unabhängige Messkanäle (A/B) über USB und Bluetooth. Ein Kanal bekommt seinen
  * Sensortyp per SET,<Kanal>,<Typ>[,<Konfiguration>] vom Host zugewiesen und startet immer bei
@@ -9,7 +9,7 @@
  *   DIGITAL   Pin2=Eingang                           keine Konfiguration
  *   I2C       Pin2=SDA, Pin3=SCL                     Adresse + Init-/Lese-Register, siehe parseI2CSetPayload
  *   I2S       Pin2=WS, Pin3=BCLK, Pin4=SD            Modus, Abtastrate, Slot, Bit-Shift, Null-Check, siehe parseI2SSetPayload
- *   ONEWIRE   Pin2=Datenleitung (ext. Pull-up 4,7kΩ) Konversions-/Lesekommando + Byte-Layout, siehe parseOneWireSetPayload
+ *   ONEWIRE   Pin2=Datenleitung (ext. Pull-up 4,7kΩ) opt. Init-Writes + Konversions-/Lesekommando + Byte-Layout, siehe parseOneWireSetPayload
  *   HX711     Pin2=DOUT, Pin3=SCK                    keine Konfiguration (eigenes Protokoll)
  *
  * Ein neuer Sensor mit einer dieser Schnittstellen braucht deshalb kein Firmware-Update, nur eine
@@ -98,9 +98,23 @@ I2SSensorConfig i2sConfigChannelA;
 I2SSensorConfig i2sConfigChannelB;
 I2SSensorConfig &i2sConfigForChannel(char channelName);
 
+/** Ein einzelner Kommando-Schreibvorgang der 1-Wire-Init-Sequenz (z.B. "Write Scratchpad" beim
+ *  DS18B20 zur Auflösungseinstellung). Jeder Eintrag bekommt vor dem Senden von {@code command}
+ *  und {@code data} eine eigene Reset+Skip-ROM-Sequenz vorangestellt, siehe
+ *  configureOneWireSensor. */
+struct OneWireWriteSpec {
+  uint8_t command = 0;
+  uint8_t data[4] = {0, 0, 0, 0};
+  uint8_t dataLen = 0;
+};
+
+const uint8_t MAX_ONEWIRE_WRITES = 2;
+
 /** Generische 1-Wire-Sensorbeschreibung. "Skip ROM" (0xCC) nimmt die Firmware selbst an -
  *  unterstützt wird nur ein Sensor pro Bus. */
 struct OneWireSensorConfig {
+  OneWireWriteSpec initWrites[MAX_ONEWIRE_WRITES];
+  uint8_t initWriteCount = 0;
   uint8_t convertCmd = 0;
   unsigned long conversionDelayMs = 0;
   uint8_t readCmd = 0;
@@ -125,6 +139,8 @@ bool parseI2CReadEntry(const String &entry, I2CReadSpec &out);
 bool parseI2CWriteList(const String &list, I2CWriteSpec specs[], uint8_t &countOut, uint8_t maxCount);
 bool parseI2CReadList(const String &list, I2CReadSpec specs[], uint8_t &countOut, uint8_t maxCount);
 bool parseI2SSetPayload(char channelName, const String &params);
+bool parseOneWireWriteEntry(const String &entry, OneWireWriteSpec &out);
+bool parseOneWireWriteList(const String &list, OneWireWriteSpec specs[], uint8_t &countOut, uint8_t maxCount);
 
 I2CSensorConfig &i2cConfigForChannel(char channelName) {
   return (channelName == 'A') ? i2cConfigChannelA : i2cConfigChannelB;
@@ -533,6 +549,34 @@ void sampleOneWire(char channelName, int pin) {
   pending = true;
 }
 
+/** Schreibt die vom Host konfigurierte 1-Wire-Init-Sequenz einmalig beim Umschalten auf diesen
+ *  Sensor (z.B. "Write Scratchpad" beim DS18B20 zur Auflösungseinstellung, siehe
+ *  OneWireWriteSpec) - analog zu configureSensorOnBus bei I2C. Jeder Init-Write bekommt eine
+ *  eigene Reset+Skip-ROM-Sequenz vorangestellt, da nach einem 1-Wire-Kommandobyte alle folgenden
+ *  Bits als dessen Daten interpretiert werden. Ohne konfigurierte Init-Writes (leere Liste, der
+ *  Normalfall für die meisten 1-Wire-Sensoren) tut diese Funktion nichts. */
+void configureOneWireSensor(char channelName, int pin) {
+  const OneWireSensorConfig &cfg = oneWireConfigForChannel(channelName);
+  bool ok = true;
+
+  for (int i = 0; i < cfg.initWriteCount; i++) {
+    const OneWireWriteSpec &w = cfg.initWrites[i];
+    if (!oneWireReset(pin)) {
+      ok = false;
+      break;
+    }
+    oneWireWriteByte(pin, 0xCC); // Skip ROM
+    oneWireWriteByte(pin, w.command);
+    for (int b = 0; b < w.dataLen; b++) {
+      oneWireWriteByte(pin, w.data[b]);
+    }
+  }
+
+  if (!ok) {
+    reportSensorError(channelName, "1WIRE");
+  }
+}
+
 /** Schreibt die vom Host konfigurierte Init-Sequenz auf den Bus. */
 void configureSensorOnBus(TwoWire &bus, char channelName) {
   const I2CSensorConfig &cfg = i2cConfigForChannel(channelName);
@@ -670,6 +714,7 @@ void configureChannelHardware(char channelName, SensorType newType, const int pi
       // Präsenz nicht zuverlässig. Der schwache interne Pull-up (~45kΩ) sorgt dann wenigstens für
       // einen deterministischen HIGH-Pegel.
       pinMode(pins[0], INPUT_PULLUP);
+      configureOneWireSensor(channelName, pins[0]);
       break;
     case TYPE_I2S:
       configureI2S(channelName, pins);
@@ -786,15 +831,59 @@ bool parseI2CSetPayload(char channelName, const String &params) {
   return cfg.readCount > 0;
 }
 
+/** Parst einen einzelnen 1-Wire-Init-Write-Eintrag "cmd:byte:byte:..." (alles hex) in
+ *  {@code out}. Wie parseI2CWriteEntry, nur ohne I2C-Register-Semantik ({@code command} ist ein
+ *  1-Wire-Kommandobyte wie 0x4E "Write Scratchpad", keine Registeradresse).
+ *  @return false bei erkennbar kaputtem Format */
+bool parseOneWireWriteEntry(const String &entry, OneWireWriteSpec &out) {
+  int firstColon = entry.indexOf(':');
+  if (firstColon == -1) return false;
+
+  out.command = (uint8_t) parseHexToken(entry.substring(0, firstColon));
+  out.dataLen = 0;
+
+  int start = firstColon + 1;
+  while (start <= (int) entry.length() && out.dataLen < 4) {
+    int sep = entry.indexOf(':', start);
+    String byteStr = (sep == -1) ? entry.substring(start) : entry.substring(start, sep);
+    out.data[out.dataLen++] = (uint8_t) parseHexToken(byteStr);
+    if (sep == -1) break;
+    start = sep + 1;
+  }
+  return out.dataLen > 0;
+}
+
+/** Zerlegt eine ';'-getrennte Liste von 1-Wire-Init-Write-Einträgen. Leere Liste ist gültig.
+ *  Wie parseI2CWriteList. */
+bool parseOneWireWriteList(const String &list, OneWireWriteSpec specs[], uint8_t &countOut, uint8_t maxCount) {
+  countOut = 0;
+  if (list.length() == 0) return true;
+
+  int start = 0;
+  while (start <= (int) list.length() && countOut < maxCount) {
+    int sep = list.indexOf(';', start);
+    String entry = (sep == -1) ? list.substring(start) : list.substring(start, sep);
+    if (!parseOneWireWriteEntry(entry, specs[countOut])) return false;
+    countOut++;
+    if (sep == -1) break;
+    start = sep + 1;
+  }
+  return true;
+}
+
 /** Zerlegt das Payload eines "SET,<Kanal>,ONEWIRE,..."-Kommandos in die OneWireSensorConfig.
- *  Format: "ConvertCmd(hex),DelayMs,ReadCmd(hex),ReadLen,ValueOffset,ValueLen,B|L,0|1,Slot".
- *  Beispiel DS18B20: "44,750,be,9,0,2,L,1,0"
+ *  Format: "Init-Writes,ConvertCmd(hex),DelayMs,ReadCmd(hex),ReadLen,ValueOffset,ValueLen,B|L,0|1,Slot".
+ *  Init-Writes: "-" oder ';'-getrennt "cmd:byte:byte:..." (alles hex), siehe parseOneWireWriteList -
+ *  wird einmalig beim Umschalten auf den Sensor geschrieben (siehe configureOneWireSensor), z.B.
+ *  für die Auflösungseinstellung des DS18B20 über "Write Scratchpad" (0x4E).
+ *  Beispiel DS18B20 bei 12-Bit-Standardauflösung (keine Init-Writes nötig): "-,44,750,be,9,0,2,L,1,0"
+ *  Beispiel DS18B20 bei 9-Bit-Auflösung (TH/TL=0, Konfigregister 0x1f): "4e:0:0:1f,44,94,be,9,0,2,L,1,0"
  *  @return false bei erkennbar kaputtem Format */
 bool parseOneWireSetPayload(char channelName, const String &params) {
   OneWireSensorConfig &cfg = oneWireConfigForChannel(channelName);
   cfg = OneWireSensorConfig();
 
-  const int fieldCount = 9;
+  const int fieldCount = 10;
   int fieldStart[fieldCount];
   int fieldEnd[fieldCount];
   int start = 0;
@@ -806,15 +895,21 @@ bool parseOneWireSetPayload(char channelName, const String &params) {
     start = sep + 1;
   }
 
-  cfg.convertCmd = (uint8_t) parseHexToken(params.substring(fieldStart[0], fieldEnd[0]));
-  cfg.conversionDelayMs = (unsigned long) params.substring(fieldStart[1], fieldEnd[1]).toInt();
-  cfg.readCmd = (uint8_t) parseHexToken(params.substring(fieldStart[2], fieldEnd[2]));
-  cfg.readLen = (uint8_t) params.substring(fieldStart[3], fieldEnd[3]).toInt();
-  cfg.valueOffset = (uint8_t) params.substring(fieldStart[4], fieldEnd[4]).toInt();
-  cfg.valueLen = (uint8_t) params.substring(fieldStart[5], fieldEnd[5]).toInt();
-  cfg.littleEndian = params.substring(fieldStart[6], fieldEnd[6]).equalsIgnoreCase("L");
-  cfg.checkCrc = params.substring(fieldStart[7], fieldEnd[7]) == "1";
-  cfg.slot = (uint8_t) params.substring(fieldStart[8], fieldEnd[8]).toInt();
+  String initsStr = params.substring(fieldStart[0], fieldEnd[0]);
+  if (initsStr == "-") initsStr = "";
+  if (!parseOneWireWriteList(initsStr, cfg.initWrites, cfg.initWriteCount, MAX_ONEWIRE_WRITES)) {
+    return false;
+  }
+
+  cfg.convertCmd = (uint8_t) parseHexToken(params.substring(fieldStart[1], fieldEnd[1]));
+  cfg.conversionDelayMs = (unsigned long) params.substring(fieldStart[2], fieldEnd[2]).toInt();
+  cfg.readCmd = (uint8_t) parseHexToken(params.substring(fieldStart[3], fieldEnd[3]));
+  cfg.readLen = (uint8_t) params.substring(fieldStart[4], fieldEnd[4]).toInt();
+  cfg.valueOffset = (uint8_t) params.substring(fieldStart[5], fieldEnd[5]).toInt();
+  cfg.valueLen = (uint8_t) params.substring(fieldStart[6], fieldEnd[6]).toInt();
+  cfg.littleEndian = params.substring(fieldStart[7], fieldEnd[7]).equalsIgnoreCase("L");
+  cfg.checkCrc = params.substring(fieldStart[8], fieldEnd[8]) == "1";
+  cfg.slot = (uint8_t) params.substring(fieldStart[9], fieldEnd[9]).toInt();
 
   if (cfg.readLen == 0 || cfg.readLen > 16) return false;
   if ((int) cfg.valueOffset + (int) cfg.valueLen > cfg.readLen) return false;
@@ -869,7 +964,7 @@ void processCommand(String command) {
   command.trim();
 
   if (command.equalsIgnoreCase("PING")) {
-    hostPrint("#HELLO,PhyLog-ESP32,fw=9.1\n");
+    hostPrint("#HELLO,PhyLog-ESP32,fw=9.2\n");
   } else if (command.equalsIgnoreCase("START")) {
     isStreaming = true;
     hostPrint("#OK,START\n");
@@ -890,7 +985,7 @@ void processCommand(String command) {
     //   SET,<Kanal>,I2C,<Adresse>,<Init-Writes>,<Reads>   z.B. SET,A,I2C,40,0:39:9f;5:10:0,2:2:B:0;4:2:B:1
     //   SET,<Kanal>,I2S,<Modus>,<Abtastrate>,<Slot>,<ShiftBits>,<Null=Fehler>  siehe parseI2SSetPayload
     //                                                      z.B. SET,A,I2S,RAW,16000,L,8,1
-    //   SET,<Kanal>,ONEWIRE,<9 Felder, siehe parseOneWireSetPayload>  z.B. SET,A,ONEWIRE,44,750,be,9,0,2,L,1,0
+    //   SET,<Kanal>,ONEWIRE,<10 Felder, siehe parseOneWireSetPayload>  z.B. SET,A,ONEWIRE,-,44,750,be,9,0,2,L,1,0
     int firstComma = command.indexOf(',');
     int secondComma = command.indexOf(',', firstComma + 1);
     if (firstComma == -1 || secondComma == -1) return;
@@ -1233,7 +1328,7 @@ void setup() {
 
   // Bewusst keine Pin-/Bus-Initialisierung hier: die Pin-Rolle hängt vom gewählten Sensortyp ab
   // und wird erst bei SET über configureChannelHardware() hergestellt.
-  hostPrint("#HELLO,PhyLog-ESP32,fw=9.1\n");
+  hostPrint("#HELLO,PhyLog-ESP32,fw=9.2\n");
 }
 
 void loop() {
