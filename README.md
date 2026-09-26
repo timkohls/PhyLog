@@ -11,7 +11,7 @@ Digitale Messwerterfassung für den Physikunterricht, ein ESP32, die wichtigsten
 
 ## Worum geht's
 
-> „Nicht das bessere Messgerät entwickeln, sondern mehr Experimentieren ermöglichen."
+> „Ziel ist nicht das bessere Messgerät zu entwickeln, sondern mehr selbstständiges Experimentieren zu ermöglichen."
 
 Ein Klassensatz Vernier- oder Leybold-Equipment kostet schnell so viel wie ein Kleinwagen –entsprechend selten stehen genug Geräte für echtes Zweiergruppen-Experimentieren zur Verfügung,
 und aus vielen Versuchen werden Frontalvorführungen. PhyLog dreht den Spieß um: ein ESP32, ein 3D-gedrucktes Gehäuse und austauschbare Sensormodule ergeben einen Messplatz für einen Bruchteil
