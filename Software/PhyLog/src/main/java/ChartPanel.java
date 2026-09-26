@@ -14,7 +14,7 @@ import java.util.List;
  * Freihand-Auswahl und Fadenkreuz, und legt bei Bedarf eine Fit-Kurve samt Chi²-Gütebewertung
  * darüber. Die Ausgleichsrechnung übernimmt {@link CurveFitting}, die Bewertung
  * {@link GoodnessOfFit} - diese Klasse fügt beides nur zur Anzeige zusammen und cached die
- * (teuren) Ergebnisse.
+ * Ergebnisse.
  *
  * <p>Kennt keine Sensoren oder Hardware: bekommt ausschließlich fertige (x, y)-Paare über
  * {@link #setData(List)}.</p>

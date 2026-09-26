@@ -126,8 +126,7 @@ public class GUI extends JFrame implements AcquisitionEngine.Listener {
         return acquisitionEngine.channel(id);
     }
 
-    /** Lädt das Fenster-Icon über den Klassenpfad, damit es auch aus einem gepackten JAR
-     *  heraus gefunden wird (nicht nur beim Start aus der IDE mit Projektordner als CWD). */
+    /** Lädt das Fenster-Icon über den Klassenpfad. */
     private void loadWindowIcon() {
         java.net.URL iconUrl = getClass().getResource("/assets/icon.png");
         if (iconUrl == null) {

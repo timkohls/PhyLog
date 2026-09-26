@@ -124,7 +124,7 @@ public class AcquisitionEngine {
     }
 
     /** Übernimmt für jeden Kanal mit nicht-spektralem Sensor den aktuellen Live-Wert als
-     *  Tabellenzeile (Index statt Zeit) - siehe {@link GUI#captureSnapshot()}. */
+     *  Tabellenzeile (Index statt Zeit). */
     public void captureSnapshot() {
         captureSnapshotForChannel(channelA);
         captureSnapshotForChannel(channelB);

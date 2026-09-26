@@ -9,9 +9,6 @@ public class ChiSquareInfoDialog extends JDialog {
 
     private static final int CONTENT_WIDTH = 420;
 
-    /** Als Feld gehalten, damit {@link #buildScaleBar} sie beim Schließen des Dialogs stoppen
-     *  kann - sonst würde die bis zu 3s laufende Animation nach vorzeitigem Schließen unnötig
-     *  weiter auf dem dann unsichtbaren Panel {@code repaint()} aufrufen. */
     private Timer settleDelay;
     private Timer animationTimer;
 

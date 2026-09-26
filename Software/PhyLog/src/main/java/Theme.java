@@ -22,11 +22,9 @@ public class Theme {
     public static final Color WARNING = new Color(241, 196, 15);
     public static final Color DANGER = new Color(231, 76, 60);
 
-    public static final Font FONT_TITLE = new Font(Font.SANS_SERIF, Font.BOLD, 15);
     public static final Font FONT_UI = new Font(Font.SANS_SERIF, Font.PLAIN, 13);
     public static final Font FONT_UI_BOLD = new Font(Font.SANS_SERIF, Font.BOLD, 13);
     public static final Font FONT_HINT = new Font(Font.SANS_SERIF, Font.PLAIN, 11);
-    public static final Font FONT_MONO = new Font(Font.MONOSPACED, Font.PLAIN, 12);
 
     public static final int CARD_ARC = 12;
     public static final int SPACING = 10;

@@ -2,13 +2,7 @@ import java.util.List;
 
 /**
  * Basisklasse für Sensoren an einem I2S-Bus (digitale MEMS-Mikrofone und ähnliche Module im
- * Standard-Philips-I2S-Format). Die Firmware kennt seit v9.1 kein einzelnes I2S-Sensormodell mehr
- * namentlich (kein spezifisch "INMP441" mehr) - sie steuert nur noch generisch "I2S-Gerät mit
- * dieser Abtastrate, diesem Slot, dieser Bit-Ausrichtung" an (siehe {@code TYPE_I2S} und
- * {@code parseI2SSetPayload} in phylog_firmware.ino). Vorausgesetzt wird dabei weiterhin ein
- * Standard-Philips-I2S-Gerät mit 32-Bit-Slots, wie es praktisch alle gängigen I2S-MEMS-Mikrofone
- * verwenden - alles Modellspezifische (Vollausschlag, physikalische Umrechnung wie dB SPL) bleibt
- * vollständig hier auf der Software-Seite.
+ * Standard-Philips-I2S-Format).
  *
  * <p>Zwei Betriebsarten teilen sich dieselbe I2S-Hardwarekonfiguration: Einzelwert pro Zyklus
  * (geglätteter Spitzenwert, wie jeder andere Sensor über {@link Sensor#decode}) oder laufend

@@ -2,17 +2,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Basisklasse für Sensoren an einem 1-Wire-Bus. Die Firmware kennt seit v8.8 kein einzelnes
- * 1-Wire-Sensormodell mehr namentlich (kein TYPE_DS18B20) - sie kann nur noch generisch
- * "optional eine Init-Sequenz schreiben, dann Konversion mit diesem Kommando anstoßen, so lange
- * warten, mit jenem Kommando so viele Byte lesen, Rohwert an dieser Stelle herausschneiden"
- * (siehe {@code TYPE_ONEWIRE} und {@code parseOneWireSetPayload} in phylog_firmware.ino).
- * "Skip ROM" (0xCC) nimmt die Firmware weiterhin selbst an - unterstützt wird ohnehin nur ein
- * Sensor pro Bus.
- *
- * <p>Wie bei {@link I2CSensor} bleibt alles Modellspezifische (Scratchpad-Layout,
- * Kalibrierwerte, physikalische Umrechnung) vollständig hier auf der Software-Seite -
- * {@link #decode} ändert sich dadurch nicht.</p>
+ * Basisklasse für Sensoren an einem 1-Wire-Bus.
  *
  * <p>Seit v9.2 kann ein Sensor zusätzlich {@link #getInitWrites()} überschreiben, um vor der
  * ersten Konversion einmalig eine Kommandosequenz auf den Bus zu schreiben (z. B. "Write

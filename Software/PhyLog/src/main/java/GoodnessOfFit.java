@@ -212,7 +212,7 @@ public final class GoodnessOfFit {
 
     /**
      * Modellunabhängige Schätzung eines konstanten Rauschpegels aus den Differenzen benachbarter
-     * Messwerte (Rice-Schätzer): sigma² &asymp; Summe((y_i+1 - y_i)&sup2;) / (2&middot;(n-1)).
+     * Messwerte: sigma² &asymp; Summe((y_i+1 - y_i)&sup2;) / (2&middot;(n-1)).
      *
      * <p>Verwendet keinen Fit und ist daher nicht zirkulär wie {@link SigmaMode#RESIDUAL_LOCAL}
      * bzw. {@link SigmaMode#RESIDUAL_LOCAL_GAUSSIAN}. Die Annahme dahinter: das zugrunde liegende

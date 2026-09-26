@@ -309,12 +309,10 @@ class MicrophoneSensor extends I2SSensor {
 }
 
 /**
- * Generisches 0-25V-Spannungsteiler-Modul (Teilerverhältnis 5:1) an einem ESP32-Analogeingang.
+ * Generisches 0-18V-Spannungsteiler-Modul (Teilerverhältnis 5:1) an einem ESP32-Analogeingang.
  *
  * <p><b>Wichtiger Hardware-Hinweis:</b> Der ESP32-Analogeingang ist auf ca. 3,3V ausgelegt, das
- * absolute Maximum liegt bei ca. 3,6V - deutlich unter den 5V, die dieses Modul bei 25V Eingang
- * an "S" ausgibt. Direkt angeschlossen ist sicher nur eine Eingangsspannung bis ca. 16,5V nutzbar;
- * für den vollen 25V-Bereich braucht es einen weiteren Spannungsteiler bzw. Levelshifter.</p>
+ * absolute Maximum liegt bei ca. 3,6V.</p>
  */
 class VoltageDividerSensor extends Sensor {
 
@@ -324,7 +322,7 @@ class VoltageDividerSensor extends Sensor {
     static final double ADC_MAX_COUNT = 4095.0;
 
     /** Teilerverhältnis Eingangsspannung/Ausgangsspannung; über den Kalibrierdialog feinjustierbar. */
-    private double dividerRatio = 3.3;
+    private double dividerRatio = 6.12;
 
     public VoltageDividerSensor() {
         super("Spannungssensor", "V", List.of("V", "VOLT"));
