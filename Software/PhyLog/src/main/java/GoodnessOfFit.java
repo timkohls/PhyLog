@@ -47,7 +47,7 @@ public final class GoodnessOfFit {
      * {@link #GRADIENT_MIDPOINT_FRACTION}).
      * Diese Farbe stetig mit {@code reducedChiSquare} - für Anzeigen, die an
      * exakt derselben Stelle stehen sollen wie der Marker auf der Farbskala (z. B. die
-     * Chi²-Überlagerung im Chart).</p>
+     * Chi²-Überlagerung im Chart).
      */
     public static Color gradientColorFor(double reducedChiSquare) {
         if (Double.isNaN(reducedChiSquare)) return Theme.MUTED;
