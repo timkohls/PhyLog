@@ -28,167 +28,108 @@ import java.util.List;
  */
 public class ChartPanel extends JPanel {
 
-    /** Verfügbare Regressionsmodelle. */
-    public enum FitMode {
-        /** Kein Fit, nur Rohdaten. */
-        NONE,
-        /** f(x) = m*x + b. */
-        LINEAR,
-        /** f(x) = a_n*x^n + ... + a_0, Grad einstellbar. */
-        POLYNOMIAL,
-        /** f(x) = A*sin(w*x + phi) + offset. */
-        SINUS,
-        /** f(x) = a*exp(b*x). */
-        EXPONENTIAL,
-        /** f(x) = a*x^n. */
-        POWER_LAW
-    }
-
-    /** Wie Messpunkte verbunden werden: gar nicht, gerade, oder als glatte Catmull-Rom-Spline. */
-    public enum LineMode { NONE, STRAIGHT, SPLINE }
-
-    /** Auf welche Messgröße(n) sich Fit und Chi² beziehen (siehe {@link #setFitTarget}); Zoom
-     *  und Freihand-Auswahl bleiben davon unabhängig immer an die Hauptgröße gebunden. */
-    public enum FitTarget {
-        /** Nur die Hauptgröße (Kanal A). */
-        A,
-        /** Nur die erste Extra-Serie (Kanal B). */
-        B,
-        /** Beide Größen gemeinsam, nach X aufsteigend zusammengeführt. */
-        BOTH
-    }
-
-    /** Höhe der Chi²-Anzeige-Box (siehe {@link #drawChiSquareOverlay}). */
+    /**
+     * Höhe der Chi²-Anzeige-Box (siehe {@link #drawChiSquareOverlay}).
+     */
     private static final int CHI_OVERLAY_HEIGHT = 26;
-
-    /** Eine zusätzlich eingezeichnete Messgröße (z. B. Kanal B), rein zur Darstellung -
-     *  siehe {@link #setExtraSeries}. */
-    public static final class Series {
-        public final String label;
-        public final Color color;
-        public final List<double[]> data;
-
-        public Series(String label, Color color, List<double[]> data) {
-            this.label = label;
-            this.color = color;
-            this.data = (data != null) ? data : new ArrayList<>();
-        }
-    }
-
-    /** Fasst die für einen Zeichendurchlauf nötige Pixel-/Datenraum-Geometrie zusammen; einmal
-     *  je {@link #paintComponent(Graphics)} berechnet und an alle Zeichenschritte weitergereicht. */
-    private static class PlotGeometry {
-        final int width, height, padding, rightPadding, plotWidth, plotHeight;
-        final double minX, maxX, minY, maxY, rangeX, rangeY, visibleMaxX;
-        /** {@code true}, wenn eine zweite Y-Achse für Kanal B gezeichnet wird - nur dann sind
-         *  {@link #minY2}/{@link #maxY2}/{@link #rangeY2} gültig. */
-        final boolean hasSecondaryAxis;
-        final double minY2, maxY2, rangeY2;
-
-        PlotGeometry(int width, int height, int padding, int rightPadding, int plotWidth, int plotHeight,
-                     double minX, double maxX, double minY, double maxY,
-                     double rangeX, double rangeY, double visibleMaxX,
-                     boolean hasSecondaryAxis, double minY2, double maxY2, double rangeY2) {
-            this.width = width;
-            this.height = height;
-            this.padding = padding;
-            this.rightPadding = rightPadding;
-            this.plotWidth = plotWidth;
-            this.plotHeight = plotHeight;
-            this.minX = minX;
-            this.maxX = maxX;
-            this.minY = minY;
-            this.maxY = maxY;
-            this.rangeX = rangeX;
-            this.rangeY = rangeY;
-            this.visibleMaxX = visibleMaxX;
-            this.hasSecondaryAxis = hasSecondaryAxis;
-            this.minY2 = minY2;
-            this.maxY2 = maxY2;
-            this.rangeY2 = rangeY2;
-        }
-    }
-
-    /** (double-x, double-y)-Bildschirmpunkt, um Rundungsfehler bei kleinen Panels zu vermeiden. */
-    private static class Point2DDouble {
-        double x, y;
-        Point2DDouble(double x, double y) { this.x = x; this.y = y; }
-    }
-
-    /** Zuletzt über {@link #setData(List)} gesetzte Messdaten (Hauptgröße). Wird von Zoom/
-     *  Freihand-Auswahl nie verändert - siehe {@link #viewport} für den Zoom-Zustand. */
-    private List<double[]> originalData = new ArrayList<>();
-    /** Auf das aktuelle Zoom-/Auswahlfenster eingeschränkte Teilmenge von {@link #originalData}
-     *  (siehe {@link #recomputeDisplayData()}); geht in Achsenbereich, Fit und Chi² ein. */
-    private List<double[]> displayData = new ArrayList<>();
-
-    /** Aktuelles Zoom-/Auswahlfenster sowie Zoom-Faktor und flüchtiger Mausinteraktions-
-     *  Zustand - siehe {@link ChartViewport}. Neu eintreffende Messwerte löschen dabei nie
-     *  Punkte aus {@link #originalData}; {@link #recomputeDisplayData()} leitet
-     *  {@link #displayData} bei jeder Änderung frisch daraus ab. */
+    /**
+     * Aktuelles Zoom-/Auswahlfenster sowie Zoom-Faktor und flüchtiger Mausinteraktions-
+     * Zustand - siehe {@link ChartViewport}. Neu eintreffende Messwerte löschen dabei nie
+     * Punkte aus {@link #originalData}; {@link #recomputeDisplayData()} leitet
+     * {@link #displayData} bei jeder Änderung frisch daraus ab.
+     */
     private final ChartViewport viewport = new ChartViewport();
-
-    /** Zusätzliche, gleichzeitig dargestellte Kurven (siehe {@link Series}); nehmen nicht an
-     *  Zoom, Freihand-Auswahl, Fit oder Chi² teil. */
+    /**
+     * Zuletzt über {@link #setData(List)} gesetzte Messdaten (Hauptgröße). Wird von Zoom/
+     * Freihand-Auswahl nie verändert - siehe {@link #viewport} für den Zoom-Zustand.
+     */
+    private List<double[]> originalData = new ArrayList<>();
+    /**
+     * Auf das aktuelle Zoom-/Auswahlfenster eingeschränkte Teilmenge von {@link #originalData}
+     * (siehe {@link #recomputeDisplayData()}); geht in Achsenbereich, Fit und Chi² ein.
+     */
+    private List<double[]> displayData = new ArrayList<>();
+    /**
+     * Zusätzliche, gleichzeitig dargestellte Kurven (siehe {@link Series}); nehmen nicht an
+     * Zoom, Freihand-Auswahl, Fit oder Chi² teil.
+     */
     private List<Series> extraSeries = new ArrayList<>();
-
     private String xUnit = "s";
-    /** Titelwort vor der X-Achsen-Einheit (z. B. "Zeit" oder "Frequenz"), siehe {@link #setXAxisTitle}. */
+    /**
+     * Titelwort vor der X-Achsen-Einheit (z. B. "Zeit" oder "Frequenz"), siehe {@link #setXAxisTitle}.
+     */
     private String xAxisTitle = "Zeit";
     private String yUnit = "Messwert";
-
-    /** Bezeichnung der Hauptmessgröße (Kanal A) für die Legende. */
+    /**
+     * Bezeichnung der Hauptmessgröße (Kanal A) für die Legende.
+     */
     private String mainLabel = "Kanal A";
-
-    /** Beschriftung der optionalen zweiten Y-Achse für Kanal B, siehe {@link #setSecondaryUnits}. */
+    /**
+     * Beschriftung der optionalen zweiten Y-Achse für Kanal B, siehe {@link #setSecondaryUnits}.
+     */
     private String secondaryYUnit = "Messwert";
-
     private boolean showPoints = true;
     private LineMode lineMode = LineMode.NONE;
-    /** {@code true}, wenn Messpunkte nach ihrem Y-Wert statt in fester Serienfarbe gefärbt
-     *  werden (siehe {@link #magnitudeColor}) - genutzt für die Frequenzspektrum-Anzeige. */
+    /**
+     * {@code true}, wenn Messpunkte nach ihrem Y-Wert statt in fester Serienfarbe gefärbt
+     * werden (siehe {@link #magnitudeColor}) - genutzt für die Frequenzspektrum-Anzeige.
+     */
     private boolean colorByMagnitude = false;
     private FitMode fitMode = FitMode.NONE;
     private int polynomialDegree = 2;
-
-    /** Auf welche Messgröße(n) sich der aktuelle Fit bezieht, siehe {@link FitTarget}. */
+    /**
+     * Auf welche Messgröße(n) sich der aktuelle Fit bezieht, siehe {@link FitTarget}.
+     */
     private FitTarget fitTarget = FitTarget.A;
-
-    /** Tatsächlich für Fit/Chi²/Sigma verwendete Datenpunkte - je nach {@link #fitTarget}
-     *  identisch zu {@link #displayData} oder per {@link #computeFitData()} daraus abgeleitet. */
+    /**
+     * Tatsächlich für Fit/Chi²/Sigma verwendete Datenpunkte - je nach {@link #fitTarget}
+     * identisch zu {@link #displayData} oder per {@link #computeFitData()} daraus abgeleitet.
+     */
     private List<double[]> fitData = new ArrayList<>();
-
-    /** {@code true}, wenn Kanal B eine eigene, unabhängig skalierte zweite Y-Achse bekommt,
-     *  statt sich die Achse mit Kanal A zu teilen. Betrifft nur die Darstellung - Zoom,
-     *  Freihand-Auswahl, Fit und Chi² bleiben immer an Kanal A gebunden. */
+    /**
+     * {@code true}, wenn Kanal B eine eigene, unabhängig skalierte zweite Y-Achse bekommt,
+     * statt sich die Achse mit Kanal A zu teilen. Betrifft nur die Darstellung - Zoom,
+     * Freihand-Auswahl, Fit und Chi² bleiben immer an Kanal A gebunden.
+     */
     private boolean dualYAxisMode = false;
-
     private Point mousePoint = null;
-
-    /** Klickfläche des "i"-Symbols neben der Chi²-Anzeige, bei jedem Zeichnen aktualisiert. */
+    /**
+     * Klickfläche des "i"-Symbols neben der Chi²-Anzeige, bei jedem Zeichnen aktualisiert.
+     */
     private Rectangle infoButtonBounds = new Rectangle();
     private double currentReducedChiSquare = 0.0;
     private int currentDegreesOfFreedom = 1;
-
-    /** Angenommene Standardabweichung der Messwerte für Chi²; Rückfallebene für die
-     *  automatischen Sigma-Modi ohne aktiven Fit. */
+    /**
+     * Angenommene Standardabweichung der Messwerte für Chi²; Rückfallebene für die
+     * automatischen Sigma-Modi ohne aktiven Fit.
+     */
     private double standardDeviation = 1.0;
-
-    /** Wie sigma bestimmt wird, siehe {@link GoodnessOfFit.SigmaMode}. */
+    /**
+     * Wie sigma bestimmt wird, siehe {@link GoodnessOfFit.SigmaMode}.
+     */
     private GoodnessOfFit.SigmaMode sigmaMode = GoodnessOfFit.SigmaMode.CONSTANT;
-    /** Nachbarschaftsgröße k für {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL}. */
+    /**
+     * Nachbarschaftsgröße k für {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL}.
+     */
     private int localSigmaNeighbors = 8;
-    /** {@code true}, wenn die aus Residuen abgeleiteten Sigma-Werte neu berechnet werden müssen. */
+    /**
+     * {@code true}, wenn die aus Residuen abgeleiteten Sigma-Werte neu berechnet werden müssen.
+     */
     private boolean sigmaCacheDirty = true;
-    /** Zwischengespeicherte Sigma-Werte für {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL}. */
+    /**
+     * Zwischengespeicherte Sigma-Werte für {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL}.
+     */
     private double[] cachedLocalSigmas = null;
-    /** Zwischengespeicherte Residuen samt Bandbreite für
-     *  {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL_GAUSSIAN}. */
+    /**
+     * Zwischengespeicherte Residuen samt Bandbreite für
+     * {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL_GAUSSIAN}.
+     */
     private double[] cachedGaussianResiduals = null;
     private double cachedGaussianBandwidth = 0;
-    /** Zwischengespeicherter konstanter Wert für {@link GoodnessOfFit.SigmaMode#DIFFERENCE_BASED}. */
+    /**
+     * Zwischengespeicherter konstanter Wert für {@link GoodnessOfFit.SigmaMode#DIFFERENCE_BASED}.
+     */
     private double cachedDifferenceSigma = Double.NaN;
-
     // --- Fit-Cache: Regression ist teuer, wird nur bei tatsächlicher Änderung neu berechnet
     // (nicht bei jedem repaint(), z. B. wegen einer Mausbewegung). Die Standardabweichung
     // beeinflusst nur Chi², nicht die Kurvenparameter, und löst deshalb keinen Refit aus.
@@ -197,12 +138,15 @@ public class ChartPanel extends JPanel {
     private FitMode cachedFitModeUsed = null;
     private int cachedDegreeUsed = -1;
     private FitTarget cachedFitTargetUsed = null;
-
-    /** Beschreibung des zuletzt gezeichneten Fits, {@code null} ohne aktiven Fit. */
+    /**
+     * Beschreibung des zuletzt gezeichneten Fits, {@code null} ohne aktiven Fit.
+     */
     private CurveFitting.FitDescription currentFitDescription = null;
 
-    /** Erstellt das leere Diagramm-Panel und registriert die Maus-Interaktion für Zoom,
-     *  Freihand-Auswahl, Fadenkreuz und den Klick auf das Chi²-Info-Symbol. */
+    /**
+     * Erstellt das leere Diagramm-Panel und registriert die Maus-Interaktion für Zoom,
+     * Freihand-Auswahl, Fadenkreuz und den Klick auf das Chi²-Info-Symbol.
+     */
     public ChartPanel() {
         setBackground(Theme.BG);
 
@@ -277,6 +221,49 @@ public class ChartPanel extends JPanel {
     }
 
     /**
+     * Günstiger Vergleich zweier Datensätze (Größe plus erster/letzter Punkt) statt eines
+     * vollständigen Elementvergleichs - unterscheidet ein bloßes "unverändert erneut
+     * gesetzt" von einer echten Änderung, ohne bei tausenden Punkten selbst teuer zu sein.
+     */
+    private static boolean dataEquivalent(List<double[]> a, List<double[]> b) {
+        if (a.size() != b.size()) return false;
+        if (a.isEmpty()) return true;
+        return Arrays.equals(a.getFirst(), b.getFirst()) && Arrays.equals(a.getLast(), b.getLast());
+    }
+
+    /**
+     * Kopiert {@code color} mit neuem Alpha-Wert (0-255).
+     */
+    private static Color withAlpha(Color color, int alpha) {
+        return new Color(color.getRed(), color.getGreen(), color.getBlue(), alpha);
+    }
+
+    /**
+     * Blau-Türkis-Orange-Rot-Farbverlauf für {@link #colorByMagnitude} (z. B. Spektrum-dB-Werte).
+     *
+     * @param normalized Wert in [0, 1], außerhalb wird geklemmt
+     */
+    private static Color magnitudeColor(double normalized) {
+        double t = Math.clamp(normalized, 0.0, 1.0);
+        Color[] stops = {
+                new Color(60, 70, 200),
+                new Color(40, 180, 190),
+                new Color(250, 170, 40),
+                new Color(230, 60, 60)
+        };
+
+        double scaled = t * (stops.length - 1);
+        int index = Math.min(stops.length - 2, (int) scaled);
+        double localT = scaled - index;
+
+        Color a = stops[index], b = stops[index + 1];
+        int r = (int) Math.round(a.getRed() + (b.getRed() - a.getRed()) * localT);
+        int g = (int) Math.round(a.getGreen() + (b.getGreen() - a.getGreen()) * localT);
+        int bl = (int) Math.round(a.getBlue() + (b.getBlue() - a.getBlue()) * localT);
+        return new Color(r, g, bl);
+    }
+
+    /**
      * Setzt die anzuzeigenden Messdaten komplett neu (z. B. nach CSV-Import oder neuen
      * Live-Messwerten). Ein aktives Zoom-/Auswahlfenster bleibt bewusst erhalten, damit
      * jeder neue Live-Messwert den Zoom nicht sofort wieder aufhebt - siehe {@link #resetZoom()}.
@@ -295,17 +282,10 @@ public class ChartPanel extends JPanel {
         repaint();
     }
 
-    /** Günstiger Vergleich zweier Datensätze (Größe plus erster/letzter Punkt) statt eines
-     *  vollständigen Elementvergleichs - unterscheidet ein bloßes "unverändert erneut
-     *  gesetzt" von einer echten Änderung, ohne bei tausenden Punkten selbst teuer zu sein. */
-    private static boolean dataEquivalent(List<double[]> a, List<double[]> b) {
-        if (a.size() != b.size()) return false;
-        if (a.isEmpty()) return true;
-        return Arrays.equals(a.getFirst(), b.getFirst()) && Arrays.equals(a.getLast(), b.getLast());
-    }
-
-    /** Leitet {@link #displayData} aus {@link #originalData} ab: unverändert ohne aktives
-     *  Zoom-Fenster, sonst auf das Fenster aus {@link #viewport} eingeschränkt. */
+    /**
+     * Leitet {@link #displayData} aus {@link #originalData} ab: unverändert ohne aktives
+     * Zoom-Fenster, sonst auf das Fenster aus {@link #viewport} eingeschränkt.
+     */
     private void recomputeDisplayData() {
         if (!viewport.isActive()) {
             displayData = new ArrayList<>(originalData);
@@ -322,16 +302,20 @@ public class ChartPanel extends JPanel {
         displayData = filtered;
     }
 
-    /** Nach einer neuen Zoom-/Auswahlfenster-Setzung durch {@link #viewport}: zieht
-     *  {@link #displayData} nach und invalidiert Fit- und Sigma-Cache. */
+    /**
+     * Nach einer neuen Zoom-/Auswahlfenster-Setzung durch {@link #viewport}: zieht
+     * {@link #displayData} nach und invalidiert Fit- und Sigma-Cache.
+     */
     private void onViewportWindowChanged() {
         recomputeDisplayData();
         fitDirty = true;
         sigmaCacheDirty = true;
     }
 
-    /** Schränkt {@code data} auf das aktuelle Zoom-/Auswahlfenster ein, analog zu
-     *  {@link #recomputeDisplayData()} für beliebige (z. B. Kanal-B-)Daten. */
+    /**
+     * Schränkt {@code data} auf das aktuelle Zoom-/Auswahlfenster ein, analog zu
+     * {@link #recomputeDisplayData()} für beliebige (z. B. Kanal-B-)Daten.
+     */
     private List<double[]> filterToViewport(List<double[]> data) {
         if (data == null) return new ArrayList<>();
         if (!viewport.isActive()) return new ArrayList<>(data);
@@ -346,15 +330,19 @@ public class ChartPanel extends JPanel {
         return filtered;
     }
 
-    /** Daten der ersten Extra-Serie (Kanal B), oder eine leere Liste ohne Extra-Serie. */
+    /**
+     * Daten der ersten Extra-Serie (Kanal B), oder eine leere Liste ohne Extra-Serie.
+     */
     private List<double[]> firstExtraSeriesData() {
         return (extraSeries != null && !extraSeries.isEmpty() && extraSeries.getFirst().data != null)
                 ? extraSeries.getFirst().data : new ArrayList<>();
     }
 
-    /** Baut den für {@link #fitTarget} tatsächlich zu fittenden Datensatz: {@link #displayData}
-     *  für {@link FitTarget#A}, die Extra-Serie für {@link FitTarget#B}, bzw. beides nach X
-     *  aufsteigend zusammengeführt für {@link FitTarget#BOTH}. */
+    /**
+     * Baut den für {@link #fitTarget} tatsächlich zu fittenden Datensatz: {@link #displayData}
+     * für {@link FitTarget#A}, die Extra-Serie für {@link FitTarget#B}, bzw. beides nach X
+     * aufsteigend zusammengeführt für {@link FitTarget#BOTH}.
+     */
     private List<double[]> computeFitData() {
         return switch (fitTarget) {
             case B -> filterToViewport(firstExtraSeriesData());
@@ -368,8 +356,10 @@ public class ChartPanel extends JPanel {
         };
     }
 
-    /** Baut die für {@link ChartViewport} nötige reduzierte Geometrie, oder {@code null} bei
-     *  zu kleinem Panel. */
+    /**
+     * Baut die für {@link ChartViewport} nötige reduzierte Geometrie, oder {@code null} bei
+     * zu kleinem Panel.
+     */
     private ChartViewport.Geometry viewportGeometry() {
         PlotGeometry geo = computePlotGeometry();
         if (geo == null) return null;
@@ -407,56 +397,74 @@ public class ChartPanel extends JPanel {
         repaint();
     }
 
-    /** Setzt das Titelwort vor der X-Achsen-Einheit (Standard: "Zeit"). */
+    /**
+     * Setzt das Titelwort vor der X-Achsen-Einheit (Standard: "Zeit").
+     */
     public void setXAxisTitle(String title) {
         this.xAxisTitle = (title != null && !title.isBlank()) ? title.trim() : "Zeit";
         repaint();
     }
 
-    /** Achsenbeschriftung aus Titel und Einheit; ohne Einheit (z. B. "Index" bei einer
-     *  Momentaufnahme, siehe {@link #setUnits}) wird die Klammer weggelassen statt "Index ()"
-     *  anzuzeigen. */
+    /**
+     * Achsenbeschriftung aus Titel und Einheit; ohne Einheit (z. B. "Index" bei einer
+     * Momentaufnahme, siehe {@link #setUnits}) wird die Klammer weggelassen statt "Index ()"
+     * anzuzeigen.
+     */
     private String xAxisLabelText() {
         return xUnit.isBlank() ? xAxisTitle : xAxisTitle + " (" + xUnit + ")";
     }
 
-    /** Setzt die Bezeichnung der Hauptmessgröße (Kanal A) für die Legende. */
+    /**
+     * Setzt die Bezeichnung der Hauptmessgröße (Kanal A) für die Legende.
+     */
     public void setMainLabel(String label) {
         this.mainLabel = (label != null && !label.isBlank()) ? label.trim() : "Kanal A";
         repaint();
     }
 
-    /** Setzt die Beschriftung der zweiten Y-Achse; wirkt nur bei aktivem {@link #dualYAxisMode}. */
+    /**
+     * Setzt die Beschriftung der zweiten Y-Achse; wirkt nur bei aktivem {@link #dualYAxisMode}.
+     */
     public void setSecondaryUnits(String yLabel) {
         this.secondaryYUnit = (yLabel != null && !yLabel.isBlank()) ? yLabel.trim() : "Messwert";
         repaint();
     }
 
-    /** Legt fest, ob Kanal B eine eigene, unabhängig skalierte zweite Y-Achse bekommt. */
+    /**
+     * Legt fest, ob Kanal B eine eigene, unabhängig skalierte zweite Y-Achse bekommt.
+     */
     public void setDualYAxisMode(boolean dualYAxisMode) {
         this.dualYAxisMode = dualYAxisMode;
         repaint();
     }
 
-    /** @param showPoints ob die Messpunkte als Kreise gezeichnet werden sollen */
+    /**
+     * @param showPoints ob die Messpunkte als Kreise gezeichnet werden sollen
+     */
     public void setShowPoints(boolean showPoints) {
         this.showPoints = showPoints;
         repaint();
     }
 
-    /** @param lineMode wie die Messpunkte verbunden werden (siehe {@link LineMode}) */
+    /**
+     * @param lineMode wie die Messpunkte verbunden werden (siehe {@link LineMode})
+     */
     public void setLineMode(LineMode lineMode) {
         this.lineMode = (lineMode != null) ? lineMode : LineMode.NONE;
         repaint();
     }
 
-    /** @param colorByMagnitude ob Messpunkte nach Y-Wert statt fester Farbe eingefärbt werden */
+    /**
+     * @param colorByMagnitude ob Messpunkte nach Y-Wert statt fester Farbe eingefärbt werden
+     */
     public void setColorByMagnitude(boolean colorByMagnitude) {
         this.colorByMagnitude = colorByMagnitude;
         repaint();
     }
 
-    /** Wählt das Regressionsmodell und markiert den Fit-Cache als veraltet. */
+    /**
+     * Wählt das Regressionsmodell und markiert den Fit-Cache als veraltet.
+     */
     public void setFitMode(FitMode fitMode) {
         this.fitMode = fitMode;
         fitDirty = true;
@@ -464,7 +472,9 @@ public class ChartPanel extends JPanel {
         repaint();
     }
 
-    /** Legt fest, auf welche Messgröße(n) sich Fit und Chi² beziehen, siehe {@link FitTarget}. */
+    /**
+     * Legt fest, auf welche Messgröße(n) sich Fit und Chi² beziehen, siehe {@link FitTarget}.
+     */
     public void setFitTarget(FitTarget fitTarget) {
         this.fitTarget = (fitTarget != null) ? fitTarget : FitTarget.A;
         fitDirty = true;
@@ -472,7 +482,9 @@ public class ChartPanel extends JPanel {
         repaint();
     }
 
-    /** @param degree Polynomgrad für {@link FitMode#POLYNOMIAL}, wird auf 1..10 begrenzt */
+    /**
+     * @param degree Polynomgrad für {@link FitMode#POLYNOMIAL}, wird auf 1..10 begrenzt
+     */
     public void setPolynomialDegree(int degree) {
         this.polynomialDegree = Math.clamp(degree, 1, 10);
         fitDirty = true;
@@ -480,44 +492,60 @@ public class ChartPanel extends JPanel {
         repaint();
     }
 
-    /** @param standardDeviation neue Standardabweichung (min. 1e-6); beeinflusst nur Chi², kein Refit */
+    public double getStandardDeviation() {
+        return standardDeviation;
+    }
+
+    /**
+     * @param standardDeviation neue Standardabweichung (min. 1e-6); beeinflusst nur Chi², kein Refit
+     */
     public void setStandardDeviation(double standardDeviation) {
         this.standardDeviation = Math.max(1e-6, standardDeviation);
         repaint();
     }
 
-    public double getStandardDeviation() { return standardDeviation; }
+    public GoodnessOfFit.SigmaMode getSigmaMode() {
+        return sigmaMode;
+    }
 
-    /** @param sigmaMode Modus zur Sigma-Bestimmung, {@code null} fällt auf CONSTANT zurück */
+    /**
+     * @param sigmaMode Modus zur Sigma-Bestimmung, {@code null} fällt auf CONSTANT zurück
+     */
     public void setSigmaMode(GoodnessOfFit.SigmaMode sigmaMode) {
         this.sigmaMode = (sigmaMode != null) ? sigmaMode : GoodnessOfFit.SigmaMode.CONSTANT;
         sigmaCacheDirty = true;
         repaint();
     }
 
-    public GoodnessOfFit.SigmaMode getSigmaMode() { return sigmaMode; }
+    public int getLocalSigmaNeighbors() {
+        return localSigmaNeighbors;
+    }
 
-    /** @param neighbors Nachbarn-Anzahl für {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL} (min. 2) */
+    /**
+     * @param neighbors Nachbarn-Anzahl für {@link GoodnessOfFit.SigmaMode#RESIDUAL_LOCAL} (min. 2)
+     */
     public void setLocalSigmaNeighbors(int neighbors) {
         this.localSigmaNeighbors = Math.max(2, neighbors);
         sigmaCacheDirty = true;
         repaint();
     }
 
-    public int getLocalSigmaNeighbors() { return localSigmaNeighbors; }
-
     public void zoomIn() {
         viewport.zoomIn();
         repaint();
     }
 
-    /** Verkleinert den angezeigten Ausschnitt um Faktor 1.2 (Mindestfaktor 0.1). */
+    /**
+     * Verkleinert den angezeigten Ausschnitt um Faktor 1.2 (Mindestfaktor 0.1).
+     */
     public void zoomOut() {
         viewport.zoomOut();
         repaint();
     }
 
-    /** Setzt Zoom-Faktor und Zoom-/Auswahlfenster auf die vollständigen Messdaten zurück. */
+    /**
+     * Setzt Zoom-Faktor und Zoom-/Auswahlfenster auf die vollständigen Messdaten zurück.
+     */
     public void resetZoom() {
         viewport.reset();
         recomputeDisplayData();
@@ -596,8 +624,10 @@ public class ChartPanel extends JPanel {
         g2.dispose();
     }
 
-    /** Zeichnet Extra-Kurven (siehe {@link #setExtraSeries}) in ihrer jeweiligen Farbe, auf der
-     *  Skala der (aktiven) zweiten Achse oder sonst auf der Skala der Hauptgröße. */
+    /**
+     * Zeichnet Extra-Kurven (siehe {@link #setExtraSeries}) in ihrer jeweiligen Farbe, auf der
+     * Skala der (aktiven) zweiten Achse oder sonst auf der Skala der Hauptgröße.
+     */
     private void drawExtraSeries(Graphics2D g2, PlotGeometry geo) {
         double pointSize = 6;
 
@@ -642,23 +672,29 @@ public class ChartPanel extends JPanel {
         }
     }
 
-    /** Ob die Farb-Legende gezeichnet wird: nur mit mehr als einer gleichzeitig dargestellten
-     *  Größe, gemeinsamer Y-Achse und tatsächlichen Daten in der Hauptgröße - sonst wäre der
-     *  Bezug entweder redundant (Achsentitel/zweite Achse zeigen es schon) oder bedeutungslos. */
+    /**
+     * Ob die Farb-Legende gezeichnet wird: nur mit mehr als einer gleichzeitig dargestellten
+     * Größe, gemeinsamer Y-Achse und tatsächlichen Daten in der Hauptgröße - sonst wäre der
+     * Bezug entweder redundant (Achsentitel/zweite Achse zeigen es schon) oder bedeutungslos.
+     */
     private boolean legendVisible() {
         return !extraSeries.isEmpty() && !dualYAxisMode && !originalData.isEmpty();
     }
 
-    /** Höhe der Legendenbox in Pixeln, oder 0 ohne sichtbare Legende. */
+    /**
+     * Höhe der Legendenbox in Pixeln, oder 0 ohne sichtbare Legende.
+     */
     private int legendHeight() {
         if (!legendVisible()) return 0;
         int rowHeight = 16;
         return (1 + extraSeries.size()) * rowHeight + 8;
     }
 
-    /** Zeichnet eine kleine Legende (Farbe -> Messgröße) oben rechts, sofern {@link #legendVisible()}.
+    /**
+     * Zeichnet eine kleine Legende (Farbe -> Messgröße) oben rechts, sofern {@link #legendVisible()}.
      *
-     * @param topY obere Kante der Legende in Bildschirmkoordinaten */
+     * @param topY obere Kante der Legende in Bildschirmkoordinaten
+     */
     private void drawLegend(Graphics2D g2, PlotGeometry geo, int topY) {
         if (!legendVisible()) return;
 
@@ -735,8 +771,10 @@ public class ChartPanel extends JPanel {
         if (viewport.isActive()) {
             // Das Zoom-/Auswahlfenster ist die Achsen-Spanne - aus den (unfilterten) Daten neu
             // berechnen würde den Zoom optisch aufheben.
-            minX = viewport.getMinX(); maxX = viewport.getMaxX();
-            minY = viewport.getMinY(); maxY = viewport.getMaxY();
+            minX = viewport.getMinX();
+            maxX = viewport.getMaxX();
+            minY = viewport.getMinY();
+            maxY = viewport.getMaxY();
 
             if (secondaryAxisActive) {
                 // Zweite Achse bewusst nicht ans (auf Kanal A bezogene) Zoom-Fenster gekoppelt,
@@ -746,14 +784,18 @@ public class ChartPanel extends JPanel {
                 maxY2 = secRange[1];
             }
         } else {
-            minX = 0; maxX = 10;
-            minY = 0; maxY = 10;
+            minX = 0;
+            maxX = 10;
+            minY = 0;
+            maxY = 10;
 
             boolean hasMainData = (displayData != null && !displayData.isEmpty());
 
             if (hasMainData || hasExtraData) {
-                minX = Double.MAX_VALUE; maxX = -Double.MAX_VALUE;
-                minY = Double.MAX_VALUE; maxY = -Double.MAX_VALUE;
+                minX = Double.MAX_VALUE;
+                maxX = -Double.MAX_VALUE;
+                minY = Double.MAX_VALUE;
+                maxY = -Double.MAX_VALUE;
 
                 if (hasMainData) {
                     for (double[] point : displayData) {
@@ -782,10 +824,16 @@ public class ChartPanel extends JPanel {
                 }
 
                 if (minX == Double.MAX_VALUE) minX = 0;
-                if (minY == Double.MAX_VALUE) { minY = 0; maxY = 10; } // nur Kanal-B-Daten vorhanden
+                if (minY == Double.MAX_VALUE) {
+                    minY = 0;
+                    maxY = 10;
+                } // nur Kanal-B-Daten vorhanden
             }
             if (minX == maxX) maxX = minX + 1.0;
-            if (minY == maxY) { minY -= 1.0; maxY += 1.0; }
+            if (minY == maxY) {
+                minY -= 1.0;
+                maxY += 1.0;
+            }
 
             if (secondaryAxisActive) {
                 double[] secRange = computeSecondaryRange(minX, maxX);
@@ -804,9 +852,11 @@ public class ChartPanel extends JPanel {
                 secondaryAxisActive, minY2, maxY2, rangeY2);
     }
 
-    /** Y-Wertebereich der Extra-Serien (Kanal B) innerhalb des sichtbaren X-Fensters; weicht
-     *  ohne Punkte im Fenster auf den gesamten Kanal-B-Datensatz aus, statt grundlos auf 0..10
-     *  zurückzufallen. */
+    /**
+     * Y-Wertebereich der Extra-Serien (Kanal B) innerhalb des sichtbaren X-Fensters; weicht
+     * ohne Punkte im Fenster auf den gesamten Kanal-B-Datensatz aus, statt grundlos auf 0..10
+     * zurückzufallen.
+     */
     private double[] computeSecondaryRange(double minX, double maxX) {
         double lo = Double.MAX_VALUE, hi = -Double.MAX_VALUE;
         for (Series series : extraSeries) {
@@ -826,12 +876,20 @@ public class ChartPanel extends JPanel {
                 }
             }
         }
-        if (lo == Double.MAX_VALUE) { lo = 0; hi = 10; }
-        if (lo == hi) { lo -= 1.0; hi += 1.0; }
+        if (lo == Double.MAX_VALUE) {
+            lo = 0;
+            hi = 10;
+        }
+        if (lo == hi) {
+            lo -= 1.0;
+            hi += 1.0;
+        }
         return new double[]{lo, hi};
     }
 
-    /** Zeichnet Hintergrundgitter, Achsenlinien, Tick-Beschriftungen und Achsentitel. */
+    /**
+     * Zeichnet Hintergrundgitter, Achsenlinien, Tick-Beschriftungen und Achsentitel.
+     */
     private void drawGridAndAxes(Graphics2D g2, PlotGeometry geo) {
         int padding = geo.padding;
         int height = geo.height;
@@ -914,35 +972,9 @@ public class ChartPanel extends JPanel {
         }
     }
 
-    /** Kopiert {@code color} mit neuem Alpha-Wert (0-255). */
-    private static Color withAlpha(Color color, int alpha) {
-        return new Color(color.getRed(), color.getGreen(), color.getBlue(), alpha);
-    }
-
-    /** Blau-Türkis-Orange-Rot-Farbverlauf für {@link #colorByMagnitude} (z. B. Spektrum-dB-Werte).
-     *
-     * @param normalized Wert in [0, 1], außerhalb wird geklemmt */
-    private static Color magnitudeColor(double normalized) {
-        double t = Math.clamp(normalized, 0.0, 1.0);
-        Color[] stops = {
-                new Color(60, 70, 200),
-                new Color(40, 180, 190),
-                new Color(250, 170, 40),
-                new Color(230, 60, 60)
-        };
-
-        double scaled = t * (stops.length - 1);
-        int index = Math.min(stops.length - 2, (int) scaled);
-        double localT = scaled - index;
-
-        Color a = stops[index], b = stops[index + 1];
-        int r = (int) Math.round(a.getRed() + (b.getRed() - a.getRed()) * localT);
-        int g = (int) Math.round(a.getGreen() + (b.getGreen() - a.getGreen()) * localT);
-        int bl = (int) Math.round(a.getBlue() + (b.getBlue() - a.getBlue()) * localT);
-        return new Color(r, g, bl);
-    }
-
-    /** Farbe der zweiten Y-Achse: die der ersten Extra-Serie, sonst {@link Theme#TEXT}. */
+    /**
+     * Farbe der zweiten Y-Achse: die der ersten Extra-Serie, sonst {@link Theme#TEXT}.
+     */
     private Color secondaryAxisColor() {
         return (extraSeries != null && !extraSeries.isEmpty()) ? extraSeries.getFirst().color : Theme.TEXT;
     }
@@ -953,7 +985,9 @@ public class ChartPanel extends JPanel {
         g2.drawString("Keine Messdaten vorhanden", geo.width / 2 - 70, geo.height / 2);
     }
 
-    /** Wandelt Datenpunkte anhand der Geometrie in Bildschirmkoordinaten um (Hauptgröße/Kanal A). */
+    /**
+     * Wandelt Datenpunkte anhand der Geometrie in Bildschirmkoordinaten um (Hauptgröße/Kanal A).
+     */
     private List<Point2DDouble> projectDataToScreen(PlotGeometry geo, List<double[]> data) {
         List<Point2DDouble> points = new ArrayList<>();
         for (double[] point : data) {
@@ -964,9 +998,11 @@ public class ChartPanel extends JPanel {
         return points;
     }
 
-    /** Reduziert sehr dichte Datensätze auf Min/Max je Pixel-Spalte (Min-Max-Downsampling),
-     *  damit Zeichnen bei tausenden Punkten performant bleibt, ohne sichtbare Ausschläge zu
-     *  verlieren. Ändert nichts an Fit/Chi² - nur an dem, was tatsächlich gezeichnet wird. */
+    /**
+     * Reduziert sehr dichte Datensätze auf Min/Max je Pixel-Spalte (Min-Max-Downsampling),
+     * damit Zeichnen bei tausenden Punkten performant bleibt, ohne sichtbare Ausschläge zu
+     * verlieren. Ändert nichts an Fit/Chi² - nur an dem, was tatsächlich gezeichnet wird.
+     */
     private List<double[]> downsampleForRendering(List<double[]> data, PlotGeometry geo) {
         int n = data.size();
         int columns = Math.max(1, geo.plotWidth);
@@ -1018,15 +1054,19 @@ public class ChartPanel extends JPanel {
         return reduced;
     }
 
-    /** Zeichnet die Verbindungslinie der Hauptgröße gemäß {@link #lineMode}. */
+    /**
+     * Zeichnet die Verbindungslinie der Hauptgröße gemäß {@link #lineMode}.
+     */
     private void drawConnectingLine(Graphics2D g2, List<Point2DDouble> points) {
         g2.setColor(Theme.POINT_A.darker());
         g2.setStroke(new BasicStroke(1.5f));
         g2.draw(buildLinePath(points));
     }
 
-    /** Baut den Linienpfad durch {@code points}: gerade Segmente, oder bei
-     *  {@link LineMode#SPLINE} und mind. 3 Punkten eine glatte Catmull-Rom-Spline. */
+    /**
+     * Baut den Linienpfad durch {@code points}: gerade Segmente, oder bei
+     * {@link LineMode#SPLINE} und mind. 3 Punkten eine glatte Catmull-Rom-Spline.
+     */
     private Path2D buildLinePath(List<Point2DDouble> points) {
         Path2D path = new Path2D.Double();
         path.moveTo(points.getFirst().x, points.getFirst().y);
@@ -1055,9 +1095,11 @@ public class ChartPanel extends JPanel {
         return path;
     }
 
-    /** Berechnet (bei Bedarf, siehe {@link #fitDirty}) und zeichnet die Fit-Kurve, begrenzt auf
-     *  die Plotfläche. Jedes Modell braucht eine Mindestanzahl an Punkten, um überhaupt
-     *  eindeutig lösbar zu sein (z. B. Grad n Polynom braucht n+1 Stützstellen). */
+    /**
+     * Berechnet (bei Bedarf, siehe {@link #fitDirty}) und zeichnet die Fit-Kurve, begrenzt auf
+     * die Plotfläche. Jedes Modell braucht eine Mindestanzahl an Punkten, um überhaupt
+     * eindeutig lösbar zu sein (z. B. Grad n Polynom braucht n+1 Stützstellen).
+     */
     private void drawFitOverlayClipped(Graphics2D g2, PlotGeometry geo) {
         currentFitDescription = null;
 
@@ -1088,7 +1130,9 @@ public class ChartPanel extends JPanel {
         g2.setClip(originalClip);
     }
 
-    /** Zeichnet den gecachten Fit samt Toleranzband und stößt die Chi²-Berechnung an. */
+    /**
+     * Zeichnet den gecachten Fit samt Toleranzband und stößt die Chi²-Berechnung an.
+     */
     private void drawCachedFitIfPresent(Graphics2D g2, PlotGeometry geo) {
         if (cachedFit == null) return;
         ensureSigmaComputed(cachedFit);
@@ -1098,7 +1142,9 @@ public class ChartPanel extends JPanel {
                 geo.rangeX, geo.rangeY, geo.padding, geo.height, geo.plotWidth, geo.plotHeight, Theme.ACCENT);
     }
 
-    /** Zeichnet die Messpunkte der Hauptgröße als Kreise, nur innerhalb der Plotfläche. */
+    /**
+     * Zeichnet die Messpunkte der Hauptgröße als Kreise, nur innerhalb der Plotfläche.
+     */
     private void drawDataPoints(Graphics2D g2, PlotGeometry geo, List<Point2DDouble> points, List<double[]> data) {
         double pointSize = 7;
         int rightEdge = geo.width - geo.rightPadding;
@@ -1116,7 +1162,9 @@ public class ChartPanel extends JPanel {
         }
     }
 
-    /** Zeichnet das Rubber-Band-Auswahlrechteck während eines Linksklick-Ziehens. */
+    /**
+     * Zeichnet das Rubber-Band-Auswahlrechteck während eines Linksklick-Ziehens.
+     */
     private void drawSelectionRectangle(Graphics2D g2) {
         Point dragStart = viewport.getDragStart();
         Point dragEnd = viewport.getDragEnd();
@@ -1134,7 +1182,9 @@ public class ChartPanel extends JPanel {
         g2.drawRect(rectX, rectY, rectW, rectH);
     }
 
-    /** Zeichnet den Freihand-Lasso-Pfad während eines Rechtsklick-Ziehens. */
+    /**
+     * Zeichnet den Freihand-Lasso-Pfad während eines Rechtsklick-Ziehens.
+     */
     private void drawFreehandStroke(Graphics2D g2) {
         List<Point> freehandPoints = viewport.getFreehandPoints();
         if (freehandPoints.isEmpty()) return;
@@ -1152,9 +1202,11 @@ public class ChartPanel extends JPanel {
         g2.draw(path);
     }
 
-    /** Führt die Regression via {@link CurveFitting} nur aus, wenn Modus, Grad, Fit-Ziel oder
-     *  Daten sich seit dem letzten Aufruf geändert haben (siehe {@link #fitDirty}) - die
-     *  eigentliche Berechnung ist teuer genug, um sie nicht bei jedem repaint() zu wiederholen. */
+    /**
+     * Führt die Regression via {@link CurveFitting} nur aus, wenn Modus, Grad, Fit-Ziel oder
+     * Daten sich seit dem letzten Aufruf geändert haben (siehe {@link #fitDirty}) - die
+     * eigentliche Berechnung ist teuer genug, um sie nicht bei jedem repaint() zu wiederholen.
+     */
     private void ensureFitComputed(FitMode mode, int degree) {
         if (!fitDirty && cachedFit != null && cachedFitModeUsed == mode && cachedDegreeUsed == degree
                 && cachedFitTargetUsed == fitTarget) return;
@@ -1173,8 +1225,10 @@ public class ChartPanel extends JPanel {
         fitDirty = false;
     }
 
-    /** Zeichnet die χ²_red-Anzeige-Box mit Info-Symbol oben rechts; aktualisiert dabei
-     *  {@link #infoButtonBounds} für den Klick-Handler in {@link #ChartPanel()}. */
+    /**
+     * Zeichnet die χ²_red-Anzeige-Box mit Info-Symbol oben rechts; aktualisiert dabei
+     * {@link #infoButtonBounds} für den Klick-Handler in {@link #ChartPanel()}.
+     */
     private void drawChiSquareOverlay(Graphics2D g2, int width, int rightPadding, int topY) {
         boolean evaluable = !Double.isNaN(currentReducedChiSquare);
         String chiText = evaluable
@@ -1216,8 +1270,10 @@ public class ChartPanel extends JPanel {
         g2.drawString("i", iconX + 6, iconY + 12);
     }
 
-    /** Zeigt bei aktivem Fit und vorhandenen Extra-Serien an, worauf sich Fit/Chi² beziehen -
-     *  sonst wäre bei zwei sichtbaren Kurven unklar, welche gemeint ist. */
+    /**
+     * Zeigt bei aktivem Fit und vorhandenen Extra-Serien an, worauf sich Fit/Chi² beziehen -
+     * sonst wäre bei zwei sichtbaren Kurven unklar, welche gemeint ist.
+     */
     private void drawFitScopeNote(Graphics2D g2, PlotGeometry geo, int topY) {
         String note = "Fit & χ² beziehen sich auf " + fitTargetLabel();
         g2.setFont(new Font("SansSerif", Font.ITALIC, 10));
@@ -1237,15 +1293,19 @@ public class ChartPanel extends JPanel {
         };
     }
 
-    /** Öffnet den Detaildialog zur aktuellen Chi²-Bewertung (siehe {@link ChiSquareInfoDialog}). */
+    /**
+     * Öffnet den Detaildialog zur aktuellen Chi²-Bewertung (siehe {@link ChiSquareInfoDialog}).
+     */
     private void showChiSquareInfoDialog() {
         Window parentWindow = SwingUtilities.getWindowAncestor(this);
         ChiSquareInfoDialog dialog = new ChiSquareInfoDialog(parentWindow, currentReducedChiSquare, currentDegreesOfFreedom, currentFitDescription, sigmaMode);
         dialog.setVisible(true);
     }
 
-    /** Berechnet reduziertes Chi² und Freiheitsgrade über {@link GoodnessOfFit} und speichert
-     *  sie für {@link #drawChiSquareOverlay} und {@link #showChiSquareInfoDialog}. */
+    /**
+     * Berechnet reduziertes Chi² und Freiheitsgrade über {@link GoodnessOfFit} und speichert
+     * sie für {@link #drawChiSquareOverlay} und {@link #showChiSquareInfoDialog}.
+     */
     private void calculateChiSquare(CurveFitting.FunctionEvaluator func, int parameterCount) {
         GoodnessOfFit.ChiSquareResult result =
                 GoodnessOfFit.calculateReducedChiSquare(fitData, func, parameterCount, this::sigmaForDataPoint);
@@ -1253,8 +1313,10 @@ public class ChartPanel extends JPanel {
         this.currentDegreesOfFreedom = result.degreesOfFreedom;
     }
 
-    /** Liefert sigma für Datenpunkt {@code i} gemäß {@link #sigmaMode}; fällt ohne gültigen
-     *  Cache auf {@link #standardDeviation} zurück. */
+    /**
+     * Liefert sigma für Datenpunkt {@code i} gemäß {@link #sigmaMode}; fällt ohne gültigen
+     * Cache auf {@link #standardDeviation} zurück.
+     */
     private double sigmaForDataPoint(int i) {
         return switch (sigmaMode) {
             case RESIDUAL_LOCAL -> (cachedLocalSigmas != null && i < cachedLocalSigmas.length)
@@ -1267,11 +1329,14 @@ public class ChartPanel extends JPanel {
         };
     }
 
-    /** Wie {@link #sigmaForDataPoint}, aber für einen beliebigen X-Wert entlang der Fit-Kurve
-     *  interpoliert (für das Toleranzband, siehe {@link #drawFunctionPathWithTolerance}). */
+    /**
+     * Wie {@link #sigmaForDataPoint}, aber für einen beliebigen X-Wert entlang der Fit-Kurve
+     * interpoliert (für das Toleranzband, siehe {@link #drawFunctionPathWithTolerance}).
+     */
     private double sigmaForToleranceBand(double x) {
         return switch (sigmaMode) {
-            case RESIDUAL_LOCAL -> GoodnessOfFit.interpolateLocalSigma(fitData, cachedLocalSigmas, x, standardDeviation);
+            case RESIDUAL_LOCAL ->
+                    GoodnessOfFit.interpolateLocalSigma(fitData, cachedLocalSigmas, x, standardDeviation);
             case RESIDUAL_LOCAL_GAUSSIAN -> (cachedGaussianResiduals != null)
                     ? GoodnessOfFit.gaussianWeightedSigma(fitData, cachedGaussianResiduals, cachedGaussianBandwidth, x)
                     : standardDeviation;
@@ -1280,8 +1345,10 @@ public class ChartPanel extends JPanel {
         };
     }
 
-    /** Berechnet die residuenbasierten Sigma-Schätzungen nur bei Bedarf neu (siehe
-     *  {@link #sigmaCacheDirty}) - wie {@link #ensureFitComputed}, aber für die Sigma-Modi. */
+    /**
+     * Berechnet die residuenbasierten Sigma-Schätzungen nur bei Bedarf neu (siehe
+     * {@link #sigmaCacheDirty}) - wie {@link #ensureFitComputed}, aber für die Sigma-Modi.
+     */
     private void ensureSigmaComputed(CurveFitting.FitResult fit) {
         if (!sigmaCacheDirty) return;
         sigmaCacheDirty = false;
@@ -1297,8 +1364,10 @@ public class ChartPanel extends JPanel {
         cachedDifferenceSigma = estimate.constantSigma;
     }
 
-    /** Zeichnet die Fit-Kurve als gestrichelte Linie mit einem sigma-breiten Toleranzband
-     *  (400 Stützstellen über den sichtbaren X-Bereich). */
+    /**
+     * Zeichnet die Fit-Kurve als gestrichelte Linie mit einem sigma-breiten Toleranzband
+     * (400 Stützstellen über den sichtbaren X-Bereich).
+     */
     private void drawFunctionPathWithTolerance(Graphics2D g2, CurveFitting.FunctionEvaluator func, double minX, double maxX, double minY,
                                                double rangeX, double rangeY, int padding, int height, int plotWidth, int plotHeight, Color color) {
         int steps = 400;
@@ -1351,8 +1420,10 @@ public class ChartPanel extends JPanel {
         g2.draw(path);
     }
 
-    /** Zeichnet Fadenkreuz und Koordinatenanzeige an der Mausposition; zeigt bei aktiver
-     *  zweiter Achse beide Y-Werte (Kanal A und B) gleichzeitig an. */
+    /**
+     * Zeichnet Fadenkreuz und Koordinatenanzeige an der Mausposition; zeigt bei aktiver
+     * zweiter Achse beide Y-Werte (Kanal A und B) gleichzeitig an.
+     */
     private void drawCrosshair(Graphics2D g2, PlotGeometry geo) {
         if (mousePoint == null) return;
 
@@ -1395,5 +1466,96 @@ public class ChartPanel extends JPanel {
         g2.drawRoundRect(boxX, boxY - 12, strWidth + 8, 16, 6, 6);
         g2.setColor(Theme.TEXT);
         g2.drawString(coordStr, boxX + 4, boxY);
+    }
+
+    /**
+     * Verfügbare Regressionsmodelle.
+     */
+    public enum FitMode {
+        /**
+         * Kein Fit, nur Rohdaten.
+         */
+        NONE,
+        /**
+         * f(x) = m*x + b.
+         */
+        LINEAR,
+        /**
+         * f(x) = a_n*x^n + ... + a_0, Grad einstellbar.
+         */
+        POLYNOMIAL,
+        /**
+         * f(x) = A*sin(w*x + phi) + offset.
+         */
+        SINUS,
+        /**
+         * f(x) = a*exp(b*x).
+         */
+        EXPONENTIAL,
+        /**
+         * f(x) = a*x^n.
+         */
+        POWER_LAW
+    }
+
+    /**
+     * Wie Messpunkte verbunden werden: gar nicht, gerade, oder als glatte Catmull-Rom-Spline.
+     */
+    public enum LineMode {NONE, STRAIGHT, SPLINE}
+
+    /**
+     * Auf welche Messgröße(n) sich Fit und Chi² beziehen (siehe {@link #setFitTarget}); Zoom
+     * und Freihand-Auswahl bleiben davon unabhängig immer an die Hauptgröße gebunden.
+     */
+    public enum FitTarget {
+        /**
+         * Nur die Hauptgröße (Kanal A).
+         */
+        A,
+        /**
+         * Nur die erste Extra-Serie (Kanal B).
+         */
+        B,
+        /**
+         * Beide Größen gemeinsam, nach X aufsteigend zusammengeführt.
+         */
+        BOTH
+    }
+
+    /**
+         * Eine zusätzlich eingezeichnete Messgröße (z. B. Kanal B), rein zur Darstellung -
+         * siehe {@link #setExtraSeries}.
+         */
+        public record Series(String label, Color color, List<double[]> data) {
+            public Series(String label, Color color, List<double[]> data) {
+                this.label = label;
+                this.color = color;
+                this.data = (data != null) ? data : new ArrayList<>();
+            }
+        }
+
+    /**
+     * Fasst die für einen Zeichendurchlauf nötige Pixel-/Datenraum-Geometrie zusammen; einmal
+     * je {@link #paintComponent(Graphics)} berechnet und an alle Zeichenschritte weitergereicht.
+     *
+     * @param hasSecondaryAxis {@code true}, wenn eine zweite Y-Achse für Kanal B gezeichnet wird - nur dann sind
+     *                         {@link #minY2()}/{@link #maxY2()}/{@link #rangeY2()} gültig.
+     */
+        private record PlotGeometry(int width, int height, int padding, int rightPadding, int plotWidth, int plotHeight,
+                                    double minX, double maxX, double minY, double maxY, double rangeX, double rangeY,
+                                    double visibleMaxX, boolean hasSecondaryAxis, double minY2, double maxY2,
+                                    double rangeY2) {
+    }
+
+    /**
+     * (double-x, double-y)-Bildschirmpunkt, um Rundungsfehler bei kleinen Panels zu vermeiden.
+     */
+    private static class Point2DDouble {
+        double x, y;
+
+        Point2DDouble(double x, double y) {
+            this.x = x;
+            this.y = y;
+        }
     }
 }

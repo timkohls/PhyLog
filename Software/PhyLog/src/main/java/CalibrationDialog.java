@@ -41,7 +41,9 @@ public class CalibrationDialog extends FormDialog {
         }
     }
 
-    /** Parst alle Eingabefelder und übernimmt sie erst, wenn keines einen Fehler hat. */
+    /**
+     * Parst alle Eingabefelder und übernimmt sie erst, wenn keines einen Fehler hat.
+     */
     private void applyAndClose() {
         double[] parsedValues = new double[parameters.size()];
 

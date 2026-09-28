@@ -5,7 +5,9 @@ import java.awt.*;
 import java.awt.event.ActionListener;
 import java.util.Map;
 
-/** Farbpalette, Typografie und Look-and-Feel-Konfiguration der Anwendung. */
+/**
+ * Farbpalette, Typografie und Look-and-Feel-Konfiguration der Anwendung.
+ */
 public class Theme {
 
     public static final Color BG = new Color(37, 37, 37);
@@ -29,7 +31,9 @@ public class Theme {
     public static final int CARD_ARC = 12;
     public static final int SPACING = 10;
 
-    /** Einheitlicher "Panel-mit-Titel"-Rahmen für die Haupt-Arbeitsflächen. */
+    /**
+     * Einheitlicher "Panel-mit-Titel"-Rahmen für die Haupt-Arbeitsflächen.
+     */
     public static javax.swing.border.Border titledPanelBorder(String title) {
         return BorderFactory.createCompoundBorder(
                 BorderFactory.createTitledBorder(
@@ -37,7 +41,9 @@ public class Theme {
                 BorderFactory.createEmptyBorder(4, 6, 6, 6));
     }
 
-    /** Initialisiert das Dark-Theme und setzt die UI-Defaults. */
+    /**
+     * Initialisiert das Dark-Theme und setzt die UI-Defaults.
+     */
     public static void setup() {
         FlatDarkLaf.setup();
 
@@ -74,8 +80,9 @@ public class Theme {
         UIManager.put("TitledBorder.titleColor", TEXT);
     }
 
-    /** Kompakter Symbol-/Icon-Button (Zoom, Port-Refresh, ...) mit einheitlichem Margin und
-     *  ohne Fokus-Rahmen.
+    /**
+     * Kompakter Symbol-/Icon-Button (Zoom, Port-Refresh, ...) mit einheitlichem Margin und
+     * ohne Fokus-Rahmen.
      *
      * @param boldFont {@code true} für größere, fette Schrift, {@code false} für Standard-UI-Schrift
      */

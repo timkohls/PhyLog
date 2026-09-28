@@ -6,7 +6,9 @@ import java.awt.*;
  */
 abstract class FormDialog extends JDialog {
 
-    /** Karten-Panel mit dem Formularinhalt, siehe {@link #addRow}. */
+    /**
+     * Karten-Panel mit dem Formularinhalt, siehe {@link #addRow}.
+     */
     protected final RoundedPanel formPanel;
 
     private final GridBagConstraints gbc = new GridBagConstraints();
@@ -32,12 +34,16 @@ abstract class FormDialog extends JDialog {
         add(wrapper, BorderLayout.CENTER);
     }
 
-    /** Fügt eine Zeile mit Text-Label und Eingabekomponente hinzu. */
+    /**
+     * Fügt eine Zeile mit Text-Label und Eingabekomponente hinzu.
+     */
     protected void addRow(String label, JComponent field) {
         addRow(labelComponent(label), field);
     }
 
-    /** Fügt eine Zeile mit beliebiger Label-Komponente und Eingabekomponente hinzu. */
+    /**
+     * Fügt eine Zeile mit beliebiger Label-Komponente und Eingabekomponente hinzu.
+     */
     protected void addRow(JComponent label, JComponent field) {
         gbc.gridx = 0;
         gbc.gridy = row;
@@ -50,7 +56,9 @@ abstract class FormDialog extends JDialog {
         row++;
     }
 
-    /** Dreispaltige Variante von {@link #addRow} mit zusätzlicher Einheiten-/Suffix-Spalte. */
+    /**
+     * Dreispaltige Variante von {@link #addRow} mit zusätzlicher Einheiten-/Suffix-Spalte.
+     */
     protected void addRow(JComponent label, JComponent field, JComponent suffix) {
         gbc.gridx = 0;
         gbc.gridy = row;
@@ -67,7 +75,9 @@ abstract class FormDialog extends JDialog {
         row++;
     }
 
-    /** Fügt eine Zeile hinzu, die beide Spalten als eine durchgehende Komponente einnimmt. */
+    /**
+     * Fügt eine Zeile hinzu, die beide Spalten als eine durchgehende Komponente einnimmt.
+     */
     protected void addFullWidthRow(JComponent component) {
         gbc.gridx = 0;
         gbc.gridy = row;
@@ -84,7 +94,9 @@ abstract class FormDialog extends JDialog {
         return label;
     }
 
-    /** Erzeugt ein kleines, gedämpftes Hinweis-Label mit Zeilenumbruch bei {@code wrapWidth}px. */
+    /**
+     * Erzeugt ein kleines, gedämpftes Hinweis-Label mit Zeilenumbruch bei {@code wrapWidth}px.
+     */
     protected JLabel hintLabel(String text, int wrapWidth) {
         JLabel label = new JLabel("<html><div style='width:" + wrapWidth + "px;'>" + text + "</div></html>");
         label.setFont(Theme.FONT_HINT);

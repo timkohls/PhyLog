@@ -2,8 +2,7 @@ import com.fazecast.jSerialComm.SerialPort;
 import com.fazecast.jSerialComm.SerialPortDataListener;
 import com.fazecast.jSerialComm.SerialPortEvent;
 
-import javax.swing.SwingUtilities;
-import javax.swing.Timer;
+import javax.swing.*;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -13,81 +12,94 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
-/** Singleton zur Verwaltung der seriellen Verbindung zum ESP32 und Pufferung von Zeilen. */
+/**
+ * Singleton zur Verwaltung der seriellen Verbindung zum ESP32 und Pufferung von Zeilen.
+ */
 public class DeviceConnection {
 
+    /**
+     * Konservative Obergrenze für die Abtastrate über eine Bluetooth-Verbindung.
+     */
+    static final int BLUETOOTH_MAX_SAMPLE_RATE_HZ = 100;
     private static final DeviceConnection INSTANCE = new DeviceConnection();
-
-    public static DeviceConnection getInstance() {
-        return INSTANCE;
-    }
-
-    private SerialPort activePort;
-    private final StringBuilder receiveBuffer = new StringBuilder();
-    private final List<Consumer<String>> lineListeners = new ArrayList<>();
-    private final List<Runnable> connectionListeners = new ArrayList<>();
-
-    /** Muss exakt zu {@code BT_DEVICE_NAME} in der Firmware passen. */
+    /**
+     * Muss exakt zu {@code BT_DEVICE_NAME} in der Firmware passen.
+     */
     private static final String BLUETOOTH_DEVICE_NAME = "PhyLog Bluetooth";
     private static final String SERIAL_LABEL = "PhyLog Seriell";
-
-    /** USB-Vendor:Produkt-IDs bekannter USB-Seriell-Brückenchips auf gängigen ESP32-Boards
-     *  (CP2102/CP2104, CH340, CH9102). Rein heuristisch - sagt nur, dass der USB-Chip zu einem
-     *  üblichen Typ passt, nicht dass tatsächlich PhyLog-Firmware läuft. */
+    /**
+     * USB-Vendor:Produkt-IDs bekannter USB-Seriell-Brückenchips auf gängigen ESP32-Boards
+     * (CP2102/CP2104, CH340, CH9102). Rein heuristisch - sagt nur, dass der USB-Chip zu einem
+     * üblichen Typ passt, nicht dass tatsächlich PhyLog-Firmware läuft.
+     */
     private static final Set<String> KNOWN_USB_SERIAL_VID_PID = Set.of(
             "10C4:EA60", // Silicon Labs CP2102/CP2104
             "1A86:7523", // WCH CH340
             "1A86:55D4"  // WCH CH9102
     );
-
-    /** Konservative Baudrate für Bluetooth-SPP-Ports: manche Treiber lehnen die für USB gedachte
-     *  hohe Baudrate ab bzw. brechen die Verbindung kurz danach wieder ab. Wirkt sich nicht auf
-     *  die tatsächliche Datenrate über den Funklink aus. */
+    /**
+     * Konservative Baudrate für Bluetooth-SPP-Ports: manche Treiber lehnen die für USB gedachte
+     * hohe Baudrate ab bzw. brechen die Verbindung kurz danach wieder ab. Wirkt sich nicht auf
+     * die tatsächliche Datenrate über den Funklink aus.
+     */
     private static final int BLUETOOTH_SAFE_BAUD_RATE = 115200;
-
-    /** Konservative Obergrenze für die Abtastrate über eine Bluetooth-Verbindung. */
-    static final int BLUETOOTH_MAX_SAMPLE_RATE_HZ = 100;
-
-    /** Zeitfenster für die Antwort eines einzelnen Ports in {@link #identifyPhyLogPort}. */
+    /**
+     * Zeitfenster für die Antwort eines einzelnen Ports in {@link #identifyPhyLogPort}.
+     */
     private static final long IDENTIFY_TIMEOUT_MS = 1500;
-
-    /** Wie lange ohne empfangene Daten toleriert wird, bevor eine laut {@code isOpen()} noch
-     *  offene Verbindung trotzdem als verloren gilt - Rückfallebene für Fälle, in denen das
-     *  Betriebssystem den Port fälschlich weiterhin als vorhanden meldet (z. B. nur die
-     *  Stromversorgung des ESP32 gekappt, USB-Kabel bleibt gesteckt). */
+    /**
+     * Wie lange ohne empfangene Daten toleriert wird, bevor eine laut {@code isOpen()} noch
+     * offene Verbindung trotzdem als verloren gilt - Rückfallebene für Fälle, in denen das
+     * Betriebssystem den Port fälschlich weiterhin als vorhanden meldet (z. B. nur die
+     * Stromversorgung des ESP32 gekappt, USB-Kabel bleibt gesteckt).
+     */
     private static final long DATA_TIMEOUT_MS = 5000;
-
-    /** Prüfintervall für {@link #DATA_TIMEOUT_MS}. */
+    /**
+     * Prüfintervall für {@link #DATA_TIMEOUT_MS}.
+     */
     private static final int DATA_WATCHDOG_INTERVAL_MS = 1000;
-
-    /** Wie lange ohne empfangene Daten gewartet wird, bevor ein PING als Lebenszeichen an die
-     *  Firmware geschickt wird - kleiner als {@link #DATA_TIMEOUT_MS}, damit vor einer Trennung
-     *  noch mindestens ein PING-Zyklus Zeit hat, eine Antwort zu liefern. Ohne angeschlossenen
-     *  Sensor sendet die Firmware von sich aus keine Messwerte; PING/"#HELLO" ist der einzige
-     *  Befehl, den sie unabhängig davon jederzeit beantwortet, und dient hier als Ersatz-Lebenszeichen. */
+    /**
+     * Wie lange ohne empfangene Daten gewartet wird, bevor ein PING als Lebenszeichen an die
+     * Firmware geschickt wird - kleiner als {@link #DATA_TIMEOUT_MS}, damit vor einer Trennung
+     * noch mindestens ein PING-Zyklus Zeit hat, eine Antwort zu liefern. Ohne angeschlossenen
+     * Sensor sendet die Firmware von sich aus keine Messwerte; PING/"#HELLO" ist der einzige
+     * Befehl, den sie unabhängig davon jederzeit beantwortet, und dient hier als Ersatz-Lebenszeichen.
+     */
     private static final long PING_KEEPALIVE_MS = 2000;
-
-    /** Läuft über {@link Timer} auf dem Event-Dispatch-Thread, da sowohl die Prüfung selbst als
-     *  auch eine etwaige Reaktion darauf (siehe {@link #onPortDisconnected}) unkritisch/EDT-tauglich
-     *  sind. Gestartet in {@link #connect}, gestoppt in {@link #onPortDisconnected}/{@link #disconnect}. */
-    private Timer dataWatchdog;
-
-    /** Zeitpunkt der zuletzt über {@link #feed} empfangenen Daten, siehe {@link #checkDataTimeout}. */
-    private volatile long lastDataReceivedMillis;
-
-    /** Eigener Hintergrund-Thread für alle über {@link #sendLine} verschickten Kommandos, damit
-     *  ein blockierender Schreibzugriff nicht den aufrufenden Event-Dispatch-Thread einfriert.
-     *  Ein einzelner Thread statt eines Pools, damit mehrere Kommandos in Reihenfolge ankommen.
-     *  {@link #connect}/{@link #disconnect} schreiben START/STOP bewusst weiterhin synchron über
-     *  {@link #writeBlocking}, da sie ohnehin schon in einem eigenen Hintergrund-Thread laufen und
-     *  STOP garantiert vor dem anschließenden Schließen des Ports abgeschickt sein muss. */
+    private final StringBuilder receiveBuffer = new StringBuilder();
+    private final List<Consumer<String>> lineListeners = new ArrayList<>();
+    private final List<Runnable> connectionListeners = new ArrayList<>();
+    /**
+     * Eigener Hintergrund-Thread für alle über {@link #sendLine} verschickten Kommandos, damit
+     * ein blockierender Schreibzugriff nicht den aufrufenden Event-Dispatch-Thread einfriert.
+     * Ein einzelner Thread statt eines Pools, damit mehrere Kommandos in Reihenfolge ankommen.
+     * {@link #connect}/{@link #disconnect} schreiben START/STOP bewusst weiterhin synchron über
+     * {@link #writeBlocking}, da sie ohnehin schon in einem eigenen Hintergrund-Thread laufen und
+     * STOP garantiert vor dem anschließenden Schließen des Ports abgeschickt sein muss.
+     */
     private final ExecutorService writeExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "PhyLog-DeviceWriter");
         t.setDaemon(true);
         return t;
     });
+    private SerialPort activePort;
+    /**
+     * Läuft über {@link Timer} auf dem Event-Dispatch-Thread, da sowohl die Prüfung selbst als
+     * auch eine etwaige Reaktion darauf (siehe {@link #onPortDisconnected}) unkritisch/EDT-tauglich
+     * sind. Gestartet in {@link #connect}, gestoppt in {@link #onPortDisconnected}/{@link #disconnect}.
+     */
+    private Timer dataWatchdog;
+
+    /**
+     * Zeitpunkt der zuletzt über {@link #feed} empfangenen Daten, siehe {@link #checkDataTimeout}.
+     */
+    private volatile long lastDataReceivedMillis;
 
     private DeviceConnection() {
+    }
+
+    public static DeviceConnection getInstance() {
+        return INSTANCE;
     }
 
     /**
@@ -98,7 +110,7 @@ public class DeviceConnection {
      * in diesem Fall die echte Handshake-Probe in {@link #identifyPhyLogPort}.
      *
      * @return {@link #BLUETOOTH_DEVICE_NAME} oder {@link #SERIAL_LABEL}, oder {@code null}, falls
-     *         der Port nicht sicher als PhyLog erkannt wurde
+     * der Port nicht sicher als PhyLog erkannt wurde
      */
     private static String detectPhyLogLabel(SerialPort port) {
         String description = port.getDescriptivePortName();
@@ -112,7 +124,9 @@ public class DeviceConnection {
         return null;
     }
 
-    /** Generische Bluetooth-Erkennung, unabhängig davon, ob es sich um PhyLog handelt. */
+    /**
+     * Generische Bluetooth-Erkennung, unabhängig davon, ob es sich um PhyLog handelt.
+     */
     private static boolean looksLikeBluetooth(SerialPort port) {
         return containsIgnoreCase(port.getDescriptivePortName())
                 || containsIgnoreCase(port.getPortDescription());
@@ -124,6 +138,16 @@ public class DeviceConnection {
 
     private static boolean isBluetoothPort(SerialPort port) {
         return port != null && looksLikeBluetooth(port);
+    }
+
+    /**
+     * Entfernt eine von {@link #listPortNames} angehängte Beschreibung wieder von einem
+     * Anzeigenamen. Auf einen Namen ohne Klammerzusatz angewendet, liefert diese Methode ihn
+     * unverändert zurück.
+     */
+    public static String stripDescription(String displayName) {
+        int idx = displayName.indexOf(" (");
+        return (idx > 0) ? displayName.substring(0, idx) : displayName;
     }
 
     /**
@@ -176,16 +200,8 @@ public class DeviceConnection {
     }
 
     /**
-     * Entfernt eine von {@link #listPortNames} angehängte Beschreibung wieder von einem
-     * Anzeigenamen. Auf einen Namen ohne Klammerzusatz angewendet, liefert diese Methode ihn
-     * unverändert zurück.
+     * @return {@code true}, wenn die aktuell aktive Verbindung über Bluetooth läuft.
      */
-    public static String stripDescription(String displayName) {
-        int idx = displayName.indexOf(" (");
-        return (idx > 0) ? displayName.substring(0, idx) : displayName;
-    }
-
-    /** @return {@code true}, wenn die aktuell aktive Verbindung über Bluetooth läuft. */
     public boolean isBluetoothConnection() {
         return isConnected() && isBluetoothPort(activePort);
     }
@@ -194,7 +210,9 @@ public class DeviceConnection {
         return activePort != null && activePort.isOpen();
     }
 
-    /** @return Systemname des aktuell verbundenen Ports, oder {@code null} ohne aktive Verbindung. */
+    /**
+     * @return Systemname des aktuell verbundenen Ports, oder {@code null} ohne aktive Verbindung.
+     */
     public String getActivePortName() {
         return isConnected() ? activePort.getSystemPortName() : null;
     }
@@ -292,11 +310,13 @@ public class DeviceConnection {
         }
     }
 
-    /** Behandelt eine laut {@link #activePort} weiterhin offene, aber seit
-     *  {@link #DATA_TIMEOUT_MS} ohne Daten gebliebene Verbindung wie einen physischen Abbruch -
-     *  vorher wird ab {@link #PING_KEEPALIVE_MS} Funkstille ein PING als Lebenszeichen geschickt,
-     *  damit eine Verbindung ohne angeschlossenen Sensor (die Firmware sendet dann von sich aus
-     *  keine Daten) nicht fälschlich als abgebrochen gilt. */
+    /**
+     * Behandelt eine laut {@link #activePort} weiterhin offene, aber seit
+     * {@link #DATA_TIMEOUT_MS} ohne Daten gebliebene Verbindung wie einen physischen Abbruch -
+     * vorher wird ab {@link #PING_KEEPALIVE_MS} Funkstille ein PING als Lebenszeichen geschickt,
+     * damit eine Verbindung ohne angeschlossenen Sensor (die Firmware sendet dann von sich aus
+     * keine Daten) nicht fälschlich als abgebrochen gilt.
+     */
     private void checkDataTimeout() {
         if (activePort == null) return;
         long idleMs = System.currentTimeMillis() - lastDataReceivedMillis;
@@ -327,8 +347,10 @@ public class DeviceConnection {
         return null;
     }
 
-    /** Öffnet, testet (PING -&gt; "#HELLO"?) und schließt genau einen Port für
-     *  {@link #identifyPhyLogPort}. */
+    /**
+     * Öffnet, testet (PING -&gt; "#HELLO"?) und schließt genau einen Port für
+     * {@link #identifyPhyLogPort}.
+     */
     private boolean probePortForHello(String portName) {
         SerialPort port = SerialPort.getCommPort(portName);
         port.setBaudRate(isBluetoothPort(port) ? BLUETOOTH_SAFE_BAUD_RATE : 460800);
@@ -379,9 +401,11 @@ public class DeviceConnection {
         }
     }
 
-    /** Reagiert auf einen physischen Verbindungsabbruch (Kabel gezogen, Board aus,
-     *  Bluetooth-Link verloren) - ein STOP-Schreibversuch ergibt hier keinen Sinn mehr, das
-     *  Schließen des Ports (zur Freigabe des Systemhandles) dagegen schon. */
+    /**
+     * Reagiert auf einen physischen Verbindungsabbruch (Kabel gezogen, Board aus,
+     * Bluetooth-Link verloren) - ein STOP-Schreibversuch ergibt hier keinen Sinn mehr, das
+     * Schließen des Ports (zur Freigabe des Systemhandles) dagegen schon.
+     */
     private void onPortDisconnected() {
         if (activePort == null) return;
         SerialPort port = activePort;
@@ -395,7 +419,9 @@ public class DeviceConnection {
         notifyConnectionListeners();
     }
 
-    /** Schließt den aktuell geöffneten Port. */
+    /**
+     * Schließt den aktuell geöffneten Port.
+     */
     public void disconnect() {
         if (activePort != null) {
             // Synchron statt über sendLine()/writeExecutor: STOP muss nachweislich abgeschickt
@@ -416,8 +442,10 @@ public class DeviceConnection {
         lineListeners.remove(listener);
     }
 
-    /** Der Listener bekommt nur die Information "Zustand hat sich geändert" -
-     *  {@link #isConnected()} liefert den aktuellen Stand. */
+    /**
+     * Der Listener bekommt nur die Information "Zustand hat sich geändert" -
+     * {@link #isConnected()} liefert den aktuellen Stand.
+     */
     public void addConnectionListener(Runnable listener) {
         connectionListeners.add(listener);
     }
@@ -426,9 +454,11 @@ public class DeviceConnection {
         connectionListeners.remove(listener);
     }
 
-    /** Über {@link SwingUtilities#invokeLater}, da {@link #connect}/{@link #disconnect} aus
-     *  einem Hintergrund-Thread heraus laufen können, die Listener selbst aber Swing-Komponenten
-     *  anfassen und deshalb auf dem Event-Dispatch-Thread laufen müssen. */
+    /**
+     * Über {@link SwingUtilities#invokeLater}, da {@link #connect}/{@link #disconnect} aus
+     * einem Hintergrund-Thread heraus laufen können, die Listener selbst aber Swing-Komponenten
+     * anfassen und deshalb auf dem Event-Dispatch-Thread laufen müssen.
+     */
     private void notifyConnectionListeners() {
         for (Runnable listener : new ArrayList<>(connectionListeners)) {
             SwingUtilities.invokeLater(listener);
@@ -457,7 +487,9 @@ public class DeviceConnection {
         }
     }
 
-    /** Fügt Text zum Puffer hinzu und verteilt vollständige Zeilen an Listener. */
+    /**
+     * Fügt Text zum Puffer hinzu und verteilt vollständige Zeilen an Listener.
+     */
     private void feed(String chunk) {
         lastDataReceivedMillis = System.currentTimeMillis();
         receiveBuffer.append(chunk);

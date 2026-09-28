@@ -21,28 +21,36 @@ public abstract class I2SSensor extends Sensor {
         super(name, unit, unitAliases);
     }
 
-    /** @return Abtastrate in Hz, mit der die Firmware den I2S-Bus für diesen Sensor betreibt
-     *  (z. B. 16000 für ein typisches Sprachband-MEMS-Mikrofon wie das INMP441). */
+    /**
+     * @return Abtastrate in Hz, mit der die Firmware den I2S-Bus für diesen Sensor betreibt
+     * (z. B. 16000 für ein typisches Sprachband-MEMS-Mikrofon wie das INMP441).
+     */
     public abstract int getSampleRateHz();
 
-    /** @return Rechts-Shift in Bit, um aus dem 32-Bit-I2S-Wort die gültigen, vorzeichenrichtig
-     *  linksbündigen Datenbits zu isolieren (z. B. 8 für ein Mikrofon mit 24 gültigen Bits in
-     *  einem 32-Bit-Datenwort). Bestimmt auf der Firmware-Seite sowohl die Rohwert-Extraktion als
-     *  auch die Vollausschlag-Referenz für das Frequenzspektrum. */
+    /**
+     * @return Rechts-Shift in Bit, um aus dem 32-Bit-I2S-Wort die gültigen, vorzeichenrichtig
+     * linksbündigen Datenbits zu isolieren (z. B. 8 für ein Mikrofon mit 24 gültigen Bits in
+     * einem 32-Bit-Datenwort). Bestimmt auf der Firmware-Seite sowohl die Rohwert-Extraktion als
+     * auch die Vollausschlag-Referenz für das Frequenzspektrum.
+     */
     public abstract int getShiftBits();
 
-    /** @return {@code true}, falls das Modul auf den rechten statt den linken I2S-Slot verdrahtet
-     *  ist (abhängig vom SEL-Pin des jeweiligen Breakout-Boards). Standard: linker Slot, wie bei
-     *  den meisten INMP441-Modulen mit SEL auf GND. */
+    /**
+     * @return {@code true}, falls das Modul auf den rechten statt den linken I2S-Slot verdrahtet
+     * ist (abhängig vom SEL-Pin des jeweiligen Breakout-Boards). Standard: linker Slot, wie bei
+     * den meisten INMP441-Modulen mit SEL auf GND.
+     */
     public boolean useRightSlot() {
         return false;
     }
 
-    /** @return {@code true}, falls ein durchgängig exakt 0 gelesenes Abtastfenster als
-     *  Verkabelungs-/Stromversorgungsfehler gemeldet werden soll (Standard: ja - ein reales,
-     *  angeschlossenes und versorgtes Modul hat praktisch immer ein Eigenrauschen über Null). Bei
-     *  Modulen, für die ein echter Nullwert ein gültiges Messergebnis ist, hier {@code false}
-     *  zurückgeben. */
+    /**
+     * @return {@code true}, falls ein durchgängig exakt 0 gelesenes Abtastfenster als
+     * Verkabelungs-/Stromversorgungsfehler gemeldet werden soll (Standard: ja - ein reales,
+     * angeschlossenes und versorgtes Modul hat praktisch immer ein Eigenrauschen über Null). Bei
+     * Modulen, für die ein echter Nullwert ein gültiges Messergebnis ist, hier {@code false}
+     * zurückgeben.
+     */
     public boolean isZeroValueAnError() {
         return true;
     }

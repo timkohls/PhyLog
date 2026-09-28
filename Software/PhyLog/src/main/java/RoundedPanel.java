@@ -1,7 +1,9 @@
 import javax.swing.*;
 import java.awt.*;
 
-/** Panel mit abgerundeten Ecken und eigener Hintergrundfarbe, unabhängig vom gesetzten Layout. */
+/**
+ * Panel mit abgerundeten Ecken und eigener Hintergrundfarbe, unabhängig vom gesetzten Layout.
+ */
 class RoundedPanel extends JPanel {
 
     private final Color background;

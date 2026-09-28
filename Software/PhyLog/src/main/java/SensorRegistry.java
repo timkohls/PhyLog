@@ -1,9 +1,13 @@
 import java.util.List;
 
-/** Verwaltet alle verfügbaren Sensor-Implementierungen. */
+/**
+ * Verwaltet alle verfügbaren Sensor-Implementierungen.
+ */
 public class SensorRegistry {
 
-    /** Instanz für "kein Sensor gewählt". */
+    /**
+     * Instanz für "kein Sensor gewählt".
+     */
     public static final Sensor NO_SENSOR = new NoSensor();
 
     private static final List<Sensor> REGISTERED_SENSORS = List.of(
@@ -18,12 +22,16 @@ public class SensorRegistry {
             new DS18B20Sensor()
     );
 
-    /** @return unveränderliche Liste aller registrierten Sensoren. */
+    /**
+     * @return unveränderliche Liste aller registrierten Sensoren.
+     */
     public static List<Sensor> getAvailableSensors() {
         return REGISTERED_SENSORS;
     }
 
-    /** Sucht einen Sensor anhand seiner Einheit, oder {@code null}, falls keiner passt. */
+    /**
+     * Sucht einen Sensor anhand seiner Einheit, oder {@code null}, falls keiner passt.
+     */
     public static Sensor findByUnit(String unitStr) {
         for (Sensor s : REGISTERED_SENSORS) {
             if (s != NO_SENSOR && s.matchesUnit(unitStr)) {

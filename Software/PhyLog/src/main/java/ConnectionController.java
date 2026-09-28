@@ -35,7 +35,9 @@ class ConnectionController {
         return connection.listPortNames();
     }
 
-    /** Blockierender Aufruf - der Aufrufer muss selbst für einen Hintergrund-Thread sorgen. */
+    /**
+     * Blockierender Aufruf - der Aufrufer muss selbst für einen Hintergrund-Thread sorgen.
+     */
     String identifyPhyLogPort(List<String> candidatePortNames) {
         return connection.identifyPhyLogPort(candidatePortNames);
     }
@@ -60,13 +62,17 @@ class ConnectionController {
         connection.addLineListener(listener);
     }
 
-    /** Muss beim Schließen des Fensters aufgerufen werden, analog zu {@link #dispose()}. */
+    /**
+     * Muss beim Schließen des Fensters aufgerufen werden, analog zu {@link #dispose()}.
+     */
     void removeLineListener(Consumer<String> listener) {
         connection.removeLineListener(listener);
     }
 
-    /** Meldet den Statuslistener wieder ab; ohne diesen Aufruf bleibt er über die Lebensdauer
-     *  des Fensters hinaus registriert. */
+    /**
+     * Meldet den Statuslistener wieder ab; ohne diesen Aufruf bleibt er über die Lebensdauer
+     * des Fensters hinaus registriert.
+     */
     void dispose() {
         connection.removeConnectionListener(statusListener);
     }

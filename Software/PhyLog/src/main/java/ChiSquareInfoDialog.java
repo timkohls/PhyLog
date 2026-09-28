@@ -4,7 +4,9 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.List;
 
-/** Dialog zur visuellen Aufbereitung der Anpassungsgüte (reduziertes Chi²) mittels Informationskarten. */
+/**
+ * Dialog zur visuellen Aufbereitung der Anpassungsgüte (reduziertes Chi²) mittels Informationskarten.
+ */
 public class ChiSquareInfoDialog extends JDialog {
 
     private static final int CONTENT_WIDTH = 420;
@@ -12,11 +14,24 @@ public class ChiSquareInfoDialog extends JDialog {
     private Timer settleDelay;
     private Timer animationTimer;
 
-    /** Erstellt den Dialog unter Berücksichtigung des gewählten Sigma-Modus. */
+    /**
+     * Erstellt den Dialog unter Berücksichtigung des gewählten Sigma-Modus.
+     */
     public ChiSquareInfoDialog(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom,
                                CurveFitting.FitDescription fitDescription, GoodnessOfFit.SigmaMode sigmaMode) {
         super(ownerWindow, "Anpassungsgüte (χ²_red)", ModalityType.APPLICATION_MODAL);
         initUI(ownerWindow, reducedChiSquare, degreesOfFreedom, fitDescription, sigmaMode);
+    }
+
+    private static JLabel getDetailLabel(int degreesOfFreedom) {
+        String detail = "Für die gewählte Anpassung reichen die sichtbaren Datenpunkte nicht aus "
+                + "(Freiheitsgrade: " + degreesOfFreedom + ", nötig: mindestens 1).<br>"
+                + "Zoome heraus oder wähle einen Ausschnitt mit mehr Messpunkten.";
+        JLabel detailLabel = new JLabel("<html><div style='width: 340px;'>" + detail + "</div></html>");
+        detailLabel.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        detailLabel.setForeground(Theme.TEXT);
+        detailLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return detailLabel;
     }
 
     private void initUI(Window ownerWindow, double reducedChiSquare, int degreesOfFreedom,
@@ -77,10 +92,12 @@ public class ChiSquareInfoDialog extends JDialog {
         setLocationRelativeTo(ownerWindow);
     }
 
-    /** Ersatzanzeige für den Fall, dass sich mit den aktuell sichtbaren Datenpunkten kein
-     *  sinnvolles reduziertes Chi² berechnen lässt (Freiheitsgrade &le; 0), z. B. nach starkem
-     *  Zoom auf nur zwei Punkte bei einem linearen Fit - Erklärung statt eines bedeutungslosen
-     *  Zahlenpaars. */
+    /**
+     * Ersatzanzeige für den Fall, dass sich mit den aktuell sichtbaren Datenpunkten kein
+     * sinnvolles reduziertes Chi² berechnen lässt (Freiheitsgrade &le; 0), z. B. nach starkem
+     * Zoom auf nur zwei Punkte bei einem linearen Fit - Erklärung statt eines bedeutungslosen
+     * Zahlenpaars.
+     */
     private JPanel buildNotEvaluableCard(int degreesOfFreedom) {
         RoundedPanel card = new RoundedPanel(Theme.CARD, Theme.CARD_ARC);
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
@@ -101,19 +118,10 @@ public class ChiSquareInfoDialog extends JDialog {
         return card;
     }
 
-    private static JLabel getDetailLabel(int degreesOfFreedom) {
-        String detail = "Für die gewählte Anpassung reichen die sichtbaren Datenpunkte nicht aus "
-                + "(Freiheitsgrade: " + degreesOfFreedom + ", nötig: mindestens 1).<br>"
-                + "Zoome heraus oder wähle einen Ausschnitt mit mehr Messpunkten.";
-        JLabel detailLabel = new JLabel("<html><div style='width: 340px;'>" + detail + "</div></html>");
-        detailLabel.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        detailLabel.setForeground(Theme.TEXT);
-        detailLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        return detailLabel;
-    }
-
-    /** @param rating niemals {@link GoodnessOfFit.ChiRating#NOT_EVALUABLE} - dieser Fall wird in
-     *                {@link #initUI} bereits vorher abgefangen. */
+    /**
+     * @param rating niemals {@link GoodnessOfFit.ChiRating#NOT_EVALUABLE} - dieser Fall wird in
+     *               {@link #initUI} bereits vorher abgefangen.
+     */
     private String ratingText(GoodnessOfFit.ChiRating rating) {
         return switch (rating) {
             case OVERFIT -> "Zu niedrig (Überanpassung)";
@@ -124,12 +132,17 @@ public class ChiSquareInfoDialog extends JDialog {
         };
     }
 
-    /** @param rating niemals {@link GoodnessOfFit.ChiRating#NOT_EVALUABLE}, siehe {@link #ratingText}. */
+    /**
+     * @param rating niemals {@link GoodnessOfFit.ChiRating#NOT_EVALUABLE}, siehe {@link #ratingText}.
+     */
     private String tipText(GoodnessOfFit.ChiRating rating) {
         return switch (rating) {
-            case OVERFIT -> "Die Fehlerbalken sind möglicherweise überschätzt, oder das Modell passt sich an das Rauschen an.";
-            case MODERATE -> "Prüfe, ob der Funktionstyp zum Datenverlauf passt.<br>Bei einem zu hohen Polynomgrad droht Überanpassung.<br>Zoome näher an den relevanten Bereich heran.";
-            case UNDERFIT -> "Das Modell weicht stark von den Daten ab.<br>Überprüfe die Messfehler und das gewählte Modell.";
+            case OVERFIT ->
+                    "Die Fehlerbalken sind möglicherweise überschätzt, oder das Modell passt sich an das Rauschen an.";
+            case MODERATE ->
+                    "Prüfe, ob der Funktionstyp zum Datenverlauf passt.<br>Bei einem zu hohen Polynomgrad droht Überanpassung.<br>Zoome näher an den relevanten Bereich heran.";
+            case UNDERFIT ->
+                    "Das Modell weicht stark von den Daten ab.<br>Überprüfe die Messfehler und das gewählte Modell.";
             case GOOD, NOT_EVALUABLE -> null;
         };
     }
@@ -171,10 +184,12 @@ public class ChiSquareInfoDialog extends JDialog {
         };
     }
 
-    /** Kurze, modusunabhängig immer sichtbare Entscheidungshilfe: wann welcher σ-Modus
-     *  sinnvoll ist. Der aktuell gewählte Modus wird hervorgehoben, die anderen bleiben als
-     *  Vergleich sichtbar - ansonsten müsste man den Dialog neu öffnen, um zwischen den
-     *  Optionen abzuwägen. */
+    /**
+     * Kurze, modusunabhängig immer sichtbare Entscheidungshilfe: wann welcher σ-Modus
+     * sinnvoll ist. Der aktuell gewählte Modus wird hervorgehoben, die anderen bleiben als
+     * Vergleich sichtbar - ansonsten müsste man den Dialog neu öffnen, um zwischen den
+     * Optionen abzuwägen.
+     */
     private JPanel buildSigmaGuideCard(GoodnessOfFit.SigmaMode current) {
         RoundedPanel card = new RoundedPanel(Theme.CARD, Theme.CARD_ARC);
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
@@ -218,8 +233,10 @@ public class ChiSquareInfoDialog extends JDialog {
         return card;
     }
 
-    /** Baut eine einzelne Zeile der Entscheidungshilfe; die aktive Auswahl wird fett und in der
-     *  Akzentfarbe hervorgehoben, damit man sie unter den anderen Optionen sofort wiederfindet. */
+    /**
+     * Baut eine einzelne Zeile der Entscheidungshilfe; die aktive Auswahl wird fett und in der
+     * Akzentfarbe hervorgehoben, damit man sie unter den anderen Optionen sofort wiederfindet.
+     */
     private String guideLine(String modeName, boolean isCurrent, String explanation) {
         String accentHex = String.format("#%02x%02x%02x", Theme.ACCENT.getRed(), Theme.ACCENT.getGreen(), Theme.ACCENT.getBlue());
         String label = isCurrent
@@ -279,9 +296,11 @@ public class ChiSquareInfoDialog extends JDialog {
         return card;
     }
 
-    /** Zeichnet die Farbskala samt Marker und startet dessen Animation beim Öffnen des Fensters;
-     *  {@link #settleDelay} und {@link #animationTimer} laufen beide über {@link Timer}, damit
-     *  Verzögerung und Animation selbst sauber wieder gestoppt werden können. */
+    /**
+     * Zeichnet die Farbskala samt Marker und startet dessen Animation beim Öffnen des Fensters;
+     * {@link #settleDelay} und {@link #animationTimer} laufen beide über {@link Timer}, damit
+     * Verzögerung und Animation selbst sauber wieder gestoppt werden können.
+     */
     private JComponent buildScaleBar(double reducedChiSquare) {
         double[] markerValue = {0.0};
 
@@ -374,6 +393,7 @@ public class ChiSquareInfoDialog extends JDialog {
                 settleDelay.setRepeats(false);
                 settleDelay.start();
             }
+
             @Override
             public void windowClosed(WindowEvent e) {
                 if (settleDelay != null) settleDelay.stop();

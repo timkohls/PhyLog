@@ -1,6 +1,8 @@
 import java.util.List;
 
-/** Platzhalter-Sensor für unbelegte Kanäle. */
+/**
+ * Platzhalter-Sensor für unbelegte Kanäle.
+ */
 class NoSensor extends Sensor {
     public NoSensor() {
         super("-- Kein Sensor --", "", List.of());
@@ -37,12 +39,15 @@ class INA219CurrentSensor extends I2CSensor {
         super("INA219 (Strom)", "A", List.of("A", "AMP", "MA"));
     }
 
-    /** Dekodiert den Rohwert für den Strom in Ampere. */
+    /**
+     * Dekodiert den Rohwert für den Strom in Ampere.
+     */
     @Override
     public double decode(int slot, long rawValue) {
         short signedRaw = (short) (rawValue & 0xFFFF);
         return signedRaw * CURRENT_LSB;
     }
+
     @Override
     public List<Quantity> getQuantities() {
         return List.of(new Quantity("Strom", "A", 1));
@@ -165,12 +170,14 @@ class HX711Sensor extends Sensor {
     }
 }
 
-/** INMP441-Mikrofon als Frequenzspektrum statt einzelnem dB-Wert, siehe {@link MicrophoneSensor}
- *  für die klassische Variante. {@code decode} wird nie aufgerufen, da die Firmware für diesen
- *  Sensortyp ausschließlich Spektrum-Pakete schickt. Firmware-seitig seit v9.1 generisches
- *  {@link I2SSensor} wie {@link MicrophoneSensor}, nur mit {@link #producesSpectrum()}
- *  {@code true} - die I2S-Hardwarekonfiguration (Abtastrate, Slot, Bit-Ausrichtung) ist identisch,
- *  nur die Ausgabeform unterscheidet sich. */
+/**
+ * INMP441-Mikrofon als Frequenzspektrum statt einzelnem dB-Wert, siehe {@link MicrophoneSensor}
+ * für die klassische Variante. {@code decode} wird nie aufgerufen, da die Firmware für diesen
+ * Sensortyp ausschließlich Spektrum-Pakete schickt. Firmware-seitig seit v9.1 generisches
+ * {@link I2SSensor} wie {@link MicrophoneSensor}, nur mit {@link #producesSpectrum()}
+ * {@code true} - die I2S-Hardwarekonfiguration (Abtastrate, Slot, Bit-Ausrichtung) ist identisch,
+ * nur die Ausgabeform unterscheidet sich.
+ */
 class MicrophoneSpectrumSensor extends I2SSensor {
     public MicrophoneSpectrumSensor() {
         super("INMP441 (Audio-Frequenzspektrum)", "dB", List.of("DB"));
@@ -202,11 +209,13 @@ class MicrophoneSpectrumSensor extends I2SSensor {
     }
 }
 
-/** KY-003-Hall-Sensor-Modul: digitaler Schalter, der 1 liefert, wenn ein Magnetfeld erkannt
- *  wird, sonst 0. Typischer Einsatz: Drehzahl- oder Periodendauer-Messung. Firmware-seitig seit
- *  v8.8 generisches "DIGITAL" statt "HALL" - ein reiner Pin-Lesevorgang braucht (anders als I2C
- *  oder 1-Wire) keine weitere Konfiguration, deshalb hier keine eigene Basisklasse wie
- *  {@link I2CSensor}/{@link OneWireSensor}. */
+/**
+ * KY-003-Hall-Sensor-Modul: digitaler Schalter, der 1 liefert, wenn ein Magnetfeld erkannt
+ * wird, sonst 0. Typischer Einsatz: Drehzahl- oder Periodendauer-Messung. Firmware-seitig seit
+ * v8.8 generisches "DIGITAL" statt "HALL" - ein reiner Pin-Lesevorgang braucht (anders als I2C
+ * oder 1-Wire) keine weitere Konfiguration, deshalb hier keine eigene Basisklasse wie
+ * {@link I2CSensor}/{@link OneWireSensor}.
+ */
 class HallEffectSensor extends Sensor {
     public HallEffectSensor() {
         super("KY-003 (Hall-Sensor)", "", List.of());
@@ -229,13 +238,15 @@ class HallEffectSensor extends Sensor {
     }
 }
 
-/** INMP441 I2S-Mikrofon zur Schätzung des Schalldruckpegels in dB. Firmware-seitig seit v9.1
- *  generisches {@link I2SSensor} im Einzelwert-Modus - siehe {@link MicrophoneSpectrumSensor} für
- *  den Spektrum-Modus derselben I2S-Hardware. Ein Sensor mit anderer Abtastrate, anderem I2S-Slot
- *  oder anderer Bit-Tiefe (z. B. ein SPH0645 oder ICS-43434 statt des INMP441) braucht dank der
- *  generischen Firmware-Konfiguration keine Firmware-Änderung mehr - nur eine eigene Unterklasse
- *  von {@link I2SSensor} mit den passenden Werten für {@link #getSampleRateHz()}/
- *  {@link #getShiftBits()} und eigener {@link #decode}-Umrechnung. */
+/**
+ * INMP441 I2S-Mikrofon zur Schätzung des Schalldruckpegels in dB. Firmware-seitig seit v9.1
+ * generisches {@link I2SSensor} im Einzelwert-Modus - siehe {@link MicrophoneSpectrumSensor} für
+ * den Spektrum-Modus derselben I2S-Hardware. Ein Sensor mit anderer Abtastrate, anderem I2S-Slot
+ * oder anderer Bit-Tiefe (z. B. ein SPH0645 oder ICS-43434 statt des INMP441) braucht dank der
+ * generischen Firmware-Konfiguration keine Firmware-Änderung mehr - nur eine eigene Unterklasse
+ * von {@link I2SSensor} mit den passenden Werten für {@link #getSampleRateHz()}/
+ * {@link #getShiftBits()} und eigener {@link #decode}-Umrechnung.
+ */
 class MicrophoneSensor extends I2SSensor {
     private static final double FULL_SCALE = 8_388_607.0; // 2^23 - 1
     private static final double REFERENCE_SPL_DB = 94.0;
@@ -247,12 +258,16 @@ class MicrophoneSensor extends I2SSensor {
     // kalibrierten 94-dB-Schallquellenpegel abgleichen - Exemplarstreuung ist laut Datenblatt
     // möglich.
     private double sensitivityDbfsAt94db = -26.0;
-    /** Exponentiell geglättetes mittleres Leistungssignal (Quadrat des Effektivwerts), Basis
-     *  für den ausgegebenen Pegel. */
+    /**
+     * Exponentiell geglättetes mittleres Leistungssignal (Quadrat des Effektivwerts), Basis
+     * für den ausgegebenen Pegel.
+     */
     private double meanSquare = 0.0;
-    /** Zeitpunkt (siehe {@link System#nanoTime}) des letzten {@link #decode}-Aufrufs, für die
-     *  tatsächlich vergangene Zeit zwischen zwei Paketen (siehe {@link #TIME_CONSTANT_MS}).
-     *  {@code < 0}, solange noch kein Aufruf stattfand. */
+    /**
+     * Zeitpunkt (siehe {@link System#nanoTime}) des letzten {@link #decode}-Aufrufs, für die
+     * tatsächlich vergangene Zeit zwischen zwei Paketen (siehe {@link #TIME_CONSTANT_MS}).
+     * {@code < 0}, solange noch kein Aufruf stattfand.
+     */
     private long lastUpdateNanos = -1;
 
     public MicrophoneSensor() {
@@ -322,12 +337,18 @@ class MicrophoneSensor extends I2SSensor {
  */
 class VoltageDividerSensor extends Sensor {
 
-    /** Referenzspannung des ESP32-ADC bei Standard-Dämpfung (ADC_11db). */
+    /**
+     * Referenzspannung des ESP32-ADC bei Standard-Dämpfung (ADC_11db).
+     */
     static final double ADC_REFERENCE_VOLTAGE = 3.3;
-    /** Auflösung des ESP32-ADC (12 Bit -> 0..4095). */
+    /**
+     * Auflösung des ESP32-ADC (12 Bit -> 0..4095).
+     */
     static final double ADC_MAX_COUNT = 4095.0;
 
-    /** Teilerverhältnis Eingangsspannung/Ausgangsspannung; über den Kalibrierdialog feinjustierbar. */
+    /**
+     * Teilerverhältnis Eingangsspannung/Ausgangsspannung; über den Kalibrierdialog feinjustierbar.
+     */
     private double dividerRatio = 6.12;
 
     public VoltageDividerSensor() {
@@ -383,10 +404,14 @@ class DS18B20Sensor extends OneWireSensor {
 
     private static final double REGISTER_LSB = 1.0 / 16.0;
 
-    /** Konfigregister-Wert für 9-Bit-Auflösung (R1:R0 = 00, Bits 4:0 laut Datenblatt fest auf 1). */
+    /**
+     * Konfigregister-Wert für 9-Bit-Auflösung (R1:R0 = 00, Bits 4:0 laut Datenblatt fest auf 1).
+     */
     private static final int CONFIG_RESOLUTION_9BIT = 0x1F;
 
-    /** Additiver Korrekturwert gegenüber einem Referenzthermometer. */
+    /**
+     * Additiver Korrekturwert gegenüber einem Referenzthermometer.
+     */
     private double calibrationOffsetC = 0.0;
 
     public DS18B20Sensor() {

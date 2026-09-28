@@ -5,19 +5,21 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.function.Consumer;
 
-/** Serielles Terminal-Fenster zur Kommunikation mit der Hardware. */
+/**
+ * Serielles Terminal-Fenster zur Kommunikation mit der Hardware.
+ */
 public class Terminal extends JFrame {
 
+    private final Consumer<String> lineListener = this::appendLog;
+    /**
+     * Muss beim Schließen des Fensters über {@link #dispose()} wieder abgemeldet werden.
+     */
+    private final ConnectionController connectionController = new ConnectionController(this::onConnectionStatusChanged);
     private JComboBox<String> comboPort;
     private JTextField txtBaud;
     private JButton btnConnect;
     private JTextArea txtLog;
     private JTextField txtCommand;
-
-    private final Consumer<String> lineListener = this::appendLog;
-
-    /** Muss beim Schließen des Fensters über {@link #dispose()} wieder abgemeldet werden. */
-    private final ConnectionController connectionController = new ConnectionController(this::onConnectionStatusChanged);
 
     public Terminal() {
         super("Terminal");
@@ -48,8 +50,10 @@ public class Terminal extends JFrame {
         });
     }
 
-    /** Wird bei jeder Verbindungsstatusänderung aufgerufen, egal ob hier oder über {@link GUI}
-     *  ausgelöst - aktualisiert Button-Beschriftung und markierten Port. */
+    /**
+     * Wird bei jeder Verbindungsstatusänderung aufgerufen, egal ob hier oder über {@link GUI}
+     * ausgelöst - aktualisiert Button-Beschriftung und markierten Port.
+     */
     private void onConnectionStatusChanged() {
         updateConnectButtonLabel();
         selectActivePortIfConnected(comboPort.getSelectedItem());
@@ -130,8 +134,10 @@ public class Terminal extends JFrame {
         return button;
     }
 
-    /** Aktualisiert die Liste der verfügbaren seriellen Ports und markiert danach den
-     *  tatsächlich verbundenen Port, falls eine Verbindung besteht. */
+    /**
+     * Aktualisiert die Liste der verfügbaren seriellen Ports und markiert danach den
+     * tatsächlich verbundenen Port, falls eine Verbindung besteht.
+     */
     private void refreshPorts() {
         Object previouslySelected = comboPort.getSelectedItem();
         comboPort.removeAllItems();
@@ -157,7 +163,9 @@ public class Terminal extends JFrame {
         }
     }
 
-    /** Öffnet oder schließt die Verbindung je nach Zustand, im Hintergrund-Thread. */
+    /**
+     * Öffnet oder schließt die Verbindung je nach Zustand, im Hintergrund-Thread.
+     */
     private void toggleConnection() {
         btnConnect.setEnabled(false);
         boolean wasConnected = connectionController.isConnected();
@@ -179,8 +187,10 @@ public class Terminal extends JFrame {
         }.execute();
     }
 
-    /** Stellt die Verbindung zum ausgewählten Port her; läuft im Hintergrund-Thread von
-     *  {@link #toggleConnection}, da der Verbindungsaufbau mehrere Sekunden dauern kann. */
+    /**
+     * Stellt die Verbindung zum ausgewählten Port her; läuft im Hintergrund-Thread von
+     * {@link #toggleConnection}, da der Verbindungsaufbau mehrere Sekunden dauern kann.
+     */
     private void connectBlocking() {
         String portName = (String) comboPort.getSelectedItem();
         if (portName == null) {
@@ -226,8 +236,10 @@ public class Terminal extends JFrame {
         appendLog("> " + command);
     }
 
-    /** Fügt eine Zeile zum Log hinzu; über {@link SwingUtilities#invokeLater}, da dieser Aufruf
-     *  auch aus einem Hintergrund-Thread heraus erfolgen kann. */
+    /**
+     * Fügt eine Zeile zum Log hinzu; über {@link SwingUtilities#invokeLater}, da dieser Aufruf
+     * auch aus einem Hintergrund-Thread heraus erfolgen kann.
+     */
     private void appendLog(String text) {
         SwingUtilities.invokeLater(() -> {
             txtLog.append(text.endsWith("\n") ? text : text + "\n");

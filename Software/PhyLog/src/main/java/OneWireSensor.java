@@ -16,61 +16,6 @@ public abstract class OneWireSensor extends Sensor {
         super(name, unit, unitAliases);
     }
 
-    /** @return Kommando-Schreibvorgänge, die die Firmware einmalig beim Umschalten auf diesen
-     *  Sensor ausführt, jeweils mit eigener Reset+Skip-ROM-Sequenz vorangestellt (z. B. "Write
-     *  Scratchpad" zur Auflösungseinstellung). Leere Liste (Standard), falls der Sensor ohne
-     *  Init auskommt - wie bisher bei den meisten 1-Wire-Sensoren. */
-    public List<Write> getInitWrites() {
-        return List.of();
-    }
-
-    /** @return Kommandobyte, das die Konversion/Messung anstößt (z. B. {@code 0x44} "Convert T"
-     *  beim DS18B20). */
-    public abstract int getConvertCommand();
-
-    /** @return Wartezeit in ms zwischen Konversionsstart und -ende, bevor das Ergebnis gelesen
-     *  werden darf (z. B. 750ms für den DS18B20 bei 12-Bit-Auflösung, weniger bei reduzierter
-     *  Auflösung - siehe {@link #getInitWrites()}). */
-    public abstract long getConversionDelayMs();
-
-    /** @return Kommandobyte, das das Ergebnis zum Lesen bereitstellt (z. B. {@code 0xBE}
-     *  "Read Scratchpad" beim DS18B20). */
-    public abstract int getReadCommand();
-
-    /** @return Anzahl Byte, die nach {@link #getReadCommand()} gelesen werden (z. B. 9 beim
-     *  DS18B20-Scratchpad inkl. CRC-Byte). */
-    public abstract int getReadLength();
-
-    /** @return Byte-Offset des Rohwerts innerhalb der gelesenen Bytes. */
-    public abstract int getValueOffset();
-
-    /** @return Länge des Rohwerts in Byte, ab {@link #getValueOffset()}. */
-    public abstract int getValueLength();
-
-    /** @return {@code true}, falls der Rohwert LSB-zuerst kodiert ist (wie beim DS18B20). */
-    public abstract boolean isLittleEndian();
-
-    /** @return {@code true}, falls das letzte gelesene Byte eine Dallas-CRC8-Prüfsumme über die
-     *  vorherigen Bytes ist und die Firmware bei einem Mismatch einen Fehler statt eines
-     *  (potenziell verfälschten) Werts melden soll. */
-    public abstract boolean isCrcChecked();
-
-    @Override
-    public final String getFirmwareTypeName() {
-        return "ONEWIRE";
-    }
-
-    @Override
-    public final String getFirmwareSetPayload() {
-        Sensor.Quantity first = getQuantities().isEmpty() ? null : getQuantities().getFirst();
-        int slot = (first != null) ? first.slot : 0;
-
-        return "ONEWIRE," + encodeWrites(getInitWrites()) + "," + toHex(getConvertCommand()) + ","
-                + getConversionDelayMs() + "," + toHex(getReadCommand()) + "," + getReadLength() + ","
-                + getValueOffset() + "," + getValueLength() + "," + (isLittleEndian() ? "L" : "B") + ","
-                + (isCrcChecked() ? "1" : "0") + "," + slot;
-    }
-
     private static String encodeWrites(List<Write> writes) {
         if (writes.isEmpty()) return "-";
         return writes.stream().map(OneWireSensor::encodeWrite).collect(Collectors.joining(";"));
@@ -88,18 +33,86 @@ public abstract class OneWireSensor extends Sensor {
         return Integer.toHexString(value & 0xFF);
     }
 
-    /** Ein einzelner Kommando-Schreibvorgang während der Init-Sequenz (z. B. "Write Scratchpad"
-     *  beim DS18B20). Anders als bei {@link I2CSensor.Write} ist {@code command} kein
-     *  Registeroffset, sondern ein 1-Wire-Kommandobyte - die Firmware stellt jedem Eintrag eine
-     *  eigene Reset+Skip-ROM-Sequenz voran, siehe {@code configureOneWireSensor} in der
-     *  Firmware. */
-    public static final class Write {
-        public final int command;
-        public final int[] data;
+    /**
+     * @return Kommando-Schreibvorgänge, die die Firmware einmalig beim Umschalten auf diesen
+     * Sensor ausführt, jeweils mit eigener Reset+Skip-ROM-Sequenz vorangestellt (z. B. "Write
+     * Scratchpad" zur Auflösungseinstellung). Leere Liste (Standard), falls der Sensor ohne
+     * Init auskommt - wie bisher bei den meisten 1-Wire-Sensoren.
+     */
+    public List<Write> getInitWrites() {
+        return List.of();
+    }
 
-        public Write(int command, int... data) {
-            this.command = command;
-            this.data = data;
-        }
+    /**
+     * @return Kommandobyte, das die Konversion/Messung anstößt (z. B. {@code 0x44} "Convert T"
+     * beim DS18B20).
+     */
+    public abstract int getConvertCommand();
+
+    /**
+     * @return Wartezeit in ms zwischen Konversionsstart und -ende, bevor das Ergebnis gelesen
+     * werden darf (z. B. 750ms für den DS18B20 bei 12-Bit-Auflösung, weniger bei reduzierter
+     * Auflösung - siehe {@link #getInitWrites()}).
+     */
+    public abstract long getConversionDelayMs();
+
+    /**
+     * @return Kommandobyte, das das Ergebnis zum Lesen bereitstellt (z. B. {@code 0xBE}
+     * "Read Scratchpad" beim DS18B20).
+     */
+    public abstract int getReadCommand();
+
+    /**
+     * @return Anzahl Byte, die nach {@link #getReadCommand()} gelesen werden (z. B. 9 beim
+     * DS18B20-Scratchpad inkl. CRC-Byte).
+     */
+    public abstract int getReadLength();
+
+    /**
+     * @return Byte-Offset des Rohwerts innerhalb der gelesenen Bytes.
+     */
+    public abstract int getValueOffset();
+
+    /**
+     * @return Länge des Rohwerts in Byte, ab {@link #getValueOffset()}.
+     */
+    public abstract int getValueLength();
+
+    /**
+     * @return {@code true}, falls der Rohwert LSB-zuerst kodiert ist (wie beim DS18B20).
+     */
+    public abstract boolean isLittleEndian();
+
+    /**
+     * @return {@code true}, falls das letzte gelesene Byte eine Dallas-CRC8-Prüfsumme über die
+     * vorherigen Bytes ist und die Firmware bei einem Mismatch einen Fehler statt eines
+     * (potenziell verfälschten) Werts melden soll.
+     */
+    public abstract boolean isCrcChecked();
+
+    @Override
+    public final String getFirmwareTypeName() {
+        return "ONEWIRE";
+    }
+
+    @Override
+    public final String getFirmwareSetPayload() {
+        Sensor.Quantity first = getQuantities().isEmpty() ? null : getQuantities().getFirst();
+        int slot = (first != null) ? first.slot() : 0;
+
+        return "ONEWIRE," + encodeWrites(getInitWrites()) + "," + toHex(getConvertCommand()) + ","
+                + getConversionDelayMs() + "," + toHex(getReadCommand()) + "," + getReadLength() + ","
+                + getValueOffset() + "," + getValueLength() + "," + (isLittleEndian() ? "L" : "B") + ","
+                + (isCrcChecked() ? "1" : "0") + "," + slot;
+    }
+
+    /**
+         * Ein einzelner Kommando-Schreibvorgang während der Init-Sequenz (z. B. "Write Scratchpad"
+         * beim DS18B20). Anders als bei {@link I2CSensor.Write} ist {@code command} kein
+         * Registeroffset, sondern ein 1-Wire-Kommandobyte - die Firmware stellt jedem Eintrag eine
+         * eigene Reset+Skip-ROM-Sequenz voran, siehe {@code configureOneWireSensor} in der
+         * Firmware.
+         */
+        public record Write(int command, int... data) {
     }
 }

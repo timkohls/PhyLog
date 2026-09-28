@@ -1,4 +1,4 @@
-import java.awt.Point;
+import java.awt.*;
 import java.awt.geom.Path2D;
 import java.util.ArrayList;
 import java.util.List;
@@ -13,33 +13,15 @@ class ChartViewport {
     private static final int MIN_DRAG_PIXELS = 10;
     private static final double MIN_ZOOM_FACTOR = 0.1;
     private static final double ZOOM_STEP = 1.2;
-
-    /** Auf das Nötigste reduzierter Ausschnitt aus der Plot-Geometrie des Aufrufers, für die
-     *  Pixel-zu-Daten-Umrechnung in {@link #applySelectionZoom}/{@link #applyFreehandSelection}. */
-    static final class Geometry {
-        final int padding, plotWidth, plotHeight, height;
-        final double minX, rangeX, minY, rangeY;
-
-        Geometry(int padding, int plotWidth, int plotHeight, int height,
-                 double minX, double rangeX, double minY, double rangeY) {
-            this.padding = padding;
-            this.plotWidth = plotWidth;
-            this.plotHeight = plotHeight;
-            this.height = height;
-            this.minX = minX;
-            this.rangeX = rangeX;
-            this.minY = minY;
-            this.rangeY = rangeY;
-        }
-    }
-
-    /** {@code null} = kein Zoom-/Auswahlfenster gesetzt, es gilt der volle Datenbereich. */
+    private final List<Point> freehandPoints = new ArrayList<>();
+    /**
+     * {@code null} = kein Zoom-/Auswahlfenster gesetzt, es gilt der volle Datenbereich.
+     */
     private Double minX = null, maxX = null, minY = null, maxY = null;
     private double zoomFactor = 1.0;
 
     private Point dragStart = null;
     private Point dragEnd = null;
-    private final List<Point> freehandPoints = new ArrayList<>();
     private boolean rightButtonDragging = false;
     private boolean rightClickTriggered = false;
 
@@ -47,11 +29,25 @@ class ChartViewport {
         return minX != null;
     }
 
-    double getMinX() { return minX; }
-    double getMaxX() { return maxX; }
-    double getMinY() { return minY; }
-    double getMaxY() { return maxY; }
-    double getZoomFactor() { return zoomFactor; }
+    double getMinX() {
+        return minX;
+    }
+
+    double getMaxX() {
+        return maxX;
+    }
+
+    double getMinY() {
+        return minY;
+    }
+
+    double getMaxY() {
+        return maxY;
+    }
+
+    double getZoomFactor() {
+        return zoomFactor;
+    }
 
     void zoomIn() {
         zoomFactor *= ZOOM_STEP;
@@ -61,7 +57,9 @@ class ChartViewport {
         zoomFactor = Math.max(MIN_ZOOM_FACTOR, zoomFactor / ZOOM_STEP);
     }
 
-    /** Setzt Zoom-Faktor und Zoom-/Auswahlfenster auf die vollständigen Messdaten zurück. */
+    /**
+     * Setzt Zoom-Faktor und Zoom-/Auswahlfenster auf die vollständigen Messdaten zurück.
+     */
     void reset() {
         zoomFactor = 1.0;
         minX = null;
@@ -70,19 +68,24 @@ class ChartViewport {
         maxY = null;
     }
 
-    // --- Rubber-Band-Auswahl (linke Maustaste) ---
-
     void beginRubberBand(Point p) {
         dragStart = p;
         dragEnd = p;
     }
 
+    // --- Rubber-Band-Auswahl (linke Maustaste) ---
+
     void updateRubberBand(Point p) {
         dragEnd = p;
     }
 
-    Point getDragStart() { return dragStart; }
-    Point getDragEnd() { return dragEnd; }
+    Point getDragStart() {
+        return dragStart;
+    }
+
+    Point getDragEnd() {
+        return dragEnd;
+    }
 
     boolean hasRubberBand() {
         return dragStart != null && dragEnd != null;
@@ -93,14 +96,14 @@ class ChartViewport {
         dragEnd = null;
     }
 
-    // --- Freihand-Auswahl (rechte Maustaste) ---
-
     void beginFreehand(Point p) {
         rightButtonDragging = true;
         rightClickTriggered = false;
         freehandPoints.clear();
         freehandPoints.add(p);
     }
+
+    // --- Freihand-Auswahl (rechte Maustaste) ---
 
     void addFreehandPoint(Point p) {
         rightClickTriggered = true;
@@ -111,9 +114,17 @@ class ChartViewport {
         rightButtonDragging = false;
     }
 
-    boolean isRightButtonDragging() { return rightButtonDragging; }
-    boolean isRightClickTriggered() { return rightClickTriggered; }
-    List<Point> getFreehandPoints() { return freehandPoints; }
+    boolean isRightButtonDragging() {
+        return rightButtonDragging;
+    }
+
+    boolean isRightClickTriggered() {
+        return rightClickTriggered;
+    }
+
+    List<Point> getFreehandPoints() {
+        return freehandPoints;
+    }
 
     void clearFreehand() {
         freehandPoints.clear();
@@ -191,7 +202,10 @@ class ChartViewport {
         if (enclosedCount < 2) return false;
 
         if (selMinX == selMaxX) selMaxX = selMinX + 1.0;
-        if (selMinY == selMaxY) { selMinY -= 1.0; selMaxY += 1.0; }
+        if (selMinY == selMaxY) {
+            selMinY -= 1.0;
+            selMaxY += 1.0;
+        }
 
         minX = selMinX;
         maxX = selMaxX;
@@ -199,5 +213,13 @@ class ChartViewport {
         maxY = selMaxY;
         zoomFactor = 1.0;
         return true;
+    }
+
+    /**
+         * Auf das Nötigste reduzierter Ausschnitt aus der Plot-Geometrie des Aufrufers, für die
+         * Pixel-zu-Daten-Umrechnung in {@link #applySelectionZoom}/{@link #applyFreehandSelection}.
+         */
+        record Geometry(int padding, int plotWidth, int plotHeight, int height, double minX, double rangeX, double minY,
+                        double rangeY) {
     }
 }

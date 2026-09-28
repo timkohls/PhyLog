@@ -1,6 +1,8 @@
 import javax.swing.*;
 
-/** Dialog zur Konfiguration der Messunsicherheit (Standardabweichung/Sigma). */
+/**
+ * Dialog zur Konfiguration der Messunsicherheit (Standardabweichung/Sigma).
+ */
 public class StandardDeviationDialog extends FormDialog {
 
     private final JRadioButton rbConstant;

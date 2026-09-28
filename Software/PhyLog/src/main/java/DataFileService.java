@@ -1,28 +1,18 @@
 import javax.imageio.ImageIO;
 import javax.swing.table.DefaultTableModel;
-import java.awt.Component;
-import java.awt.Graphics2D;
+import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.PrintWriter;
+import java.io.*;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Lesen/Schreiben von Messdaten als CSV sowie PNG-Export des Diagramms. */
+/**
+ * Lesen/Schreiben von Messdaten als CSV sowie PNG-Export des Diagramms.
+ */
 public final class DataFileService {
 
     private DataFileService() {
-    }
-
-    /** Callback für eine einzelne, aus einer CSV-Zeile geparste Zahlen-Zeile. */
-    @FunctionalInterface
-    public interface RowConsumer {
-        void accept(Object[] row);
     }
 
     public static boolean isNumeric(String str) {
@@ -35,8 +25,10 @@ public final class DataFileService {
         }
     }
 
-    /** Liefert den zu einer Kopfzeilenspalte wie "Spannung (V)" passenden Sensor anhand der
-     *  enthaltenen Einheit, oder {@code null} falls keiner passt. */
+    /**
+     * Liefert den zu einer Kopfzeilenspalte wie "Spannung (V)" passenden Sensor anhand der
+     * enthaltenen Einheit, oder {@code null} falls keiner passt.
+     */
     public static Sensor detectSensorFromHeader(String headerColumn) {
         Pattern pattern = Pattern.compile("\\(([^)]+)\\)\\s*$");
         Matcher matcher = pattern.matcher(headerColumn.trim());
@@ -51,7 +43,7 @@ public final class DataFileService {
      * Sensor-Erkennung genutzt; jede gültige Zahlen-Zeile mit mindestens {@code columnCount}
      * Spalten wird an {@code rowConsumer} übergeben.
      *
-     * @param onSensorDetected        Callback, falls aus der Kopfzeile ein Sensor erkannt wurde (optional)
+     * @param onSensorDetected         Callback, falls aus der Kopfzeile ein Sensor erkannt wurde (optional)
      * @param onSnapshotHeaderDetected Callback, falls die erste Spalte der Kopfzeile "Index" heißt,
      *                                 die Datei also eine zuvor exportierte Momentaufnahme ist (optional).
      *                                 Feuert vor dem ersten Aufruf von {@code rowConsumer}.
@@ -96,7 +88,9 @@ public final class DataFileService {
         }
     }
 
-    /** Schreibt eine Tabelle als Semikolon-getrennte CSV-Datei (Spaltennamen als Kopfzeile). */
+    /**
+     * Schreibt eine Tabelle als Semikolon-getrennte CSV-Datei (Spaltennamen als Kopfzeile).
+     */
     public static void writeCsv(File file, DefaultTableModel model) throws IOException {
         try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
             int columnCount = model.getColumnCount();
@@ -119,7 +113,9 @@ public final class DataFileService {
         }
     }
 
-    /** Hängt {@code suffix} vor die Dateiendung an (z. B. für getrennte Kanal-A/B-Exporte). */
+    /**
+     * Hängt {@code suffix} vor die Dateiendung an (z. B. für getrennte Kanal-A/B-Exporte).
+     */
     public static File withSuffix(File base, String suffix) {
         String path = base.getAbsolutePath();
         int dot = path.lastIndexOf('.');
@@ -128,12 +124,22 @@ public final class DataFileService {
         return new File(withoutExt + "_" + suffix + ext);
     }
 
-    /** Rendert eine Komponente (das Diagramm) als PNG-Datei. */
+    /**
+     * Rendert eine Komponente (das Diagramm) als PNG-Datei.
+     */
     public static void exportPng(Component component, File file) throws IOException {
         BufferedImage image = new BufferedImage(component.getWidth(), component.getHeight(), BufferedImage.TYPE_INT_RGB);
         Graphics2D g2 = image.createGraphics();
         component.paint(g2);
         g2.dispose();
         ImageIO.write(image, "png", file);
+    }
+
+    /**
+     * Callback für eine einzelne, aus einer CSV-Zeile geparste Zahlen-Zeile.
+     */
+    @FunctionalInterface
+    public interface RowConsumer {
+        void accept(Object[] row);
     }
 }

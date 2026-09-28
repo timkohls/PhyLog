@@ -8,55 +8,37 @@ import java.util.List;
  */
 public class AcquisitionEngine {
 
-    /** Rückkanal zur Oberfläche für Ereignisse, die dort angezeigt werden müssen. */
-    public interface Listener {
-        /** Verbindungs- oder Aufzeichnungsstatus hat sich geändert (Start/Stopp/Trigger-Warten). */
-        void onStatusChanged();
-
-        /** Die in {@link TriggerDialog.Config#maxDurationMs} gesetzte Höchstdauer wurde erreicht. */
-        void onDurationLimitReached();
-
-        /** Ein neues Frequenzspektrum ist für {@code channelId} eingetroffen. */
-        void onSpectrumFrame(char channelId, double[] magnitudesDb, int sampleRateHz);
-
-        /** Die Aufzeichnung wurde beendet (regulär, per Limit, oder durch einen Fehler). */
-        void onRecordingStopped();
-
-        /** Die serielle/Bluetooth-Verbindung brach während einer laufenden Aufzeichnung ab. */
-        void onConnectionLostDuringRecording();
-
-        /** Der Sensor auf {@code channelId} konnte wiederholt nicht ausgelesen werden
-         *  (siehe {@link #SENSOR_ERROR_STREAK_THRESHOLD}); die Aufzeichnung wurde gestoppt. */
-        void onSensorErrorDuringRecording(char channelId, String errorTag);
-    }
-
+    /**
+     * Anzahl aufeinanderfolgender Sensorfehler, ab der eine laufende Aufzeichnung gestoppt
+     * wird - einzelne Ausreißer sollen die Messung nicht sofort abbrechen.
+     */
+    private static final int SENSOR_ERROR_STREAK_THRESHOLD = 3;
     private final MeasurementChannel channelA;
     private final MeasurementChannel channelB;
     private final Listener listener;
-
+    /**
+     * Reagiert auf Verbindungsauf-/-abbau, siehe {@link #onConnectionStatusChanged()}.
+     */
+    private final Runnable connectionListener = this::onConnectionStatusChanged;
     private TriggerDialog.Config triggerConfig = new TriggerDialog.Config();
     private int sampleRateHz = 20;
-
-    /** Zeitstempel (ms, Gerätezeit) des ersten Messwerts der laufenden Aufzeichnung - Basis für
-     *  die "Zeit (s)"-Spalte. {@code -1}, solange noch kein Wert eingetroffen ist. */
+    /**
+     * Zeitstempel (ms, Gerätezeit) des ersten Messwerts der laufenden Aufzeichnung - Basis für
+     * die "Zeit (s)"-Spalte. {@code -1}, solange noch kein Wert eingetroffen ist.
+     */
     private long measurementStartMillis = -1;
-
     private boolean recording = false;
-    /** {@code true}, während bei aktivem Schwellenwert-Trigger auf die Flanke gewartet wird -
-     *  schließt sich mit {@link #recording} gegenseitig aus. */
+    /**
+     * {@code true}, während bei aktivem Schwellenwert-Trigger auf die Flanke gewartet wird -
+     * schließt sich mit {@link #recording} gegenseitig aus.
+     */
     private boolean waitingForTrigger = false;
-
-    /** Reagiert auf Verbindungsauf-/-abbau, siehe {@link #onConnectionStatusChanged()}. */
-    private final Runnable connectionListener = this::onConnectionStatusChanged;
-
-    /** Zählt aufeinanderfolgende #ERR-Zeilen je Kanal; wird bei jedem gültigen Messwert auf 0
-     *  zurückgesetzt (siehe {@link #resetSensorErrorStreak}). */
+    /**
+     * Zählt aufeinanderfolgende #ERR-Zeilen je Kanal; wird bei jedem gültigen Messwert auf 0
+     * zurückgesetzt (siehe {@link #resetSensorErrorStreak}).
+     */
     private int sensorErrorStreakA = 0;
     private int sensorErrorStreakB = 0;
-
-    /** Anzahl aufeinanderfolgender Sensorfehler, ab der eine laufende Aufzeichnung gestoppt
-     *  wird - einzelne Ausreißer sollen die Messung nicht sofort abbrechen. */
-    private static final int SENSOR_ERROR_STREAK_THRESHOLD = 3;
 
     public AcquisitionEngine(MeasurementChannel channelA, MeasurementChannel channelB, Listener listener) {
         this.channelA = channelA;
@@ -65,7 +47,9 @@ public class AcquisitionEngine {
         DeviceConnection.getInstance().addConnectionListener(connectionListener);
     }
 
-    /** @return den Kanal 'A' oder 'B'; alles andere fällt auf Kanal A zurück. */
+    /**
+     * @return den Kanal 'A' oder 'B'; alles andere fällt auf Kanal A zurück.
+     */
     public MeasurementChannel channel(char id) {
         return (id == 'B') ? channelB : channelA;
     }
@@ -86,7 +70,9 @@ public class AcquisitionEngine {
         this.sampleRateHz = sampleRateHz;
     }
 
-    /** Sendet die aktuelle Abtastrate an die Firmware (Obergrenze 1000 Hz), sofern verbunden. */
+    /**
+     * Sendet die aktuelle Abtastrate an die Firmware (Obergrenze 1000 Hz), sofern verbunden.
+     */
     public void pushSampleRateToFirmware() {
         if (!DeviceConnection.getInstance().isConnected() || sampleRateHz <= 0) {
             return;
@@ -102,8 +88,10 @@ public class AcquisitionEngine {
         return waitingForTrigger;
     }
 
-    /** Startet eine neue Aufzeichnung: setzt beide Kanäle zurück und beginnt je nach
-     *  {@link TriggerDialog.Config#thresholdMode} sofort oder erst nach Trigger-Flanke. */
+    /**
+     * Startet eine neue Aufzeichnung: setzt beide Kanäle zurück und beginnt je nach
+     * {@link TriggerDialog.Config#thresholdMode} sofort oder erst nach Trigger-Flanke.
+     */
     public void start() {
         measurementStartMillis = -1;
         for (MeasurementChannel ch : new MeasurementChannel[]{channelA, channelB}) {
@@ -123,8 +111,10 @@ public class AcquisitionEngine {
         listener.onStatusChanged();
     }
 
-    /** Übernimmt für jeden Kanal mit nicht-spektralem Sensor den aktuellen Live-Wert als
-     *  Tabellenzeile (Index statt Zeit). */
+    /**
+     * Übernimmt für jeden Kanal mit nicht-spektralem Sensor den aktuellen Live-Wert als
+     * Tabellenzeile (Index statt Zeit).
+     */
     public void captureSnapshot() {
         captureSnapshotForChannel(channelA);
         captureSnapshotForChannel(channelB);
@@ -141,7 +131,9 @@ public class AcquisitionEngine {
         ch.tableModel.addRow(new Object[]{(double) index, value});
     }
 
-    /** Beendet eine laufende oder auf Trigger wartende Aufzeichnung und benachrichtigt den Listener. */
+    /**
+     * Beendet eine laufende oder auf Trigger wartende Aufzeichnung und benachrichtigt den Listener.
+     */
     public void stop() {
         recording = false;
         waitingForTrigger = false;
@@ -149,7 +141,9 @@ public class AcquisitionEngine {
         listener.onRecordingStopped();
     }
 
-    /** Stoppt automatisch, wenn während einer laufenden Aufzeichnung die Verbindung abbricht. */
+    /**
+     * Stoppt automatisch, wenn während einer laufenden Aufzeichnung die Verbindung abbricht.
+     */
     private void onConnectionStatusChanged() {
         if (DeviceConnection.getInstance().isConnected()) return;
         if (!recording && !waitingForTrigger) return;
@@ -158,7 +152,9 @@ public class AcquisitionEngine {
         listener.onConnectionLostDuringRecording();
     }
 
-    /** Wertet eine vom ESP32 empfangene Zeile aus dem entsprechenden Protokollpräfix aus. */
+    /**
+     * Wertet eine vom ESP32 empfangene Zeile aus dem entsprechenden Protokollpräfix aus.
+     */
     public void onLineReceived(String line) {
         if (line.startsWith("D,")) {
             onDataLine(line);
@@ -169,7 +165,9 @@ public class AcquisitionEngine {
         }
     }
 
-    /** Verarbeitet eine "D,millis,kanal,slot,rohwert"-Zeile (Einzelmesswert). */
+    /**
+     * Verarbeitet eine "D,millis,kanal,slot,rohwert"-Zeile (Einzelmesswert).
+     */
     private void onDataLine(String line) {
         String[] parts = line.split(",");
         if (parts.length < 5) return;
@@ -188,8 +186,10 @@ public class AcquisitionEngine {
         }
     }
 
-    /** Verarbeitet eine "#ERR,tag,kanal"-Zeile; stoppt eine laufende Aufzeichnung erst nach
-     *  {@link #SENSOR_ERROR_STREAK_THRESHOLD} aufeinanderfolgenden Fehlern auf demselben Kanal. */
+    /**
+     * Verarbeitet eine "#ERR,tag,kanal"-Zeile; stoppt eine laufende Aufzeichnung erst nach
+     * {@link #SENSOR_ERROR_STREAK_THRESHOLD} aufeinanderfolgenden Fehlern auf demselben Kanal.
+     */
     private void onErrorLine(String line) {
         String[] parts = line.split(",");
         if (parts.length < 3) return;
@@ -221,9 +221,11 @@ public class AcquisitionEngine {
         else sensorErrorStreakB = 0;
     }
 
-    /** Verarbeitet eine "#SPEC,kanal,bins,abtastrate,mag0,mag1,..."-Zeile (Frequenzspektrum);
-     *  Magnitude je Bin ist als Zehntel-dB kodiert. Wird nur während laufender Aufzeichnung
-     *  ausgewertet - Spektren ohne aktive Messung sind für die Anzeige uninteressant. */
+    /**
+     * Verarbeitet eine "#SPEC,kanal,bins,abtastrate,mag0,mag1,..."-Zeile (Frequenzspektrum);
+     * Magnitude je Bin ist als Zehntel-dB kodiert. Wird nur während laufender Aufzeichnung
+     * ausgewertet - Spektren ohne aktive Messung sind für die Anzeige uninteressant.
+     */
     private void onSpectrumLine(String line) {
         if (!recording) return;
 
@@ -246,9 +248,11 @@ public class AcquisitionEngine {
         }
     }
 
-    /** Dekodiert einen Rohmesswert (nur wenn er zur ersten Messgröße des aktiven Sensors passt,
-     *  siehe {@code slot}), wendet die Tara an und leitet ihn je nach Zustand an Trigger-Prüfung
-     *  oder Tabellen-Aufzeichnung weiter. Verwirft NaN/unendlich als ungültige Dekodierung. */
+    /**
+     * Dekodiert einen Rohmesswert (nur wenn er zur ersten Messgröße des aktiven Sensors passt,
+     * siehe {@code slot}), wendet die Tara an und leitet ihn je nach Zustand an Trigger-Prüfung
+     * oder Tabellen-Aufzeichnung weiter. Verwirft NaN/unendlich als ungültige Dekodierung.
+     */
     private void ingestSample(MeasurementChannel ch, int slot, long rawValue, long millis) {
         Sensor sensor = ch.sensor;
         if (sensor == null || sensor == SensorRegistry.NO_SENSOR) {
@@ -256,7 +260,7 @@ public class AcquisitionEngine {
         }
 
         List<Sensor.Quantity> quantities = sensor.getQuantities();
-        if (quantities.isEmpty() || quantities.getFirst().slot != slot) {
+        if (quantities.isEmpty() || quantities.getFirst().slot() != slot) {
             return;
         }
 
@@ -288,10 +292,12 @@ public class AcquisitionEngine {
         }
     }
 
-    /** Hält für {@link TriggerDialog.Config#preTriggerMs} Millisekunden Messwerte im Ringpuffer
-     *  vor, damit nach einem Trigger auch der Zeitraum davor rekonstruiert werden kann (siehe
-     *  {@link #backfillPreTriggerData}). Ohne Vor-Trigger-Zeit ({@code preTriggerMs <= 0}) tut
-     *  diese Methode nichts. */
+    /**
+     * Hält für {@link TriggerDialog.Config#preTriggerMs} Millisekunden Messwerte im Ringpuffer
+     * vor, damit nach einem Trigger auch der Zeitraum davor rekonstruiert werden kann (siehe
+     * {@link #backfillPreTriggerData}). Ohne Vor-Trigger-Zeit ({@code preTriggerMs <= 0}) tut
+     * diese Methode nichts.
+     */
     private void bufferForPreTrigger(MeasurementChannel ch, long millis, double value) {
         if (triggerConfig.preTriggerMs <= 0) return;
 
@@ -302,9 +308,11 @@ public class AcquisitionEngine {
         }
     }
 
-    /** Prüft, ob der Messwert die konfigurierte Schwelle in der konfigurierten Richtung
-     *  überschreitet (Flankenerkennung anhand des vorherigen Werts); nur der als Trigger-Kanal
-     *  konfigurierte Kanal löst aus. */
+    /**
+     * Prüft, ob der Messwert die konfigurierte Schwelle in der konfigurierten Richtung
+     * überschreitet (Flankenerkennung anhand des vorherigen Werts); nur der als Trigger-Kanal
+     * konfigurierte Kanal löst aus.
+     */
     private void checkTriggerCondition(MeasurementChannel ch, long millis, double value) {
         if (ch.id != triggerConfig.channel) return;
 
@@ -322,8 +330,10 @@ public class AcquisitionEngine {
         }
     }
 
-    /** Schaltet von Trigger-Wartezeit auf laufende Aufzeichnung um und füllt beide Kanäle
-     *  rückwirkend mit den gepufferten Vor-Trigger-Werten auf. */
+    /**
+     * Schaltet von Trigger-Wartezeit auf laufende Aufzeichnung um und füllt beide Kanäle
+     * rückwirkend mit den gepufferten Vor-Trigger-Werten auf.
+     */
     private void fireTrigger(long triggerMillis) {
         waitingForTrigger = false;
         recording = true;
@@ -335,7 +345,9 @@ public class AcquisitionEngine {
         listener.onStatusChanged();
     }
 
-    /** Überträgt die im Vor-Trigger-Puffer gehaltenen Werte als reguläre Zeilen in die Tabelle. */
+    /**
+     * Überträgt die im Vor-Trigger-Puffer gehaltenen Werte als reguläre Zeilen in die Tabelle.
+     */
     private void backfillPreTriggerData(MeasurementChannel ch) {
         for (double[] sample : ch.preTriggerBuffer) {
             long sampleMillis = (long) sample[0];
@@ -344,5 +356,41 @@ public class AcquisitionEngine {
             ch.tableModel.addRow(new Object[]{timeSeconds, sample[1]});
         }
         ch.preTriggerBuffer.clear();
+    }
+
+    /**
+     * Rückkanal zur Oberfläche für Ereignisse, die dort angezeigt werden müssen.
+     */
+    public interface Listener {
+        /**
+         * Verbindungs- oder Aufzeichnungsstatus hat sich geändert (Start/Stopp/Trigger-Warten).
+         */
+        void onStatusChanged();
+
+        /**
+         * Die in {@link TriggerDialog.Config#maxDurationMs} gesetzte Höchstdauer wurde erreicht.
+         */
+        void onDurationLimitReached();
+
+        /**
+         * Ein neues Frequenzspektrum ist für {@code channelId} eingetroffen.
+         */
+        void onSpectrumFrame(char channelId, double[] magnitudesDb, int sampleRateHz);
+
+        /**
+         * Die Aufzeichnung wurde beendet (regulär, per Limit, oder durch einen Fehler).
+         */
+        void onRecordingStopped();
+
+        /**
+         * Die serielle/Bluetooth-Verbindung brach während einer laufenden Aufzeichnung ab.
+         */
+        void onConnectionLostDuringRecording();
+
+        /**
+         * Der Sensor auf {@code channelId} konnte wiederholt nicht ausgelesen werden
+         * (siehe {@link #SENSOR_ERROR_STREAK_THRESHOLD}); die Aufzeichnung wurde gestoppt.
+         */
+        void onSensorErrorDuringRecording(char channelId, String errorTag);
     }
 }

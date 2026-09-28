@@ -1,23 +1,9 @@
 import javax.swing.*;
 
-/** Dialog zur Konfiguration von Mess-Triggern und Messdauer. */
+/**
+ * Dialog zur Konfiguration von Mess-Triggern und Messdauer.
+ */
 public class TriggerDialog extends FormDialog {
-
-    /** Trigger-Konfigurationseinstellungen. */
-    public static final class Config {
-        /** Messkanal ('A' oder 'B'). */
-        public char channel = 'A';
-        /** {@code true} für Schwellenwert, {@code false} für manuell. */
-        public boolean thresholdMode = false;
-        /** {@code true} für steigende, {@code false} für fallende Flanke. */
-        public boolean risingEdge = true;
-        /** Schwellenwert. */
-        public double threshold = 10;
-        /** Vorlaufzeit vor dem Trigger in Millisekunden. */
-        public int preTriggerMs = 100;
-        /** Maximale Messdauer in ms (0 = unbegrenzt). */
-        public int maxDurationMs = 0;
-    }
 
     private final JComboBox<String> cbChannel;
     private final JComboBox<String> cbTriggerMode;
@@ -26,7 +12,6 @@ public class TriggerDialog extends FormDialog {
     private final JSpinner spPreTrigger;
     private final JCheckBox cbLimitDuration;
     private final JSpinner spMaxDuration;
-
     private boolean applied = false;
 
     public TriggerDialog(JFrame parent, Config current) {
@@ -101,5 +86,35 @@ public class TriggerDialog extends FormDialog {
             cfg.threshold = 0.0;
         }
         return cfg;
+    }
+
+    /**
+     * Trigger-Konfigurationseinstellungen.
+     */
+    public static final class Config {
+        /**
+         * Messkanal ('A' oder 'B').
+         */
+        public char channel = 'A';
+        /**
+         * {@code true} für Schwellenwert, {@code false} für manuell.
+         */
+        public boolean thresholdMode = false;
+        /**
+         * {@code true} für steigende, {@code false} für fallende Flanke.
+         */
+        public boolean risingEdge = true;
+        /**
+         * Schwellenwert.
+         */
+        public double threshold = 10;
+        /**
+         * Vorlaufzeit vor dem Trigger in Millisekunden.
+         */
+        public int preTriggerMs = 100;
+        /**
+         * Maximale Messdauer in ms (0 = unbegrenzt).
+         */
+        public int maxDurationMs = 0;
     }
 }

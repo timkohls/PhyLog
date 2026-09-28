@@ -1,4 +1,4 @@
-import java.awt.Color;
+import java.awt.*;
 import java.util.List;
 import java.util.function.IntToDoubleFunction;
 
@@ -8,78 +8,23 @@ import java.util.function.IntToDoubleFunction;
  */
 public final class GoodnessOfFit {
 
-    private GoodnessOfFit() {
-    }
-
     public static final double CHI_OVERFIT_THRESHOLD = 0.8;
     public static final double CHI_GOOD_THRESHOLD = 1.5;
     public static final double CHI_MODERATE_THRESHOLD = 3.0;
+    /**
+     * Obere Grenze der Farbskala in {@link #gradientColorFor}; Werte darüber werden wie dieser
+     * Wert selbst dargestellt. Gemeinsam mit {@link #GRADIENT_MIDPOINT_FRACTION} die einzige
+     * Quelle für die Balkengeometrie in {@code ChiSquareInfoDialog#buildScaleBar} - so kann die
+     * dort gezeichnete Skala nicht mehr von der hier berechneten Farbe abweichen.
+     */
+    public static final double GRADIENT_REFERENCE_SCALE = 4.0;
+    /**
+     * Anteil von {@link #GRADIENT_REFERENCE_SCALE}, an dem die Skala ihren Sattelpunkt
+     * (reines {@code Theme.SUCCESS}) hat.
+     */
+    public static final double GRADIENT_MIDPOINT_FRACTION = 0.35;
 
-    /** Bewertungsklassen für das reduzierte Chi-Quadrat. */
-    public enum ChiRating {
-        /** &lt; {@link #CHI_OVERFIT_THRESHOLD}: Fehler wahrscheinlich überschätzt / Überanpassung. */
-        OVERFIT,
-        /** Zwischen {@link #CHI_OVERFIT_THRESHOLD} und {@link #CHI_GOOD_THRESHOLD}: guter Fit. */
-        GOOD,
-        /** Zwischen {@link #CHI_GOOD_THRESHOLD} und {@link #CHI_MODERATE_THRESHOLD}: mäßiger Fit. */
-        MODERATE,
-        /** &gt; {@link #CHI_MODERATE_THRESHOLD}: Modell passt schlecht (Unteranpassung). */
-        UNDERFIT,
-        /** Freiheitsgrade &le; 0: zu wenige Datenpunkte für die Anzahl der Modellparameter. */
-        NOT_EVALUABLE
-    }
-
-    /** Wie die Messunsicherheit sigma bestimmt wird. Die automatischen Modi benötigen einen
-     *  aktiven Fit; ohne Fit fällt {@link #estimateSigma} auf den konstanten Wert zurück. */
-    public enum SigmaMode {
-        /** Ein einziger, manuell eingegebener Wert für alle Punkte. */
-        CONSTANT,
-        /** Ortsabhängiger Wert je Punkt, aus der Streuung der k nächsten Nachbarn (hartes
-         *  Indexfenster) um den Fit geschätzt. */
-        RESIDUAL_LOCAL,
-        /** Wie {@link #RESIDUAL_LOCAL}, aber mit fließendem Gauß-Kernel über den X-Abstand
-         *  gewichtet statt hartem Fenster - dadurch glatt statt stufig. */
-        RESIDUAL_LOCAL_GAUSSIAN,
-        /** Ein einzelner, konstanter Wert, geschätzt aus den Differenzen benachbarter Messwerte
-         *  (Rice-Schätzer) - unabhängig vom Fit-Modell, daher nicht zirkulär wie die beiden
-         *  {@code RESIDUAL_LOCAL*}-Modi. Setzt voraus, dass sich das zugrunde liegende Signal von
-         *  Punkt zu Punkt nur wenig ändert (glatt relativ zur Punktdichte); sonst wird echte
-         *  Signalkrümmung fälschlich als Rauschen gezählt und sigma überschätzt. Funktioniert auch
-         *  ohne aktiven Fit. */
-        DIFFERENCE_BASED
-    }
-
-    /** Ergebnis von {@link #calculateReducedChiSquare}. */
-    public static final class ChiSquareResult {
-        public final double reducedChiSquare;
-        public final int degreesOfFreedom;
-
-        ChiSquareResult(double reducedChiSquare, int degreesOfFreedom) {
-            this.reducedChiSquare = reducedChiSquare;
-            this.degreesOfFreedom = degreesOfFreedom;
-        }
-    }
-
-    /** Ergebnis von {@link #estimateSigma}. Je nach {@link SigmaMode} ist nur eines von
-     *  {@link #localSigmas} und {@link #residuals} belegt; für {@link SigmaMode#CONSTANT} beide
-     *  {@code null}. */
-    public static final class SigmaEstimate {
-        public final double[] localSigmas;
-        public final double[] residuals;
-        public final double gaussianBandwidth;
-        /** Nur bei {@link SigmaMode#DIFFERENCE_BASED} belegt, sonst {@link Double#NaN}. */
-        public final double constantSigma;
-
-        SigmaEstimate(double[] localSigmas, double[] residuals, double gaussianBandwidth) {
-            this(localSigmas, residuals, gaussianBandwidth, Double.NaN);
-        }
-
-        SigmaEstimate(double[] localSigmas, double[] residuals, double gaussianBandwidth, double constantSigma) {
-            this.localSigmas = localSigmas;
-            this.residuals = residuals;
-            this.gaussianBandwidth = gaussianBandwidth;
-            this.constantSigma = constantSigma;
-        }
+    private GoodnessOfFit() {
     }
 
     /**
@@ -94,16 +39,6 @@ public final class GoodnessOfFit {
         if (reducedChiSquare <= CHI_MODERATE_THRESHOLD) return ChiRating.MODERATE;
         return ChiRating.UNDERFIT;
     }
-
-    /** Obere Grenze der Farbskala in {@link #gradientColorFor}; Werte darüber werden wie dieser
-     *  Wert selbst dargestellt. Gemeinsam mit {@link #GRADIENT_MIDPOINT_FRACTION} die einzige
-     *  Quelle für die Balkengeometrie in {@code ChiSquareInfoDialog#buildScaleBar} - so kann die
-     *  dort gezeichnete Skala nicht mehr von der hier berechneten Farbe abweichen. */
-    public static final double GRADIENT_REFERENCE_SCALE = 4.0;
-
-    /** Anteil von {@link #GRADIENT_REFERENCE_SCALE}, an dem die Skala ihren Sattelpunkt
-     *  (reines {@code Theme.SUCCESS}) hat. */
-    public static final double GRADIENT_MIDPOINT_FRACTION = 0.35;
 
     /**
      * Liefert dieselbe kontinuierlich interpolierte Farbe, die auch die Farbskala in
@@ -147,7 +82,7 @@ public final class GoodnessOfFit {
      * Modellabweichung auf {@link Double#POSITIVE_INFINITY} bzw. {@link Double#NaN} ziehen.</p>
      *
      * @return bei nicht-positiven Freiheitsgraden {@link Double#NaN} statt eines irreführenden
-     *         Zahlenwerts; {@code degreesOfFreedom} bleibt dabei der tatsächliche, nicht-positive Wert
+     * Zahlenwerts; {@code degreesOfFreedom} bleibt dabei der tatsächliche, nicht-positive Wert
      */
     public static ChiSquareResult calculateReducedChiSquare(List<double[]> data, CurveFitting.FunctionEvaluator func,
                                                             int parameterCount, IntToDoubleFunction sigmaAt) {
@@ -177,8 +112,8 @@ public final class GoodnessOfFit {
     /**
      * Schätzt sigma aus den Fit-Residuen, sofern {@code mode} dies verlangt.
      *
-     * @param func             die angepasste Funktion, oder {@code null} ohne aktiven Fit
-     * @param localNeighbors   Nachbarschaftsgröße k (Fenstergröße bzw. Bandbreiten-Basis)
+     * @param func           die angepasste Funktion, oder {@code null} ohne aktiven Fit
+     * @param localNeighbors Nachbarschaftsgröße k (Fenstergröße bzw. Bandbreiten-Basis)
      */
     public static SigmaEstimate estimateSigma(List<double[]> data, CurveFitting.FunctionEvaluator func,
                                               SigmaMode mode, int localNeighbors) {
@@ -235,7 +170,9 @@ public final class GoodnessOfFit {
         return Math.sqrt(sumSq / (2.0 * (n - 1)));
     }
 
-    /** Mittlere quadratische Residuenstreuung im Index-Fenster um Punkt {@code i}. */
+    /**
+     * Mittlere quadratische Residuenstreuung im Index-Fenster um Punkt {@code i}.
+     */
     private static double localWindowStdDev(double[] residuals, int i, int k) {
         int n = residuals.length;
         int half = Math.max(1, k / 2);
@@ -256,8 +193,10 @@ public final class GoodnessOfFit {
         return Math.sqrt(sumSq / count);
     }
 
-    /** Wandelt die Nachbarschaftsgröße k in eine Gauß-Bandbreite (Standardabweichung des
-     *  Kernels, in X-Einheiten) um. */
+    /**
+     * Wandelt die Nachbarschaftsgröße k in eine Gauß-Bandbreite (Standardabweichung des
+     * Kernels, in X-Einheiten) um.
+     */
     private static double gaussianBandwidthFor(List<double[]> data, int k) {
         int n = data.size();
         double span = data.get(n - 1)[0] - data.getFirst()[0];
@@ -306,7 +245,8 @@ public final class GoodnessOfFit {
         int lo = 0, hi = n - 1;
         while (hi - lo > 1) {
             int mid = (lo + hi) / 2;
-            if (data.get(mid)[0] <= x) lo = mid; else hi = mid;
+            if (data.get(mid)[0] <= x) lo = mid;
+            else hi = mid;
         }
 
         double x0 = data.get(lo)[0], x1 = data.get(hi)[0];
@@ -314,5 +254,100 @@ public final class GoodnessOfFit {
         if (x1 == x0) return s0;
         double t = (x - x0) / (x1 - x0);
         return s0 + t * (s1 - s0);
+    }
+
+    /**
+     * Bewertungsklassen für das reduzierte Chi-Quadrat.
+     */
+    public enum ChiRating {
+        /**
+         * &lt; {@link #CHI_OVERFIT_THRESHOLD}: Fehler wahrscheinlich überschätzt / Überanpassung.
+         */
+        OVERFIT,
+        /**
+         * Zwischen {@link #CHI_OVERFIT_THRESHOLD} und {@link #CHI_GOOD_THRESHOLD}: guter Fit.
+         */
+        GOOD,
+        /**
+         * Zwischen {@link #CHI_GOOD_THRESHOLD} und {@link #CHI_MODERATE_THRESHOLD}: mäßiger Fit.
+         */
+        MODERATE,
+        /**
+         * &gt; {@link #CHI_MODERATE_THRESHOLD}: Modell passt schlecht (Unteranpassung).
+         */
+        UNDERFIT,
+        /**
+         * Freiheitsgrade &le; 0: zu wenige Datenpunkte für die Anzahl der Modellparameter.
+         */
+        NOT_EVALUABLE
+    }
+
+    /**
+     * Wie die Messunsicherheit sigma bestimmt wird. Die automatischen Modi benötigen einen
+     * aktiven Fit; ohne Fit fällt {@link #estimateSigma} auf den konstanten Wert zurück.
+     */
+    public enum SigmaMode {
+        /**
+         * Ein einziger, manuell eingegebener Wert für alle Punkte.
+         */
+        CONSTANT,
+        /**
+         * Ortsabhängiger Wert je Punkt, aus der Streuung der k nächsten Nachbarn (hartes
+         * Indexfenster) um den Fit geschätzt.
+         */
+        RESIDUAL_LOCAL,
+        /**
+         * Wie {@link #RESIDUAL_LOCAL}, aber mit fließendem Gauß-Kernel über den X-Abstand
+         * gewichtet statt hartem Fenster - dadurch glatt statt stufig.
+         */
+        RESIDUAL_LOCAL_GAUSSIAN,
+        /**
+         * Ein einzelner, konstanter Wert, geschätzt aus den Differenzen benachbarter Messwerte
+         * (Rice-Schätzer) - unabhängig vom Fit-Modell, daher nicht zirkulär wie die beiden
+         * {@code RESIDUAL_LOCAL*}-Modi. Setzt voraus, dass sich das zugrunde liegende Signal von
+         * Punkt zu Punkt nur wenig ändert (glatt relativ zur Punktdichte); sonst wird echte
+         * Signalkrümmung fälschlich als Rauschen gezählt und sigma überschätzt. Funktioniert auch
+         * ohne aktiven Fit.
+         */
+        DIFFERENCE_BASED
+    }
+
+    /**
+     * Ergebnis von {@link #calculateReducedChiSquare}.
+     */
+    public static final class ChiSquareResult {
+        public final double reducedChiSquare;
+        public final int degreesOfFreedom;
+
+        ChiSquareResult(double reducedChiSquare, int degreesOfFreedom) {
+            this.reducedChiSquare = reducedChiSquare;
+            this.degreesOfFreedom = degreesOfFreedom;
+        }
+    }
+
+    /**
+     * Ergebnis von {@link #estimateSigma}. Je nach {@link SigmaMode} ist nur eines von
+     * {@link #localSigmas} und {@link #residuals} belegt; für {@link SigmaMode#CONSTANT} beide
+     * {@code null}.
+     */
+    public static final class SigmaEstimate {
+        public final double[] localSigmas;
+        public final double[] residuals;
+        public final double gaussianBandwidth;
+        /**
+         * Nur bei {@link SigmaMode#DIFFERENCE_BASED} belegt, sonst {@link Double#NaN}.
+         */
+        public final double constantSigma;
+
+        SigmaEstimate(double[] localSigmas, double[] residuals, double gaussianBandwidth) {
+            this(localSigmas, residuals, gaussianBandwidth, Double.NaN);
+        }
+
+        SigmaEstimate(double[] localSigmas, double[] residuals, double gaussianBandwidth, double constantSigma) {
+            this.localSigmas = localSigmas;
+            this.residuals = residuals;
+            this.gaussianBandwidth = gaussianBandwidth;
+            this.constantSigma = constantSigma;
+        }
     }
 }

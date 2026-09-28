@@ -9,39 +9,10 @@ import java.util.List;
  */
 public final class CurveFitting {
 
+    private static final char[] SUPERSCRIPT_DIGITS =
+            {'⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'};
+
     private CurveFitting() {
-    }
-
-    /** Funktionaler Typ für eine angepasste Modellfunktion f(x), unabhängig vom Fit-Typ. */
-    @FunctionalInterface
-    public interface FunctionEvaluator {
-        double eval(double x);
-    }
-
-    /** Ergebnis einer Regression: die angepasste Funktion, Anzahl freier Parameter, sowie eine
-     *  für Menschen lesbare Beschreibung der Funktion und ihrer Parameter. */
-    public static final class FitResult {
-        public final FunctionEvaluator function;
-        public final int parameterCount;
-        public final FitDescription description;
-
-        FitResult(FunctionEvaluator function, int parameterCount, FitDescription description) {
-            this.function = function;
-            this.parameterCount = parameterCount;
-            this.description = description;
-        }
-    }
-
-    /** Textuelle Beschreibung einer gefitteten Funktion: die Gleichung mit den konkret
-     *  ermittelten Koeffizienten sowie eine Liste physikalisch interpretierbarer Kenngrößen. */
-    public static final class FitDescription {
-        public final String equation;
-        public final List<String> parameterLines;
-
-        FitDescription(String equation, List<String> parameterLines) {
-            this.equation = equation;
-            this.parameterLines = parameterLines;
-        }
     }
 
     /**
@@ -164,7 +135,7 @@ public final class CurveFitting {
      * im Originalraum, was für die meisten praktischen Zwecke ausreichend genau ist.</p>
      *
      * @return das Fit-Ergebnis, oder {@code null} bei weniger als 2 gültigen (x&gt;0, y&gt;0)
-     *         Messwerten
+     * Messwerten
      */
     public static FitResult fitPowerLaw(List<double[]> data, String xUnit, String yUnit) {
         double meanLnX = 0;
@@ -387,8 +358,10 @@ public final class CurveFitting {
         return p;
     }
 
-    /** Fehlerquadratsumme (nicht durch sigma normiert) der Sinus-Anpassung, nur zur
-     *  Konvergenzprüfung in {@link #refineSinusFit} verwendet. */
+    /**
+     * Fehlerquadratsumme (nicht durch sigma normiert) der Sinus-Anpassung, nur zur
+     * Konvergenzprüfung in {@link #refineSinusFit} verwendet.
+     */
     private static double sinusCost(List<double[]> data, double[] p) {
         double sum = 0;
         for (double[] pt : data) {
@@ -420,7 +393,9 @@ public final class CurveFitting {
                 if (Math.abs(M[i][p]) > Math.abs(M[max][p])) max = i;
             }
 
-            double[] temp = M[p]; M[p] = M[max]; M[max] = temp;
+            double[] temp = M[p];
+            M[p] = M[max];
+            M[max] = temp;
 
             if (Math.abs(M[p][p]) < 1e-12) return null;
 
@@ -439,15 +414,16 @@ public final class CurveFitting {
         return x;
     }
 
-    private static final char[] SUPERSCRIPT_DIGITS =
-            {'⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'};
-
-    /** Formatiert eine Zahl mit 4 Nachkommastellen für die Fit-Parameter-Anzeige. */
+    /**
+     * Formatiert eine Zahl mit 4 Nachkommastellen für die Fit-Parameter-Anzeige.
+     */
     private static String fmt(double v) {
         return String.format("%.4f", v);
     }
 
-    /** Wandelt eine Zehnerpotenz in Unicode-Hochstellungsziffern um (z. B. 12 -&gt; "¹²"). */
+    /**
+     * Wandelt eine Zehnerpotenz in Unicode-Hochstellungsziffern um (z. B. 12 -&gt; "¹²").
+     */
     private static String superscript(int n) {
         StringBuilder sb = new StringBuilder();
         for (char c : String.valueOf(n).toCharArray()) {
@@ -456,7 +432,9 @@ public final class CurveFitting {
         return sb.toString();
     }
 
-    /** Binomialkoeffizient "n über k" (für kleine, hier vorkommende n ausreichend genau als double). */
+    /**
+     * Binomialkoeffizient "n über k" (für kleine, hier vorkommende n ausreichend genau als double).
+     */
     private static double binomial(int n, int k) {
         double result = 1;
         for (int i = 0; i < k; i++) {
@@ -486,7 +464,9 @@ public final class CurveFitting {
         return standard;
     }
 
-    /** Baut die Gleichung eines Polynoms als String, {@code a[j]} = Koeffizient von x^j. */
+    /**
+     * Baut die Gleichung eines Polynoms als String, {@code a[j]} = Koeffizient von x^j.
+     */
     private static String buildPolynomialEquation(double[] a) {
         int degree = a.length - 1;
         StringBuilder sb = new StringBuilder("f(x) = ");
@@ -535,5 +515,43 @@ public final class CurveFitting {
         }
 
         return new FitDescription(equation, params);
+    }
+
+    /**
+     * Funktionaler Typ für eine angepasste Modellfunktion f(x), unabhängig vom Fit-Typ.
+     */
+    @FunctionalInterface
+    public interface FunctionEvaluator {
+        double eval(double x);
+    }
+
+    /**
+     * Ergebnis einer Regression: die angepasste Funktion, Anzahl freier Parameter, sowie eine
+     * für Menschen lesbare Beschreibung der Funktion und ihrer Parameter.
+     */
+    public static final class FitResult {
+        public final FunctionEvaluator function;
+        public final int parameterCount;
+        public final FitDescription description;
+
+        FitResult(FunctionEvaluator function, int parameterCount, FitDescription description) {
+            this.function = function;
+            this.parameterCount = parameterCount;
+            this.description = description;
+        }
+    }
+
+    /**
+     * Textuelle Beschreibung einer gefitteten Funktion: die Gleichung mit den konkret
+     * ermittelten Koeffizienten sowie eine Liste physikalisch interpretierbarer Kenngrößen.
+     */
+    public static final class FitDescription {
+        public final String equation;
+        public final List<String> parameterLines;
+
+        FitDescription(String equation, List<String> parameterLines) {
+            this.equation = equation;
+            this.parameterLines = parameterLines;
+        }
     }
 }
