@@ -19,23 +19,12 @@ der üblichen Kosten. Steckbar, offen dokumentiert und mit einer Desktop-Softwar
 
 **Woraus das Ganze besteht:**
 
-```
-        ┌─────────────────────────────────────────────────┐
-        │                     SOFTWARE                    │
-        │   Live-Diagramm · Trigger · Fits · CSV/PNG      │
-        └───────────────────────┬─────────────────────────┘
-                                │  USB oder Bluetooth
-        ┌───────────────────────▼──────────────────────────┐
-        │                  ESP32 (Firmware)                │
-        │      USB-C · zwei Sensor-Slots · Streaming       │
-        └───────────────────────┬──────────────────────────┘
-                                │  Steckverbinder
-┌───────────────────────────────▼──────────────────────────────────┐
-│                     Sensormodule (steckbar)                      │
-│ Spannung · Strom · Temperatur · Licht · Kraft · Mikrofon · Hall  │
-└──────────────────────────────────────────────────────────────────┘
-```
+<div align="center">
+  <img src="Assets/architektur.svg" alt="PhyLog Architektur: Software, ESP32, Sensormodule" width="800">
+</div>
+
 ---
+
 Die Hardware besteht aus dem ESP32-Hub und den verschiedenen steckbaren Sensormodulen. Alle benötigten 3D-Druckdateien, Pinouts und weiteren Hardware-Dateien befinden sich im Hardware-Ordner.
 
 Wenn du einen eigenen PhyLog-Messplatz aufbauen möchtest, findest du dort auch eine ausführliche Hardware Quickstart-Anleitung. Diese beschreibt den Aufbau und die Verkabelung der Sensoren und des ESP32-Hubs sowie die Installation der benötigten Treiber, das Aufspielen der Firmware und die erste Verbindung mit PhyLog.
