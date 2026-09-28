@@ -240,7 +240,13 @@ class MicrophoneSensor extends I2SSensor {
     private static final double FULL_SCALE = 8_388_607.0; // 2^23 - 1
     private static final double REFERENCE_SPL_DB = 94.0;
     private static final double TIME_CONSTANT_MS = 0.0;
-    private double sensitivityDbfsAt94db = 0.0;
+    // Datenblatt-Nominalwert des INMP441 (-26 dBFS ±1 dB @ 94 dB SPL, 1 kHz). Der bisherige
+    // Default 0.0 deckelte jede Messung rechnerisch bei 94 dB (dbFullScale kann nie über
+    // 0 dBFS liegen), da REFERENCE_SPL_DB + (dbFullScale - sensitivityDbfsAt94db) dann nie
+    // 94 dB übersteigen konnte. Für exakte Werte weiterhin über den Kalibrierdialog mit einem
+    // kalibrierten 94-dB-Schallquellenpegel abgleichen - Exemplarstreuung ist laut Datenblatt
+    // möglich.
+    private double sensitivityDbfsAt94db = -26.0;
     /** Exponentiell geglättetes mittleres Leistungssignal (Quadrat des Effektivwerts), Basis
      *  für den ausgegebenen Pegel. */
     private double meanSquare = 0.0;
